@@ -1,0 +1,37 @@
+[package]
+name = "gravai-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Gravai — Audio Capture & AI Meeting Intelligence"
+
+[lib]
+name = "gravai_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Workspace crates
+gravai-core = { workspace = true }
+gravai-audio = { workspace = true }
+gravai-transcription = { workspace = true }
+gravai-intelligence = { workspace = true }
+gravai-config = { workspace = true }
+gravai-storage = { workspace = true }
+gravai-models = { workspace = true }
+gravai-export = { workspace = true }
+gravai-meeting = { workspace = true }
+
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+# Shared deps
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }

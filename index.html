@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gravai</title>
+    <link rel="stylesheet" href="/src-frontend/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <nav class="sidebar">
+        <div class="sidebar-header">
+          <h1>Gravai</h1>
+          <span class="subtitle">Audio Intelligence</span>
+        </div>
+        <ul class="nav-list">
+          <li class="nav-item active" data-page="recording">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="5"/></svg>
+            Recording
+          </li>
+          <li class="nav-item" data-page="archive">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="3" width="12" height="2" rx="1"/><rect x="3" y="7" width="10" height="2" rx="1"/><rect x="4" y="11" width="8" height="2" rx="1"/></svg>
+            Archive
+          </li>
+          <li class="nav-item" data-page="settings">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10a2 2 0 100-4 2 2 0 000 4zm6.32-1.906a6.5 6.5 0 01-.001 1.812l1.06.612a.25.25 0 01.1.321l-1 1.732a.25.25 0 01-.313.1l-1.06-.613a6.5 6.5 0 01-1.568.906l-.001 1.225a.25.25 0 01-.25.25h-2a.25.25 0 01-.25-.25v-1.225a6.5 6.5 0 01-1.568-.906l-1.06.613a.25.25 0 01-.313-.1l-1-1.732a.25.25 0 01.1-.321l1.06-.612a6.5 6.5 0 010-1.812l-1.06-.612a.25.25 0 01-.1-.321l1-1.732a.25.25 0 01.313-.1l1.06.613a6.5 6.5 0 011.568-.906V2.25a.25.25 0 01.25-.25h2a.25.25 0 01.25.25v1.225a6.5 6.5 0 011.568.906l1.06-.613a.25.25 0 01.313.1l1 1.732a.25.25 0 01-.1.321l-1.06.612z"/></svg>
+            Settings
+          </li>
+        </ul>
+        <div class="sidebar-footer">
+          <div id="health-indicator" class="health-dot green" title="System OK"></div>
+          <span class="version">v0.2.0-alpha</span>
+        </div>
+      </nav>
+
+      <main class="content">
+        <!-- ===================== RECORDING PAGE ===================== -->
+        <div id="page-recording" class="page active">
+          <!-- Meeting banner -->
+          <div id="meeting-banner" class="banner banner-accent" style="display:none">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M4 3a1 1 0 011-1h6a1 1 0 011 1v10l-4-2-4 2V3z"/></svg>
+            <span id="meeting-banner-text" class="banner-text"></span>
+            <div class="banner-actions">
+              <button id="meeting-btn-record" class="btn btn-xs btn-accent">Record</button>
+              <button id="meeting-btn-dismiss" class="btn btn-xs btn-ghost">Dismiss</button>
+            </div>
+          </div>
+
+          <div class="page-header">
+            <h2>Recording</h2>
+            <span id="session-timer" class="timer"></span>
+          </div>
+
+          <!-- Transport controls -->
+          <div class="transport">
+            <button id="btn-record" class="transport-btn record" title="Start Recording">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="10" r="7"/></svg>
+            </button>
+            <button id="btn-pause" class="transport-btn pause" disabled title="Pause">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><rect x="5" y="4" width="3" height="12" rx="1"/><rect x="12" y="4" width="3" height="12" rx="1"/></svg>
+            </button>
+            <button id="btn-stop" class="transport-btn stop" disabled title="Stop">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><rect x="4" y="4" width="12" height="12" rx="2"/></svg>
+            </button>
+            <span id="recording-status" class="status-badge idle">Idle</span>
+          </div>
+
+          <!-- Audio sources -->
+          <div class="card">
+            <div class="card-header">Audio Sources</div>
+            <div class="source-row">
+              <label class="toggle-label"><input type="checkbox" id="mic-enabled" checked class="toggle" /> Microphone</label>
+              <div class="vu-meter"><div class="vu-fill" id="vu-mic"></div></div>
+              <input type="range" id="mic-volume" min="0" max="200" value="100" class="slider" />
+              <span class="slider-value" id="mic-volume-label">100%</span>
+            </div>
+            <div class="source-row">
+              <label class="toggle-label"><input type="checkbox" id="sys-enabled" checked class="toggle" /> System Audio</label>
+              <div class="vu-meter"><div class="vu-fill" id="vu-sys"></div></div>
+              <input type="range" id="sys-volume" min="0" max="200" value="100" class="slider" />
+              <span class="slider-value" id="sys-volume-label">100%</span>
+            </div>
+          </div>
+
+          <!-- Live Transcript -->
+          <div class="card">
+            <div class="card-header">
+              Live Transcript
+              <label class="header-toggle"><input type="checkbox" id="auto-scroll" checked /> Auto-scroll</label>
+            </div>
+            <div id="transcript-list" class="transcript-panel">
+              <div class="empty-state">Start recording to see live transcription.</div>
+            </div>
+          </div>
+
+          <!-- Activity log -->
+          <details class="card collapsible">
+            <summary class="card-header">Activity Log</summary>
+            <div id="activity-log" class="log-panel"></div>
+          </details>
+        </div>
+
+        <!-- ===================== ARCHIVE PAGE ===================== -->
+        <div id="page-archive" class="page">
+          <div class="page-header"><h2>Archive</h2></div>
+          <div class="archive-layout">
+            <div class="archive-sidebar">
+              <div class="search-box">
+                <input type="text" id="archive-search" placeholder="Search transcripts..." class="input" />
+              </div>
+              <div id="archive-list" class="archive-list">
+                <div class="empty-state">No sessions yet.</div>
+              </div>
+            </div>
+            <div class="archive-detail">
+              <div id="archive-header" class="archive-detail-header"></div>
+              <div id="archive-transcript" class="transcript-panel">
+                <div class="empty-state">Select a session to view.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===================== SETTINGS PAGE ===================== -->
+        <div id="page-settings" class="page">
+          <div class="page-header">
+            <h2>Settings</h2>
+            <div class="header-actions">
+              <button id="btn-import-config" class="btn btn-xs btn-ghost">Import</button>
+              <button id="btn-export-config" class="btn btn-xs btn-ghost">Export</button>
+              <button id="btn-reset-config" class="btn btn-xs btn-ghost btn-danger">Reset</button>
+            </div>
+          </div>
+
+          <!-- Health -->
+          <div class="card" id="health-card">
+            <div class="card-header">System Health</div>
+            <div id="health-checks" class="health-grid"></div>
+          </div>
+
+          <!-- Audio settings -->
+          <div class="card">
+            <div class="card-header">Audio</div>
+            <div class="settings-grid">
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Save Recordings</span><span class="setting-desc">Write audio files to disk (disable for transcription-only mode)</span></div>
+                <label class="switch"><input type="checkbox" id="s-recording-enabled" checked /><span class="switch-slider"></span></label>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Output Folder</span><span class="setting-desc">Where to save recordings (empty = default ~/.gravai/sessions/)</span></div>
+                <input type="text" id="s-output-folder" class="input" placeholder="Default (~/.gravai/sessions/)" />
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Sample Rate</span><span class="setting-desc">Recording quality (Hz)</span></div>
+                <select id="s-sample-rate" class="select"><option value="16000">16,000</option><option value="44100">44,100</option><option value="48000" selected>48,000</option><option value="96000">96,000</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Bit Depth</span><span class="setting-desc">Bits per sample</span></div>
+                <select id="s-bit-depth" class="select"><option value="16">16-bit</option><option value="24" selected>24-bit</option><option value="32">32-bit</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Channels</span><span class="setting-desc">Mono or stereo recording</span></div>
+                <select id="s-channels" class="select"><option value="1">Mono</option><option value="2" selected>Stereo</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Export Format</span><span class="setting-desc">Default file format for exports</span></div>
+                <select id="s-export-format" class="select"><option value="wav">WAV</option><option value="aiff">AIFF</option><option value="caf">CAF</option><option value="m4a-aac" selected>M4A (AAC)</option><option value="m4a-alac">M4A (ALAC)</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">AAC Bitrate</span><span class="setting-desc">For M4A AAC export (kbps)</span></div>
+                <input type="number" id="s-aac-bitrate" class="input input-narrow" value="192" min="64" max="320" step="32" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Transcription settings -->
+          <div class="card">
+            <div class="card-header">Transcription</div>
+            <div class="settings-grid">
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Engine</span><span class="setting-desc">Transcription backend</span></div>
+                <select id="s-trans-engine" class="select"><option value="whisper" selected>Whisper (on-device)</option><option value="http">External HTTP</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Model</span><span class="setting-desc">Whisper model size (larger = more accurate, slower)</span></div>
+                <select id="s-trans-model" class="select"><option value="tiny">Tiny (75 MB)</option><option value="base">Base (142 MB)</option><option value="small">Small (466 MB)</option><option value="medium" selected>Medium (1.5 GB)</option><option value="large">Large (3 GB)</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Language</span><span class="setting-desc">Primary transcription language</span></div>
+                <select id="s-trans-lang" class="select"><option value="en" selected>English</option><option value="pt">Portuguese</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="pl">Polish</option><option value="ja">Japanese</option><option value="auto">Auto-detect</option></select>
+              </div>
+            </div>
+          </div>
+
+          <!-- VAD settings -->
+          <div class="card">
+            <div class="card-header">Voice Activity Detection</div>
+            <div class="settings-grid">
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Engine</span><span class="setting-desc">VAD algorithm</span></div>
+                <select id="s-vad-engine" class="select"><option value="webrtc" selected>WebRTC (fast)</option><option value="silero">Silero (accurate)</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Pause Duration</span><span class="setting-desc">Silence duration before finalizing utterance (seconds)</span></div>
+                <input type="number" id="s-vad-pause" class="input input-narrow" value="0.5" min="0.1" max="5.0" step="0.1" />
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Min Utterance</span><span class="setting-desc">Minimum speech duration to transcribe (seconds)</span></div>
+                <input type="number" id="s-vad-min" class="input input-narrow" value="0.3" min="0.1" max="5.0" step="0.1" />
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Max Utterance</span><span class="setting-desc">Force-split after this duration (seconds)</span></div>
+                <input type="number" id="s-vad-max" class="input input-narrow" value="30" min="5" max="120" step="5" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Features -->
+          <div class="card">
+            <div class="card-header">Features</div>
+            <div class="settings-grid">
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Echo Suppression</span><span class="setting-desc">Prevent duplicate transcription from mic+system</span></div>
+                <label class="switch"><input type="checkbox" id="s-echo-enabled" checked /><span class="switch-slider"></span></label>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Echo Threshold</span><span class="setting-desc">Similarity score to suppress (0-1)</span></div>
+                <input type="number" id="s-echo-threshold" class="input input-narrow" value="0.55" min="0.0" max="1.0" step="0.05" />
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Meeting Detection</span><span class="setting-desc">Auto-detect meeting apps</span></div>
+                <label class="switch"><input type="checkbox" id="s-meeting-enabled" checked /><span class="switch-slider"></span></label>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Diarization</span><span class="setting-desc">Speaker identification (Beta)</span></div>
+                <label class="switch"><input type="checkbox" id="s-diarization-enabled" /><span class="switch-slider"></span></label>
+              </div>
+            </div>
+          </div>
+
+          <!-- LLM settings -->
+          <div class="card">
+            <div class="card-header">AI / LLM</div>
+            <div class="settings-grid">
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Provider</span><span class="setting-desc">LLM backend for summaries</span></div>
+                <select id="s-llm-provider" class="select"><option value="ollama" selected>Ollama (local)</option><option value="openai">OpenAI (BYOK)</option><option value="anthropic">Anthropic (BYOK)</option></select>
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Model</span><span class="setting-desc">LLM model name</span></div>
+                <input type="text" id="s-llm-model" class="input" value="gemma3:4b" />
+              </div>
+              <div class="setting-row">
+                <div class="setting-info"><span class="setting-label">Base URL</span><span class="setting-desc">API endpoint</span></div>
+                <input type="text" id="s-llm-url" class="input" value="http://localhost:11434/v1" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Advanced: raw JSON -->
+          <details class="card collapsible">
+            <summary class="card-header">Advanced: Raw Config JSON</summary>
+            <textarea id="config-editor" class="config-editor" rows="16" spellcheck="false"></textarea>
+            <div class="card-footer">
+              <button id="btn-save-json" class="btn btn-xs btn-accent">Save JSON</button>
+            </div>
+          </details>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src-frontend/main.ts"></script>
+  </body>
+</html>

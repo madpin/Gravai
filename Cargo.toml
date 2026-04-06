@@ -1,0 +1,88 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gravai-core",
+    "crates/gravai-audio",
+    "crates/gravai-transcription",
+    "crates/gravai-intelligence",
+    "crates/gravai-config",
+    "crates/gravai-storage",
+    "crates/gravai-models",
+    "crates/gravai-export",
+    "crates/gravai-meeting",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Thiago Madeira Pinto"]
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+gravai-core = { path = "crates/gravai-core" }
+gravai-audio = { path = "crates/gravai-audio" }
+gravai-transcription = { path = "crates/gravai-transcription" }
+gravai-intelligence = { path = "crates/gravai-intelligence" }
+gravai-config = { path = "crates/gravai-config" }
+gravai-storage = { path = "crates/gravai-storage" }
+gravai-models = { path = "crates/gravai-models" }
+gravai-export = { path = "crates/gravai-export" }
+gravai-meeting = { path = "crates/gravai-meeting" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Error handling
+thiserror = "2"
+
+# Config directory
+dirs = "6"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
+
+# Template rendering
+minijinja = "2"
+
+# Audio
+cpal = "0.15"
+screencapturekit = "1.5"
+hound = "3.5"
+rubato = "0.16"
+
+# VAD
+webrtc-vad = "0.2"
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
+ndarray = "0.16"
+
+# Transcription
+whisper-rs = "0.14"
+
+# Fuzzy matching (echo suppression)
+strsim = "0.11"
+
+# Progress display for downloads
+indicatif = "0.17"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# File I/O for downloads
+futures-util = "0.3"

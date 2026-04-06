@@ -1,0 +1,26 @@
+# Rust
+/target/
+**/target/
+
+# Node
+node_modules/
+dist/
+
+# Tauri
+src-tauri/gen/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Config (sensitive)
+.env
+.env.local
+
+# Logs
+*.log

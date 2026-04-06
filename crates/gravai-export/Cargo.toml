@@ -1,0 +1,15 @@
+[package]
+name = "gravai-export"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Export integrations: Markdown, PDF, Obsidian, Notion"
+
+[dependencies]
+gravai-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+minijinja = { workspace = true }

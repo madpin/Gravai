@@ -1,0 +1,21 @@
+[package]
+name = "gravai-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core abstractions: AppState, EventBus, Session FSM, error types, preflight, logging"
+
+[dependencies]
+gravai-config = { workspace = true }
+gravai-storage = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+cpal = { workspace = true }

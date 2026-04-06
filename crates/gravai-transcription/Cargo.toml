@@ -1,0 +1,15 @@
+[package]
+name = "gravai-transcription"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Transcription provider abstraction and implementations"
+
+[dependencies]
+gravai-core = { workspace = true }
+gravai-config = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+whisper-rs = { workspace = true }

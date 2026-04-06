@@ -1,0 +1,36 @@
+[package]
+name = "gravai-audio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Audio capture, multi-track recording, resampling, mixing, VAD"
+
+[dependencies]
+gravai-core = { workspace = true }
+gravai-config = { workspace = true }
+gravai-transcription = { workspace = true }
+gravai-intelligence = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# Audio capture
+cpal = { workspace = true }
+hound = { workspace = true }
+rubato = { workspace = true }
+
+# VAD
+webrtc-vad = { workspace = true }
+ort = { workspace = true }
+ndarray = { workspace = true }
+
+# Echo suppression
+strsim = { workspace = true }
+
+# ScreenCaptureKit (macOS only)
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { workspace = true }
