@@ -254,12 +254,15 @@ async fn finalize(
         es.add(&text, source);
     }
 
-    // Run diarization if available
-    let speaker = if let Some(ref diarizer) = diarizer {
+    // Speaker assignment:
+    // - Microphone source is always "You" (the local user)
+    // - System audio runs diarization to identify remote participants
+    let speaker = if source == "microphone" || source == "mic" {
+        Some("You".to_string())
+    } else if let Some(ref diarizer) = diarizer {
         let d = diarizer.lock().await;
         match d.diarize(audio) {
             Ok(segments) if !segments.is_empty() => {
-                // Pick the speaker with the most coverage
                 let mut counts: std::collections::HashMap<&str, u64> =
                     std::collections::HashMap::new();
                 for seg in &segments {
@@ -270,10 +273,11 @@ async fn finalize(
                     .max_by_key(|&(_, dur)| dur)
                     .map(|(id, _)| id.to_string())
             }
-            _ => None,
+            _ => Some("Remote".to_string()),
         }
     } else {
-        None
+        // No diarizer but system audio — label as "Remote"
+        Some("Remote".to_string())
     };
 
     Some(FinalizeResult { text, speaker })

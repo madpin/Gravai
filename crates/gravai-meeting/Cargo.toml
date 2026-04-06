@@ -8,7 +8,6 @@ description = "Meeting detection and calendar integration"
 
 [dependencies]
 gravai-core = { workspace = true }
-gravai-audio = { workspace = true }
 gravai-config = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

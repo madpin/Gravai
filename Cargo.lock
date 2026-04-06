@@ -1519,7 +1519,6 @@ name = "gravai-meeting"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "gravai-audio",
  "gravai-config",
  "gravai-core",
  "serde",

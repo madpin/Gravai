@@ -30,6 +30,10 @@ document.querySelectorAll('.nav-item').forEach((item) => {
     const page = (item as HTMLElement).dataset.page!;
     document.getElementById(`page-${page}`)?.classList.add('active');
     if (page === 'archive') loadArchive();
+    if (page === 'presets') loadPresets();
+    if (page === 'profiles') loadProfiles();
+    if (page === 'shortcuts') loadShortcuts();
+    if (page === 'automations') loadAutomations();
     if (page === 'settings') loadSettings();
   });
 });
@@ -50,6 +54,10 @@ async function startRecording() {
     sessionStartTime = Date.now();
     updateTransport();
     startPolling();
+    // Show summary card for the active session
+    const summaryCard = document.getElementById('recording-summary-card');
+    if (summaryCard) { summaryCard.style.display = ''; }
+    document.getElementById('recording-summary-content')!.innerHTML = '<div class="empty-state">Click "Generate Summary" to create a session summary.</div>';
     log(`Recording started: ${result.id}${result.title ? ' — ' + result.title : ''}`);
   } catch (e) { log(`Error: ${e}`); }
 }
@@ -243,6 +251,14 @@ async function selectSession(s: any) {
   // Update header
   const header = document.getElementById('archive-header')!;
   header.textContent = s.title || s.id;
+  // Show actions bar
+  const actionsBar = document.getElementById('archive-actions');
+  if (actionsBar) actionsBar.style.display = 'flex';
+  // Reset summary
+  const summaryEl = document.getElementById('archive-summary');
+  if (summaryEl) { summaryEl.style.display = 'none'; summaryEl.innerHTML = ''; }
+  // Load export formats
+  loadExportFormats();
   // Highlight selected row
   document.querySelectorAll('.archive-row').forEach(r => r.classList.remove('selected'));
   (event?.target as HTMLElement)?.closest('.archive-row')?.classList.add('selected');
@@ -265,6 +281,231 @@ async function handleSearch(query: string) {
     renderTranscript(el, results);
     document.getElementById('archive-header')!.textContent = `Search: "${query}" (${results.length} results)`;
   } catch (_) {}
+}
+
+// =========================================================================
+// Presets
+// =========================================================================
+let activePresetId: string | null = null;
+
+async function loadPresets() {
+  try {
+    const result = await invoke('get_presets');
+    const presets = result.presets || {};
+    activePresetId = result.active_preset_id || null;
+    const el = document.getElementById('presets-list')!;
+    el.innerHTML = '';
+    const ids = Object.keys(presets);
+    if (ids.length === 0) { el.innerHTML = '<div class="empty-state">No presets configured.</div>'; return; }
+    for (const id of ids) {
+      const p = presets[id];
+      const isActive = id === activePresetId;
+      const card = document.createElement('div');
+      card.className = `card preset-card${isActive ? ' card-active' : ''}`;
+      card.innerHTML = `
+        <div class="card-header">${escapeHtml(p.name || id)}${isActive ? ' <span class="status-badge recording">Active</span>' : ''}</div>
+        <div class="card-body">
+          <p class="card-desc">${escapeHtml(p.description || '')}</p>
+          <div class="card-meta">
+            <span>Mic: ${p.mic_enabled ? 'On' : 'Off'}</span>
+            <span>System: ${p.sys_enabled ? 'On' : 'Off'}</span>
+            <span>Rate: ${p.sample_rate || '—'} Hz</span>
+            <span>Format: ${p.format || '—'}</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <button class="btn btn-xs ${isActive ? 'btn-ghost' : 'btn-accent'}" data-preset-id="${escapeHtml(id)}" ${isActive ? 'disabled' : ''}>${isActive ? 'Active' : 'Activate'}</button>
+        </div>`;
+      card.querySelector('button[data-preset-id]')?.addEventListener('click', () => activatePreset(id));
+      el.appendChild(card);
+    }
+  } catch (e) { log(`Presets: ${e}`); }
+}
+
+async function activatePreset(presetId: string) {
+  try {
+    await invoke('activate_preset', { presetId });
+    log(`Preset activated: ${presetId}`);
+    await loadPresets();
+  } catch (e) { log(`Activate preset: ${e}`); }
+}
+
+// =========================================================================
+// Profiles
+// =========================================================================
+let activeProfileId: string | null = null;
+
+async function loadProfiles() {
+  try {
+    const result = await invoke('get_profiles');
+    const profiles = result.profiles || {};
+    activeProfileId = result.active_profile_id || null;
+    const el = document.getElementById('profiles-list')!;
+    el.innerHTML = '';
+    const ids = Object.keys(profiles);
+    if (ids.length === 0) { el.innerHTML = '<div class="empty-state">No profiles configured.</div>'; return; }
+    for (const id of ids) {
+      const p = profiles[id];
+      const isActive = id === activeProfileId;
+      const card = document.createElement('div');
+      card.className = `card profile-card${isActive ? ' card-active' : ''}`;
+      card.innerHTML = `
+        <div class="card-header">${escapeHtml(p.name || id)}${isActive ? ' <span class="status-badge recording">Active</span>' : ''}</div>
+        <div class="card-body">
+          <p class="card-desc">${escapeHtml(p.description || '')}</p>
+          <div class="card-meta">
+            <span>Preset: ${escapeHtml(p.linked_preset || '—')}</span>
+            ${p.overrides ? `<span>Overrides: ${escapeHtml(JSON.stringify(p.overrides))}</span>` : ''}
+          </div>
+        </div>
+        <div class="card-footer">
+          <button class="btn btn-xs ${isActive ? 'btn-ghost' : 'btn-accent'}" data-profile-id="${escapeHtml(id)}" ${isActive ? 'disabled' : ''}>${isActive ? 'Active' : 'Activate'}</button>
+        </div>`;
+      card.querySelector('button[data-profile-id]')?.addEventListener('click', () => activateProfile(id));
+      el.appendChild(card);
+    }
+  } catch (e) { log(`Profiles: ${e}`); }
+}
+
+async function activateProfile(profileId: string) {
+  try {
+    await invoke('activate_profile', { profileId });
+    log(`Profile activated: ${profileId}`);
+    await loadProfiles();
+  } catch (e) { log(`Activate profile: ${e}`); }
+}
+
+// =========================================================================
+// Shortcuts
+// =========================================================================
+async function loadShortcuts() {
+  try {
+    const result = await invoke('get_shortcuts');
+    const bindings = result.bindings || {};
+    const tbody = document.getElementById('shortcuts-tbody')!;
+    tbody.innerHTML = '';
+    const actionIds = Object.keys(bindings);
+    if (actionIds.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No shortcuts configured.</td></tr>';
+      return;
+    }
+    for (const actionId of actionIds) {
+      const b = bindings[actionId];
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><code>${escapeHtml(b.action_id)}</code></td>
+        <td>${escapeHtml(b.description || '')}</td>
+        <td><input type="text" class="input input-narrow shortcut-key-input" value="${escapeHtml(b.key_sequence || '')}" data-action-id="${escapeHtml(actionId)}" /></td>
+        <td><label class="toggle-label"><input type="checkbox" class="toggle shortcut-global-toggle" ${b.is_global ? 'checked' : ''} data-action-id="${escapeHtml(actionId)}" /> Global</label></td>
+        <td><button class="btn btn-xs btn-accent shortcut-save-btn" data-action-id="${escapeHtml(actionId)}">Save</button></td>`;
+      tr.querySelector('.shortcut-save-btn')?.addEventListener('click', () => {
+        const keyInput = tr.querySelector('.shortcut-key-input') as HTMLInputElement;
+        rebindShortcut(actionId, keyInput.value);
+      });
+      tbody.appendChild(tr);
+    }
+  } catch (e) { log(`Shortcuts: ${e}`); }
+}
+
+async function rebindShortcut(actionId: string, keySequence: string) {
+  try {
+    await invoke('rebind_shortcut', { actionId, keySequence });
+    log(`Shortcut rebound: ${actionId} -> ${keySequence}`);
+  } catch (e) { log(`Rebind shortcut: ${e}`); }
+}
+
+// =========================================================================
+// Automations
+// =========================================================================
+async function loadAutomations() {
+  try {
+    const result = await invoke('get_automations');
+    const automations = result.automations || {};
+    const el = document.getElementById('automations-list')!;
+    el.innerHTML = '';
+    const ids = Object.keys(automations);
+    if (ids.length === 0) { el.innerHTML = '<div class="empty-state">No automations configured.</div>'; return; }
+    for (const id of ids) {
+      const a = automations[id];
+      const card = document.createElement('div');
+      card.className = 'card automation-card';
+      const lastRun = a.last_run ? new Date(a.last_run).toLocaleString() : 'Never';
+      card.innerHTML = `
+        <div class="card-header">
+          ${escapeHtml(a.name || id)}
+          <label class="switch"><input type="checkbox" class="automation-toggle" data-automation-id="${escapeHtml(id)}" ${a.enabled ? 'checked' : ''} /><span class="switch-slider"></span></label>
+        </div>
+        <div class="card-body">
+          <div class="card-meta">
+            <span>Trigger: ${escapeHtml(a.trigger || '—')}</span>
+            <span>Runs: ${a.run_count ?? 0}</span>
+            <span>Last: ${lastRun}</span>
+          </div>
+        </div>`;
+      card.querySelector('.automation-toggle')?.addEventListener('change', (e) => {
+        const enabled = (e.target as HTMLInputElement).checked;
+        toggleAutomation(id, enabled);
+      });
+      el.appendChild(card);
+    }
+  } catch (e) { log(`Automations: ${e}`); }
+}
+
+async function toggleAutomation(automationId: string, enabled: boolean) {
+  try {
+    await invoke('toggle_automation', { automationId, enabled });
+    log(`Automation ${automationId}: ${enabled ? 'enabled' : 'disabled'}`);
+  } catch (e) { log(`Toggle automation: ${e}`); }
+}
+
+// =========================================================================
+// Summary
+// =========================================================================
+async function generateSummary(sessionId: string, targetEl: HTMLElement) {
+  targetEl.innerHTML = '<div class="empty-state">Generating summary...</div>';
+  try {
+    const summary = await invoke('summarize_session', { sessionId });
+    let html = '';
+    if (summary.tldr) html += `<div class="summary-section"><h4>TL;DR</h4><p>${escapeHtml(summary.tldr)}</p></div>`;
+    if (summary.key_decisions && summary.key_decisions.length > 0) {
+      html += `<div class="summary-section"><h4>Key Decisions</h4><ul>${summary.key_decisions.map((d: string) => `<li>${escapeHtml(d)}</li>`).join('')}</ul></div>`;
+    }
+    if (summary.action_items && summary.action_items.length > 0) {
+      html += `<div class="summary-section"><h4>Action Items</h4><ul>${summary.action_items.map((i: string) => `<li>${escapeHtml(i)}</li>`).join('')}</ul></div>`;
+    }
+    if (summary.open_questions && summary.open_questions.length > 0) {
+      html += `<div class="summary-section"><h4>Open Questions</h4><ul>${summary.open_questions.map((q: string) => `<li>${escapeHtml(q)}</li>`).join('')}</ul></div>`;
+    }
+    targetEl.innerHTML = html || '<div class="empty-state">No summary content returned.</div>';
+  } catch (e) {
+    targetEl.innerHTML = `<div class="empty-state">Summary failed: ${escapeHtml(String(e))}</div>`;
+    log(`Summary: ${e}`);
+  }
+}
+
+// =========================================================================
+// Export Audio
+// =========================================================================
+async function loadExportFormats() {
+  try {
+    const formats: string[] = await invoke('get_export_formats');
+    const select = document.getElementById('archive-export-format') as HTMLSelectElement;
+    select.innerHTML = '<option value="">Export format...</option>';
+    for (const f of formats) {
+      const opt = document.createElement('option');
+      opt.value = f;
+      opt.textContent = f.toUpperCase();
+      select.appendChild(opt);
+    }
+  } catch (_) {}
+}
+
+async function exportAudio(sessionId: string, format: string) {
+  if (!format) { log('Select an export format first'); return; }
+  try {
+    await invoke('export_session_audio', { sessionId, format });
+    log(`Exported session ${sessionId} as ${format}`);
+  } catch (e) { log(`Export: ${e}`); }
 }
 
 // =========================================================================
@@ -551,6 +792,26 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('archive-search')?.addEventListener('input', (e) => {
     if (searchDebounce) clearTimeout(searchDebounce);
     searchDebounce = window.setTimeout(() => handleSearch((e.target as HTMLInputElement).value), 300);
+  });
+
+  // Recording summary
+  document.getElementById('btn-generate-summary')?.addEventListener('click', () => {
+    if (!currentSessionId) return;
+    const el = document.getElementById('recording-summary-content')!;
+    generateSummary(currentSessionId, el);
+  });
+
+  // Archive summary & export
+  document.getElementById('btn-archive-summarize')?.addEventListener('click', () => {
+    if (!selectedArchiveSession) return;
+    const el = document.getElementById('archive-summary')!;
+    el.style.display = 'block';
+    generateSummary(selectedArchiveSession, el);
+  });
+  document.getElementById('btn-archive-export')?.addEventListener('click', () => {
+    if (!selectedArchiveSession) return;
+    const format = (document.getElementById('archive-export-format') as HTMLSelectElement).value;
+    exportAudio(selectedArchiveSession, format);
   });
 });
 

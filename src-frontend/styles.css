@@ -311,6 +311,51 @@ body {
   font-size: 12px; font-style: italic;
 }
 
+/* ===== Card Grid (presets, profiles, automations) ===== */
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px; padding: 4px 0;
+}
+.card-grid .card { cursor: default; }
+.card-grid .card.active-card { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
+.card-body { padding: 12px 16px; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.card-body strong { color: var(--text-primary); }
+.card-actions { padding: 8px 16px; border-top: 1px solid var(--border-subtle); display: flex; gap: 6px; }
+.card-tag { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: var(--bg-base); color: var(--text-tertiary); display: inline-block; margin: 2px 2px 2px 0; }
+
+/* ===== Shortcut Table ===== */
+.shortcut-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.shortcut-table th {
+  text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+.shortcut-table td {
+  padding: 8px 12px; border-bottom: 1px solid var(--border-subtle);
+}
+.shortcut-table tr:hover td { background: var(--bg-elevated); }
+.shortcut-table .key-input {
+  background: var(--bg-base); color: var(--accent); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 4px 8px; font-family: "SF Mono", monospace;
+  font-size: 12px; width: 180px; text-align: center;
+}
+.shortcut-table .key-input:focus { border-color: var(--accent); outline: none; }
+
+/* ===== Summary ===== */
+.summary-content { padding: 12px 16px; font-size: 13px; line-height: 1.6; }
+.summary-content h4 { font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 4px; }
+.summary-content h4:first-child { margin-top: 0; }
+.summary-content p { color: var(--text-primary); margin-bottom: 8px; }
+.summary-content ul { padding-left: 20px; color: var(--text-secondary); }
+.summary-content li { margin-bottom: 4px; }
+.summary-content .action-owner { color: var(--accent); font-weight: 500; }
+
+/* ===== Archive actions ===== */
+.archive-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.archive-actions .select { min-width: 120px; }
+
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
