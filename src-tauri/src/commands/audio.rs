@@ -1,6 +1,7 @@
 //! Audio device and capture commands.
 
 use gravai_audio::capture::AudioCaptureManager;
+use gravai_audio::screencapturekit;
 use gravai_core::AppState;
 use std::sync::Arc;
 use tauri::State;
@@ -12,15 +13,25 @@ pub async fn list_audio_devices() -> Result<serde_json::Value, String> {
     serde_json::to_value(&devices).map_err(|e| e.to_string())
 }
 
-/// List running apps via process list (no ScreenCaptureKit / Screen Recording permission).
-/// SCK is only used when the user explicitly starts a recording.
+/// List running apps via process list (no Screen Recording permission needed).
+/// Used for meeting detection and general app listing.
 #[tauri::command]
 pub async fn list_running_apps() -> Result<serde_json::Value, String> {
     let apps = list_apps_via_ps();
     Ok(serde_json::json!(apps))
 }
 
-/// Set volume gain for a source. Gain is 0.0-2.0 (1.0 = unity).
+/// List running apps with bundle IDs via ScreenCaptureKit.
+/// Requires Screen Recording permission. Used for the system audio app picker
+/// so the correct bundle ID is passed to the per-app audio filter.
+#[tauri::command]
+pub async fn list_capturable_apps() -> Result<serde_json::Value, String> {
+    let apps = screencapturekit::list_running_apps();
+    // apps already have { name, bundle_id } from SCK
+    Ok(serde_json::json!(apps))
+}
+
+/// Set volume gain for a source.
 #[tauri::command]
 pub async fn set_source_gain(
     state: State<'_, Arc<AppState>>,
@@ -31,12 +42,8 @@ pub async fn set_source_gain(
     let config = state.config.write().await;
 
     match source.as_str() {
-        "microphone" | "mic" => {
-            tracing::info!("Mic gain set to {gain}");
-        }
-        "system" | "system_audio" => {
-            tracing::info!("System audio gain set to {gain}");
-        }
+        "microphone" | "mic" => tracing::info!("Mic gain set to {gain}"),
+        "system" | "system_audio" => tracing::info!("System audio gain set to {gain}"),
         _ => return Err(format!("Unknown source: {source}")),
     }
 
@@ -44,9 +51,8 @@ pub async fn set_source_gain(
     Ok(())
 }
 
-/// List running GUI apps using macOS-native approach (no SCK).
+/// List running GUI apps using ps (no SCK permission).
 fn list_apps_via_ps() -> Vec<serde_json::Value> {
-    // Use `ps -eo comm=` to get process names without triggering Screen Recording
     match std::process::Command::new("ps")
         .args(["-eo", "comm="])
         .output()
@@ -61,7 +67,6 @@ fn list_apps_via_ps() -> Vec<serde_json::Value> {
                     if name.is_empty() {
                         return None;
                     }
-                    // Extract app name from path (e.g. /Applications/Zoom.app/Contents/MacOS/zoom.us -> zoom.us)
                     let short = name.rsplit('/').next().unwrap_or(name);
                     if seen.insert(short.to_string()) {
                         Some(serde_json::json!({ "name": short }))

@@ -88,16 +88,33 @@ impl SystemAudioCapture {
         let displays = content.displays();
         let display = displays.first().ok_or("No display found")?;
 
+        // Build content filter — per-app if a bundle ID is selected, otherwise all system audio.
+        // Per-app audio filtering requires macOS 14+ (Sonoma). On macOS 13, audio is not filtered.
         let filter = if let Some(ref bundle_id) = self.app_bundle_id {
             let apps = content.applications();
-            let _app = apps.iter().find(|a| a.bundle_identifier() == *bundle_id);
-            if _app.is_none() {
-                tracing::warn!("App {} not found, capturing all system audio", bundle_id);
+            if let Some(target_app) = apps.iter().find(|a| a.bundle_identifier() == *bundle_id) {
+                tracing::info!(
+                    "Filtering system audio to app: {} (bundle: {}, pid: {})",
+                    target_app.application_name(),
+                    target_app.bundle_identifier(),
+                    target_app.process_id(),
+                );
+                // Per-app filter: with_display sets up DisplayExcluding internally,
+                // then with_including_applications transitions to DisplayIncludingApplications.
+                // Do NOT chain with_excluding_windows before with_including_applications.
+                SCContentFilter::create()
+                    .with_display(display)
+                    .with_including_applications(&[target_app], &[])
+                    .build()
+            } else {
+                tracing::warn!(
+                    "App '{bundle_id}' not found in running apps — capturing all system audio"
+                );
+                SCContentFilter::create()
+                    .with_display(display)
+                    .with_excluding_windows(&[])
+                    .build()
             }
-            SCContentFilter::create()
-                .with_display(display)
-                .with_excluding_windows(&[])
-                .build()
         } else {
             SCContentFilter::create()
                 .with_display(display)
@@ -121,29 +138,68 @@ impl SystemAudioCapture {
         let callback = std::sync::Arc::new(std::sync::Mutex::new(callback));
         let sample_rate = self.sample_rate;
         let channels = self.channels;
+        let logged = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         stream.add_output_handler(
             move |sample_buffer: CMSampleBuffer, output_type: SCStreamOutputType| {
                 if output_type != SCStreamOutputType::Audio {
                     return;
                 }
-                if let Some(audio_buffer_list) = sample_buffer.audio_buffer_list() {
-                    for buffer in audio_buffer_list.iter() {
-                        let raw_data = buffer.data();
-                        if raw_data.is_empty() {
-                            continue;
+
+                let Some(abl) = sample_buffer.audio_buffer_list() else {
+                    return;
+                };
+
+                let buffers: Vec<&screencapturekit::cm::AudioBuffer> = abl.iter().collect();
+                if buffers.is_empty() {
+                    return;
+                }
+
+                // Log format info once
+                if !logged.load(std::sync::atomic::Ordering::Relaxed) {
+                    logged.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let buf_info: Vec<String> = buffers
+                        .iter()
+                        .map(|b| format!("{}ch {}bytes", b.number_channels, b.data_byte_size()))
+                        .collect();
+                    tracing::info!(
+                        "SCK audio: {} buffer(s) [{}], requested {}Hz {}ch",
+                        buffers.len(),
+                        buf_info.join(", "),
+                        sample_rate,
+                        channels,
+                    );
+                }
+
+                if buffers.len() == 1 && buffers[0].number_channels >= 1 {
+                    // Single buffer — interleaved audio (most common case)
+                    let raw = buffers[0].data();
+                    let f32_data = audio_bytes_to_f32(raw);
+                    if !f32_data.is_empty() {
+                        let actual_ch = buffers[0].number_channels as u16;
+                        if let Ok(mut cb) = callback.lock() {
+                            cb(&f32_data, sample_rate, actual_ch.max(channels));
                         }
+                    }
+                } else if buffers.len() >= 2 {
+                    // Multiple buffers — non-interleaved (one buffer per channel)
+                    // Interleave them into a single buffer
+                    let per_ch: Vec<Vec<f32>> = buffers
+                        .iter()
+                        .map(|b| audio_bytes_to_f32(b.data()))
+                        .collect();
 
-                        // SCK delivers 32-bit float PCM, native endian.
-                        // On Apple Silicon (LE), this is f32 LE.
-                        // Use safe transmute via align_to for zero-copy when aligned,
-                        // fall back to manual byte parsing.
-                        let f32_data = audio_bytes_to_f32(raw_data);
-
-                        if !f32_data.is_empty() {
-                            if let Ok(mut cb) = callback.lock() {
-                                cb(&f32_data, sample_rate, channels);
+                    if per_ch.iter().all(|c| !c.is_empty()) {
+                        let frame_count = per_ch[0].len();
+                        let ch_count = per_ch.len();
+                        let mut interleaved = Vec::with_capacity(frame_count * ch_count);
+                        for i in 0..frame_count {
+                            for ch in &per_ch {
+                                interleaved.push(if i < ch.len() { ch[i] } else { 0.0 });
                             }
+                        }
+                        if let Ok(mut cb) = callback.lock() {
+                            cb(&interleaved, sample_rate, ch_count as u16);
                         }
                     }
                 }

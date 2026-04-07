@@ -158,8 +158,10 @@ body {
   padding: 3px 10px; border-radius: 20px; margin-left: 8px;
 }
 .status-badge.idle { background: var(--bg-elevated); color: var(--text-tertiary); }
+.status-badge.starting { background: rgba(96,165,250,0.15); color: var(--info); animation: pulse-starting 1s infinite; }
 .status-badge.recording { background: rgba(248,113,113,0.15); color: var(--danger); }
 .status-badge.paused { background: rgba(251,191,36,0.15); color: var(--warning); }
+@keyframes pulse-starting { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 /* ===== Cards ===== */
 .card {

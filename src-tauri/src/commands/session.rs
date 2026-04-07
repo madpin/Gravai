@@ -197,22 +197,31 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         session.add_task(handle).await;
     }
 
-    // Set up transcription pipeline for LQ (16kHz mono) streams
+    // Load transcription provider on a blocking thread (model loading is slow for large models)
+    let trans_config = config.transcription.clone();
+    let trans_bus = state.event_bus.clone();
     let transcriber: Option<Arc<dyn gravai_transcription::TranscriptionProvider>> =
-        match gravai_transcription::create_provider(&config.transcription) {
-            Ok(provider) => {
+        match tokio::task::spawn_blocking(move || {
+            gravai_transcription::create_provider(&trans_config)
+        })
+        .await
+        {
+            Ok(Ok(provider)) => {
                 info!("Transcription ready ({})", config.transcription.model);
                 Some(Arc::from(provider))
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!("Transcription not available: {e}");
-                // Notify the user via event bus so the UI can show a warning
-                state.event_bus.publish(GravaiEvent::Error {
+                trans_bus.publish(GravaiEvent::Error {
                     message: format!(
                         "Transcription unavailable: {}. Go to Settings → Models to download the '{}' model.",
                         e, config.transcription.model
                     ),
                 });
+                None
+            }
+            Err(e) => {
+                warn!("Transcription load panicked: {e}");
                 None
             }
         };

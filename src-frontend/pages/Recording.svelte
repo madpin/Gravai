@@ -41,9 +41,19 @@
     activityLogs.update(l => [...l.slice(-99), `[${t}] ${msg}`]);
   }
 
+  let starting = $state(false);
+
   async function start() {
+    if (starting) return;
+    starting = true;
     try {
       log("Starting recording...");
+      clearAlerts();
+      dismissAlertsByLevel("meeting");
+      liveUtterances.set([]);
+      liveSummary.set(null);
+
+      // Update config (fire-and-forget)
       invoke("update_config", {
         patch: {
           audio: {
@@ -52,18 +62,16 @@
           }
         }
       });
-      clearAlerts(); // Clear previous session alerts
+
       const result: any = await invoke("start_session");
       isRecording.set(true); isPaused.set(false);
       currentSessionId.set(result.id); sessionStartTime.set(Date.now());
       lastSessionIdStore.set(result.id);
-      liveUtterances.set([]);
-      liveSummary.set(null);
-      dismissAlertsByLevel("meeting");
       startTimer();
       startTranscriptPoll();
       log(`Recording started: ${result.id}${result.title ? " — " + result.title : ""}`);
     } catch (e) { log(`Error: ${e}`); }
+    starting = false;
   }
 
   async function togglePause() {
@@ -149,13 +157,16 @@
     try {
       const devices: any[] = await invoke("list_audio_devices");
       micDevices = devices.filter(d => d.device_type === "microphone" || d.device_type === "input");
-      // If no type filtering worked, show all
       if (micDevices.length === 0) micDevices = devices;
       log(`${devices.length} audio device(s) found`);
     } catch (_) {}
+    // Use SCK to get apps with bundle IDs (needed for per-app audio filtering).
+    // Falls back to ps-based list if SCK isn't available.
     try {
-      runningApps = await invoke("list_running_apps");
-    } catch (_) {}
+      runningApps = await invoke("list_capturable_apps");
+    } catch (_) {
+      try { runningApps = await invoke("list_running_apps"); } catch (_) {}
+    }
   }
 
   onMount(async () => {
@@ -281,11 +292,11 @@
 
 <!-- Transport -->
 <div class="transport">
-  <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording} onclick={start} title="Record">⏺</button>
+  <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record">{starting ? "⏳" : "⏺"}</button>
   <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}>{$isPaused ? "▶" : "⏸"}</button>
   <button class="transport-btn stop" disabled={!$isRecording} onclick={stop} title="Stop">⏹</button>
-  <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording}>
-    {$isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
+  <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording && !starting} class:starting={starting}>
+    {starting ? "Starting..." : $isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
   </span>
 </div>
 

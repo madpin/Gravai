@@ -102,6 +102,7 @@ pub fn run() {
             commands::get_health_report,
             commands::list_audio_devices,
             commands::list_running_apps,
+            commands::list_capturable_apps,
             commands::set_source_gain,
             commands::start_session,
             commands::pause_session,
