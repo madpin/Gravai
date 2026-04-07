@@ -20,13 +20,8 @@ fn make_tray_icon() -> tauri::image::Image<'static> {
     let mut px = vec![0u8; W * H * 4]; // all transparent
 
     // (x_start, bar_width, bar_height) — centred vertically
-    let bars: &[(usize, usize, usize)] = &[
-        (1, 3, 6),
-        (5, 3, 12),
-        (9, 3, 18),
-        (13, 3, 12),
-        (17, 3, 6),
-    ];
+    let bars: &[(usize, usize, usize)] =
+        &[(1, 3, 6), (5, 3, 12), (9, 3, 18), (13, 3, 12), (17, 3, 6)];
 
     for &(bx, bw, bh) in bars {
         let top = (H - bh) / 2;

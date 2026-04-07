@@ -1,7 +1,7 @@
 # Gravai — Audio Capture & AI Meeting Intelligence
 # ================================================
 
-.PHONY: help dev build run release clean check test lint fmt typecheck install setup reset
+.PHONY: help dev build run release clean check test lint fmt typecheck install setup reset version
 
 # Default target
 help: ## Show this help
@@ -89,6 +89,23 @@ clean-data: ## Remove Gravai user data (~/.gravai/)
 
 reset: clean clean-data ## Full reset (build artifacts + user data)
 	@echo "✅ Reset complete."
+
+# ── Versioning ───────────────────────────────────────────────
+
+version: ## Bump version: make version V=1.2.3
+	@if [ -z "$(V)" ]; then \
+		echo "Usage: make version V=<new-version>  (e.g. make version V=1.2.0)"; \
+		echo "Current version: $$(grep '^version' Cargo.toml | head -1 | sed 's/version = //;s/\"//g')"; \
+		exit 1; \
+	fi
+	@echo "Bumping version to $(V)..."
+	@perl -i -pe 's/^version = ".*"/version = "$(V)"/' Cargo.toml
+	@perl -i -pe 's/"version": ".*"/"version": "$(V)"/' src-tauri/tauri.conf.json
+	@perl -i -pe 's/v\d+\.\d+\.\d+/v$(V)/g' src-frontend/components/StatusBar.svelte
+	@echo "✅ Version updated to $(V) in:"
+	@echo "   Cargo.toml (workspace)"
+	@echo "   src-tauri/tauri.conf.json"
+	@echo "   src-frontend/components/StatusBar.svelte"
 
 # ── Utility ──────────────────────────────────────────────────
 

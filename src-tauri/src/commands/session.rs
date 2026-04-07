@@ -48,8 +48,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     // Acquire the start guard — only one start_session may run at a time.
     // This prevents duplicate sessions from concurrent calls (tray + automation,
     // double-click, etc.). The guard auto-resets via Drop on any return path.
-    let _start_guard = SessionStartGuard::try_acquire()
-        .ok_or("A session is already starting")?;
+    let _start_guard = SessionStartGuard::try_acquire().ok_or("A session is already starting")?;
 
     // Also reject if a session is actively recording/paused
     {
