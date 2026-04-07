@@ -92,22 +92,27 @@ reset: clean clean-data ## Full reset (build artifacts + user data)
 
 # ── Versioning ───────────────────────────────────────────────
 
-version: ## Bump version: make version V=1.2.3
+version: ## Bump version: make version V=1.2.3  (omit V to auto-increment patch)
 	@if [ -z "$(V)" ]; then \
-		echo "Usage: make version V=<new-version>  (e.g. make version V=1.2.0)"; \
-		echo "Current version: $$(grep '^version' Cargo.toml | head -1 | sed 's/version = //;s/\"//g')"; \
-		exit 1; \
+		CURRENT=$$(grep '^version' Cargo.toml | head -1 | perl -pe 's/version = "(.*)"/$$1/; chomp'); \
+		MAJOR=$$(echo $$CURRENT | cut -d. -f1); \
+		MINOR=$$(echo $$CURRENT | cut -d. -f2); \
+		PATCH=$$(echo $$CURRENT | cut -d. -f3); \
+		NEW_V="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
+		echo "Auto-incrementing patch: $$CURRENT → $$NEW_V"; \
+		$(MAKE) version V=$$NEW_V; \
+	else \
+		echo "Bumping version to $(V)..."; \
+		perl -i -pe 's/^version = ".*"/version = "$(V)"/' Cargo.toml; \
+		perl -i -pe 's/"version": ".*"/"version": "$(V)"/' src-tauri/tauri.conf.json; \
+		perl -i -pe 's/v\d+\.\d+\.\d+/v$(V)/g' src-frontend/components/StatusBar.svelte; \
+		cargo update --workspace --quiet; \
+		echo "✅ Version updated to $(V) in:"; \
+		echo "   Cargo.toml (workspace)"; \
+		echo "   src-tauri/tauri.conf.json"; \
+		echo "   src-frontend/components/StatusBar.svelte"; \
+		echo "   Cargo.lock"; \
 	fi
-	@echo "Bumping version to $(V)..."
-	@perl -i -pe 's/^version = ".*"/version = "$(V)"/' Cargo.toml
-	@perl -i -pe 's/"version": ".*"/"version": "$(V)"/' src-tauri/tauri.conf.json
-	@perl -i -pe 's/v\d+\.\d+\.\d+/v$(V)/g' src-frontend/components/StatusBar.svelte
-	@cargo update --workspace --quiet
-	@echo "✅ Version updated to $(V) in:"
-	@echo "   Cargo.toml (workspace)"
-	@echo "   src-tauri/tauri.conf.json"
-	@echo "   src-frontend/components/StatusBar.svelte"
-	@echo "   Cargo.lock"
 
 # ── Utility ──────────────────────────────────────────────────
 

@@ -109,7 +109,7 @@
       <span class="sb-sep">·</span>
     {/if}
     <div class="sb-health-dot" class:green={$healthStatus === "ok"} class:yellow={$healthStatus === "warn"} class:red={$healthStatus === "error"} title="System health: {$healthStatus}"></div>
-    <span class="sb-version">v1.0.1</span>
+    <span class="sb-version">v..1</span>
   </div>
 </footer>
 

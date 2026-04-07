@@ -336,10 +336,10 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                     });
 
                     // Run sentiment on system audio only (async, non-blocking)
-                    if (utterance.source == "system_audio" || utterance.source == "system")
-                        && sentiment_engine.is_some()
-                    {
-                        let engine = sentiment_engine.as_ref().unwrap().clone();
+                    if let Some(engine) = sentiment_engine.as_ref().filter(|_| {
+                        utterance.source == "system_audio" || utterance.source == "system"
+                    }) {
+                        let engine = engine.clone();
                         let text = utterance.text.clone();
                         let db_path_clone = db_path.clone();
                         tokio::spawn(async move {
