@@ -8,11 +8,34 @@ use std::sync::Mutex;
 use tokenizers::Tokenizer;
 
 const GO_EMOTIONS_LABELS: &[&str] = &[
-    "admiration", "amusement", "anger", "annoyance", "approval", "caring",
-    "confusion", "curiosity", "desire", "disappointment", "disapproval",
-    "disgust", "embarrassment", "excitement", "fear", "gratitude", "grief",
-    "joy", "love", "nervousness", "optimism", "pride", "realization",
-    "relief", "remorse", "sadness", "surprise", "neutral",
+    "admiration",
+    "amusement",
+    "anger",
+    "annoyance",
+    "approval",
+    "caring",
+    "confusion",
+    "curiosity",
+    "desire",
+    "disappointment",
+    "disapproval",
+    "disgust",
+    "embarrassment",
+    "excitement",
+    "fear",
+    "gratitude",
+    "grief",
+    "joy",
+    "love",
+    "nervousness",
+    "optimism",
+    "pride",
+    "realization",
+    "relief",
+    "remorse",
+    "sadness",
+    "surprise",
+    "neutral",
 ];
 
 fn models_dir() -> std::path::PathBuf {
@@ -41,9 +64,7 @@ impl OnnxSentimentEngine {
             return None;
         }
 
-        let session = match Session::builder()
-            .and_then(|mut b| b.commit_from_file(&model_path))
-        {
+        let session = match Session::builder().and_then(|mut b| b.commit_from_file(&model_path)) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("Failed to load go-emotions ONNX model: {e}");
@@ -70,24 +91,41 @@ impl OnnxSentimentEngine {
 
 impl SentimentEngine for OnnxSentimentEngine {
     fn analyze(&self, text: &str) -> SentimentData {
-        let neutral = || SentimentData { label: "neutral".into(), score: 0.0, emotions: None };
+        let neutral = || SentimentData {
+            label: "neutral".into(),
+            score: 0.0,
+            emotions: None,
+        };
 
         let encoding = match self.tokenizer.encode(text, true) {
             Ok(e) => e,
-            Err(e) => { tracing::warn!("Tokenizer error: {e}"); return neutral(); }
+            Err(e) => {
+                tracing::warn!("Tokenizer error: {e}");
+                return neutral();
+            }
         };
 
         let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
-        let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&m| m as i64).collect();
+        let attention_mask: Vec<i64> = encoding
+            .get_attention_mask()
+            .iter()
+            .map(|&m| m as i64)
+            .collect();
         let len = input_ids.len();
 
         let ids_tensor = match Tensor::from_array((vec![1i64, len as i64], input_ids)) {
             Ok(t) => t,
-            Err(e) => { tracing::warn!("Tensor create error: {e}"); return neutral(); }
+            Err(e) => {
+                tracing::warn!("Tensor create error: {e}");
+                return neutral();
+            }
         };
         let mask_tensor = match Tensor::from_array((vec![1i64, len as i64], attention_mask)) {
             Ok(t) => t,
-            Err(e) => { tracing::warn!("Tensor create error: {e}"); return neutral(); }
+            Err(e) => {
+                tracing::warn!("Tensor create error: {e}");
+                return neutral();
+            }
         };
 
         let mut session = match self.session.lock() {
@@ -100,7 +138,10 @@ impl SentimentEngine for OnnxSentimentEngine {
             "attention_mask" => mask_tensor,
         ]) {
             Ok(o) => o,
-            Err(e) => { tracing::warn!("ONNX inference error: {e}"); return neutral(); }
+            Err(e) => {
+                tracing::warn!("ONNX inference error: {e}");
+                return neutral();
+            }
         };
 
         let logits: Vec<f32> = match outputs.iter().next() {
@@ -120,20 +161,33 @@ impl SentimentEngine for OnnxSentimentEngine {
             .iter()
             .take(self.top_k)
             .map(|(idx, score)| EmotionScore {
-                label: GO_EMOTIONS_LABELS.get(*idx).unwrap_or(&"unknown").to_string(),
+                label: GO_EMOTIONS_LABELS
+                    .get(*idx)
+                    .unwrap_or(&"unknown")
+                    .to_string(),
                 score: round4(*score),
             })
             .collect();
 
-        let label = top_emotions.first().map(|e| e.label.clone()).unwrap_or_else(|| "neutral".into());
+        let label = top_emotions
+            .first()
+            .map(|e| e.label.clone())
+            .unwrap_or_else(|| "neutral".into());
         let score = top_emotions.first().map(|e| e.score).unwrap_or(0.0);
 
-        SentimentData { label, score, emotions: Some(top_emotions) }
+        SentimentData {
+            label,
+            score,
+            emotions: Some(top_emotions),
+        }
     }
 }
 
 fn sigmoid_vec(logits: &[f32]) -> Vec<f64> {
-    logits.iter().map(|&x| 1.0 / (1.0 + (-(x as f64)).exp())).collect()
+    logits
+        .iter()
+        .map(|&x| 1.0 / (1.0 + (-(x as f64)).exp()))
+        .collect()
 }
 
 fn round4(v: f64) -> f64 {

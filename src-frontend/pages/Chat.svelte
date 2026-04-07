@@ -60,7 +60,8 @@
   });
 </script>
 
-<div class="page-header">
+<div class="chat-layout">
+<div class="page-header" style="flex-shrink:0">
   <h2>Ask Gravai</h2>
   <SessionPicker {sessions} selected={sessionFilter} onselect={(id) => { sessionFilter = id; loadHistory(); }} />
 </div>
@@ -97,9 +98,12 @@
     <button class="btn btn-accent" onclick={ask} disabled={loading || !question.trim()}>Send</button>
   </div>
 </div>
+</div>
 
 <style>
-  .chat-container { display: flex; flex-direction: column; height: calc(100vh - 140px); }
+  :global(.content:has(.chat-layout)) { overflow: hidden; padding: 16px 20px; gap: 10px; }
+  .chat-layout { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .chat-container { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
   .chat-msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; }
   .chat-msg.user { align-self: flex-end; background: var(--accent-glow); border: 1px solid var(--accent-dim); }

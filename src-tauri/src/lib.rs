@@ -9,6 +9,41 @@ use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
 
+/// Build a 22×22 RGBA waveform icon for the macOS menu bar.
+///
+/// Produces black pixels on a transparent background — `icon_as_template(true)`
+/// then lets macOS invert it automatically for dark/light menu bars.
+/// Five vertical bars of varying height form a classic audio waveform shape.
+fn make_tray_icon() -> tauri::image::Image<'static> {
+    const W: usize = 22;
+    const H: usize = 22;
+    let mut px = vec![0u8; W * H * 4]; // all transparent
+
+    // (x_start, bar_width, bar_height) — centred vertically
+    let bars: &[(usize, usize, usize)] = &[
+        (1, 3, 6),
+        (5, 3, 12),
+        (9, 3, 18),
+        (13, 3, 12),
+        (17, 3, 6),
+    ];
+
+    for &(bx, bw, bh) in bars {
+        let top = (H - bh) / 2;
+        for y in top..top + bh {
+            for x in bx..bx + bw {
+                let i = (y * W + x) * 4;
+                px[i] = 0;
+                px[i + 1] = 0;
+                px[i + 2] = 0;
+                px[i + 3] = 255;
+            }
+        }
+    }
+
+    tauri::image::Image::new_owned(px, W as u32, H as u32)
+}
+
 /// Execute a list of automation actions by emitting events to the frontend.
 /// `currently_recording` is the live recording state at the time of the call.
 fn run_automation_actions(
@@ -49,7 +84,10 @@ fn run_automation_actions(
             }
             // Other actions (ActivatePreset, RunExport) are handled by the frontend
             _ => {
-                let _ = handle.emit("gravai:automation-action", serde_json::to_value(action).ok());
+                let _ = handle.emit(
+                    "gravai:automation-action",
+                    serde_json::to_value(action).ok(),
+                );
             }
         }
     }
@@ -57,7 +95,8 @@ fn run_automation_actions(
 
 /// Holds dynamic tray menu item references so the event bridge can update them.
 struct TrayItems {
-    stop:   tauri::menu::MenuItem<tauri::Wry>,
+    start: tauri::menu::MenuItem<tauri::Wry>,
+    stop: tauri::menu::MenuItem<tauri::Wry>,
     status: tauri::menu::MenuItem<tauri::Wry>,
 }
 type TrayItemsState = Arc<std::sync::Mutex<TrayItems>>;
@@ -94,10 +133,22 @@ pub fn run() {
     });
 
     // Create shared app state
-    let app_state = Arc::new(AppState::new(config));
+    let app_state = Arc::new(AppState::new(config.clone()));
 
     // Clone event bus for setup closure
     let event_bus = app_state.event_bus.clone();
+
+    // ── Background meeting detection loop ────────────────────────────────
+    // Publishes GravaiEvent::MeetingDetected / MeetingEnded to the event bus,
+    // which the event bridge picks up and uses to fire automations.
+    {
+        let meeting_bus = app_state.event_bus.clone();
+        let meeting_config = config.features.meeting_detection.clone();
+        let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        tauri::async_runtime::spawn(async move {
+            gravai_meeting::detector::run_detection_loop(meeting_config, meeting_bus, active).await;
+        });
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -111,11 +162,12 @@ pub fn run() {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-                let show_item     = MenuItemBuilder::with_id("show",  "Show Gravai").build(app)?;
+                let show_item     = MenuItemBuilder::with_id("show",   "Show Gravai").build(app)?;
                 let status_item   = MenuItemBuilder::with_id("status", "◉  Idle").enabled(false).build(app)?;
+                let start_item    = MenuItemBuilder::with_id("start",  "⏺  Start Recording").enabled(true).build(app)?;
                 let stop_item     = MenuItemBuilder::with_id("stop",   "⏹  Stop Recording").enabled(false).build(app)?;
-                let recording_tab = MenuItemBuilder::with_id("go_rec", "⏺  Open Recording").build(app)?;
-                let models_tab    = MenuItemBuilder::with_id("go_models", "🧠  Models").build(app)?;
+                let recording_tab = MenuItemBuilder::with_id("go_rec", "Open Recording Tab").build(app)?;
+                let models_tab    = MenuItemBuilder::with_id("go_models", "Open Models Tab").build(app)?;
                 let quit_item     = MenuItemBuilder::with_id("quit",   "Quit Gravai").build(app)?;
                 let sep1 = PredefinedMenuItem::separator(app)?;
                 let sep2 = PredefinedMenuItem::separator(app)?;
@@ -125,6 +177,7 @@ pub fn run() {
                     .item(&show_item)
                     .item(&sep1)
                     .item(&status_item)
+                    .item(&start_item)
                     .item(&stop_item)
                     .item(&sep2)
                     .item(&recording_tab)
@@ -138,7 +191,7 @@ pub fn run() {
                 let handle_for_menu = app.handle().clone();
 
                 TrayIconBuilder::with_id("gravai-tray")
-                    .icon(app.default_window_icon().ok_or("no tray icon")?.clone())
+                    .icon(make_tray_icon())
                     .icon_as_template(true)
                     .menu(&menu)
                     .show_menu_on_left_click(false)
@@ -164,7 +217,28 @@ pub fn run() {
                                     let _ = win.set_focus();
                                 }
                             }
+                            "start" => {
+                                // Optimistically update tray before session starts
+                                if let Some(items) = app.try_state::<TrayItemsState>() {
+                                    if let Ok(t) = items.lock() {
+                                        let _ = t.start.set_enabled(false);
+                                        let _ = t.status.set_text("⏳  Starting...");
+                                    }
+                                }
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                    let _ = win.emit("gravai:automation-start", ());
+                                }
+                            }
                             "stop" => {
+                                // Optimistically update tray before session stops
+                                if let Some(items) = app.try_state::<TrayItemsState>() {
+                                    if let Ok(t) = items.lock() {
+                                        let _ = t.stop.set_enabled(false);
+                                        let _ = t.status.set_text("⏳  Stopping...");
+                                    }
+                                }
                                 if let Some(win) = app.get_webview_window("main") {
                                     let _ = win.emit("gravai:stop-session", ());
                                 }
@@ -213,7 +287,7 @@ pub fn run() {
                     .build(app)?;
 
                 // Bundle menu items into managed state for dynamic updates
-                let tray_items: TrayItemsState = Arc::new(std::sync::Mutex::new(TrayItems { stop: stop_item, status: status_item }));
+                let tray_items: TrayItemsState = Arc::new(std::sync::Mutex::new(TrayItems { start: start_item, stop: stop_item, status: status_item }));
                 app.manage(tray_items);
             }
 
@@ -313,6 +387,7 @@ pub fn run() {
                                     // Update stop button and status label dynamically
                                     if let Some(items) = handle.try_state::<TrayItemsState>() {
                                         if let Ok(t) = items.lock() {
+                                            let _ = t.start.set_enabled(!recording);
                                             let _ = t.stop.set_enabled(recording);
                                             let _ = t.status.set_text(if recording { "🔴  Recording" } else { "◉  Idle" });
                                         }

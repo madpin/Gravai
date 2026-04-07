@@ -19,12 +19,39 @@ static CAPTURE_STOP: std::sync::OnceLock<std::sync::Mutex<Option<Arc<AtomicBool>
 fn get_capture_stop() -> &'static std::sync::Mutex<Option<Arc<AtomicBool>>> {
     CAPTURE_STOP.get_or_init(|| std::sync::Mutex::new(None))
 }
+
+/// Atomic guard that ensures only one `start_session` runs at a time.
+/// Uses compare-exchange so concurrent callers fail immediately rather than
+/// queuing up and starting duplicate sessions.
+static SESSION_STARTING: AtomicBool = AtomicBool::new(false);
+
+struct SessionStartGuard;
+impl SessionStartGuard {
+    /// Try to acquire the guard. Returns `None` if already taken.
+    fn try_acquire() -> Option<Self> {
+        SESSION_STARTING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| SessionStartGuard)
+    }
+}
+impl Drop for SessionStartGuard {
+    fn drop(&mut self) {
+        SESSION_STARTING.store(false, Ordering::SeqCst);
+    }
+}
 use tracing::{error, info, warn};
 
 /// Start a new recording session.
 #[tauri::command]
 pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
-    // Check no active session
+    // Acquire the start guard — only one start_session may run at a time.
+    // This prevents duplicate sessions from concurrent calls (tray + automation,
+    // double-click, etc.). The guard auto-resets via Drop on any return path.
+    let _start_guard = SessionStartGuard::try_acquire()
+        .ok_or("A session is already starting")?;
+
+    // Also reject if a session is actively recording/paused
     {
         let current = state.session.read().await;
         if let Some(ref s) = *current {

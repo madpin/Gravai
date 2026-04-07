@@ -102,13 +102,18 @@ pub async fn export_session_audio(
 pub async fn get_session_sentiment(session_id: String) -> Result<serde_json::Value, String> {
     let db_path = gravai_config::data_dir().join("gravai.db");
     let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
-    let utterances = db.get_session_sentiment(&session_id).map_err(|e| e.to_string())?;
+    let utterances = db
+        .get_session_sentiment(&session_id)
+        .map_err(|e| e.to_string())?;
 
     // Group by speaker, accumulate emotion counts
     let mut speakers: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     for u in &utterances {
         let speaker = u.speaker.clone().unwrap_or_else(|| "Remote".into());
-        let label = u.sentiment_label.clone().unwrap_or_else(|| "neutral".into());
+        let label = u
+            .sentiment_label
+            .clone()
+            .unwrap_or_else(|| "neutral".into());
         let score = u.sentiment_score.unwrap_or(0.0);
         speakers
             .entry(speaker)

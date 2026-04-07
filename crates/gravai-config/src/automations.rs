@@ -10,14 +10,23 @@ pub enum AutomationTrigger {
     /// Any meeting app detected (generic).
     MeetingDetected,
     /// Specific meeting app detected (e.g. "Zoom", "Microsoft Teams").
-    MeetingAppDetected { app_name: String },
+    MeetingAppDetected {
+        app_name: String,
+    },
     /// Specific meeting app ended.
-    MeetingAppEnded { app_name: String },
+    MeetingAppEnded {
+        app_name: String,
+    },
     SessionStarted,
     SessionEnded,
     CalendarEventStarting,
-    TimeOfDay { hour: u8, minute: u8 },
-    AppForegrounded { app_name: String },
+    TimeOfDay {
+        hour: u8,
+        minute: u8,
+    },
+    AppForegrounded {
+        app_name: String,
+    },
 }
 
 /// Condition to evaluate before executing actions.

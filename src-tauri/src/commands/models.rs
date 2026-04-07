@@ -9,8 +9,16 @@ const WHISPER_MODELS: &[(&str, &str, u64)] = &[
     ("base", "Base — 142 MB", 142_000_000),
     ("small", "Small — 466 MB", 466_000_000),
     ("medium", "Medium — 1.5 GB, balanced", 1_500_000_000),
-    ("large-v3-turbo", "Large v3 Turbo — 1.5 GB, 3–5× faster than large-v3, recommended for Apple Silicon", 1_600_000_000),
-    ("large-v3", "Large v3 — 3 GB, highest accuracy", 3_000_000_000),
+    (
+        "large-v3-turbo",
+        "Large v3 Turbo — 1.5 GB, 3–5× faster than large-v3, recommended for Apple Silicon",
+        1_600_000_000,
+    ),
+    (
+        "large-v3",
+        "Large v3 — 3 GB, highest accuracy",
+        3_000_000_000,
+    ),
 ];
 
 /// Get list of all models with download status.
@@ -103,23 +111,34 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
 
             'url_loop: for url in &urls_to_try {
                 info!("Downloading {model_id}/{fname} from {url}");
-                let _ = app.emit("gravai:model-download", serde_json::json!({
-                    "model_id": model_id, "status": "downloading", "progress": 0, "file": fname,
-                }));
+                let _ = app.emit(
+                    "gravai:model-download",
+                    serde_json::json!({
+                        "model_id": model_id, "status": "downloading", "progress": 0, "file": fname,
+                    }),
+                );
 
                 let response = match client.get(*url).send().await {
                     Ok(r) => r,
-                    Err(e) => { last_err = format!("HTTP: {e}"); continue 'url_loop; }
+                    Err(e) => {
+                        last_err = format!("HTTP: {e}");
+                        continue 'url_loop;
+                    }
                 };
                 if !response.status().is_success() {
                     last_err = format!("HTTP {}", response.status());
-                    tracing::warn!("Primary URL for {fname} returned {}, trying fallback", response.status());
+                    tracing::warn!(
+                        "Primary URL for {fname} returned {}, trying fallback",
+                        response.status()
+                    );
                     continue 'url_loop;
                 }
 
                 let total = response.content_length().unwrap_or(0);
                 let temp_path = file_path.with_extension("tmp");
-                let mut file = tokio::fs::File::create(&temp_path).await.map_err(|e| format!("Create: {e}"))?;
+                let mut file = tokio::fs::File::create(&temp_path)
+                    .await
+                    .map_err(|e| format!("Create: {e}"))?;
                 let mut stream = response.bytes_stream();
                 let mut downloaded: u64 = 0;
                 let mut last_pct: u64 = 0;
@@ -127,13 +146,23 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
                 while let Some(chunk) = stream.next().await {
                     let chunk = match chunk {
                         Ok(c) => c,
-                        Err(e) => { last_err = format!("Stream: {e}"); stream_ok = false; break; }
+                        Err(e) => {
+                            last_err = format!("Stream: {e}");
+                            stream_ok = false;
+                            break;
+                        }
                     };
                     if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await {
-                        last_err = format!("Write: {e}"); stream_ok = false; break;
+                        last_err = format!("Write: {e}");
+                        stream_ok = false;
+                        break;
                     }
                     downloaded += chunk.len() as u64;
-                    let pct = if total > 0 { (downloaded * 100) / total } else { 0 };
+                    let pct = if total > 0 {
+                        (downloaded * 100) / total
+                    } else {
+                        0
+                    };
                     if pct != last_pct {
                         last_pct = pct;
                         let _ = app.emit("gravai:model-download", serde_json::json!({
@@ -146,7 +175,9 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
                     let _ = tokio::fs::remove_file(&temp_path).await;
                     continue 'url_loop;
                 }
-                tokio::fs::rename(&temp_path, &file_path).await.map_err(|e| format!("Rename: {e}"))?;
+                tokio::fs::rename(&temp_path, &file_path)
+                    .await
+                    .map_err(|e| format!("Rename: {e}"))?;
                 success = true;
                 break;
             }
@@ -156,9 +187,12 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
             }
         }
 
-        let _ = app.emit("gravai:model-download", serde_json::json!({
-            "model_id": model_id, "status": "complete", "progress": 100,
-        }));
+        let _ = app.emit(
+            "gravai:model-download",
+            serde_json::json!({
+                "model_id": model_id, "status": "complete", "progress": 100,
+            }),
+        );
         return Ok(format!("Downloaded {model_id} model files"));
     }
 
@@ -357,13 +391,20 @@ fn ai_models_status(models_dir: &std::path::Path) -> Vec<serde_json::Value> {
             let info = ai_model_info(id)?;
             let dir = models_dir.join(info.subdir);
             // Consider downloaded only if all required files exist
-            let downloaded = info.files.iter().all(|(fname, _, _)| dir.join(fname).exists());
+            let downloaded = info
+                .files
+                .iter()
+                .all(|(fname, _, _)| dir.join(fname).exists());
             let actual_size: u64 = info
                 .files
                 .iter()
                 .filter_map(|(fname, _, _)| {
                     let p = dir.join(fname);
-                    if p.exists() { std::fs::metadata(&p).map(|m| m.len()).ok() } else { None }
+                    if p.exists() {
+                        std::fs::metadata(&p).map(|m| m.len()).ok()
+                    } else {
+                        None
+                    }
                 })
                 .sum();
             Some(serde_json::json!({

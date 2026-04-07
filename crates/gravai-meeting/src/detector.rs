@@ -33,21 +33,49 @@ struct MeetingProcess {
 /// Known meeting app process names and their display names.
 const MEETING_PROCESSES: &[MeetingProcess] = &[
     // zoom.us runs in the background for notifications; UDP > 1 = active meeting.
-    MeetingProcess { process: "zoom.us",                    app_name: "Zoom",            confirm: ConfirmStrategy::UdpConnections("zoom") },
+    MeetingProcess {
+        process: "zoom.us",
+        app_name: "Zoom",
+        confirm: ConfirmStrategy::UdpConnections("zoom"),
+    },
     // CptHost is Zoom's dedicated call-host process — only spawns during a call.
-    MeetingProcess { process: "CptHost",                    app_name: "Zoom",            confirm: ConfirmStrategy::ProcessOnly },
+    MeetingProcess {
+        process: "CptHost",
+        app_name: "Zoom",
+        confirm: ConfirmStrategy::ProcessOnly,
+    },
     // Teams also idles in background; UDP confirms an active call.
-    MeetingProcess { process: "Microsoft Teams",            app_name: "Microsoft Teams", confirm: ConfirmStrategy::UdpConnections("Teams") },
+    MeetingProcess {
+        process: "Microsoft Teams",
+        app_name: "Microsoft Teams",
+        confirm: ConfirmStrategy::UdpConnections("Teams"),
+    },
     // Slack & Discord helper renderers can be any tab, but audio call activity
     // causes a burst of UDP traffic, so UDP > 1 is a reasonable gate.
-    MeetingProcess { process: "Slack Helper (Renderer)",    app_name: "Slack Huddle",    confirm: ConfirmStrategy::UdpConnections("Slack") },
-    MeetingProcess { process: "Discord Helper (Renderer)",  app_name: "Discord",         confirm: ConfirmStrategy::UdpConnections("Discord") },
+    MeetingProcess {
+        process: "Slack Helper (Renderer)",
+        app_name: "Slack Huddle",
+        confirm: ConfirmStrategy::UdpConnections("Slack"),
+    },
+    MeetingProcess {
+        process: "Discord Helper (Renderer)",
+        app_name: "Discord",
+        confirm: ConfirmStrategy::UdpConnections("Discord"),
+    },
     // Webex keeps a process open; UDP gate avoids false positives.
-    MeetingProcess { process: "Webex",                      app_name: "WebEx",           confirm: ConfirmStrategy::UdpConnections("Webex") },
+    MeetingProcess {
+        process: "Webex",
+        app_name: "WebEx",
+        confirm: ConfirmStrategy::UdpConnections("Webex"),
+    },
     // FaceTime runs as a background app; UDP confirms an active call.
     // callservicesd is the macOS call daemon — it opens UDP during any live call,
     // so we match either process name in the lsof output.
-    MeetingProcess { process: "FaceTime",                   app_name: "FaceTime",        confirm: ConfirmStrategy::UdpConnections("FaceTime|callservicesd") },
+    MeetingProcess {
+        process: "FaceTime",
+        app_name: "FaceTime",
+        confirm: ConfirmStrategy::UdpConnections("FaceTime|callservicesd"),
+    },
 ];
 
 /// Known meeting app bundle IDs (used when SCK is already active during recording).

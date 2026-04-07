@@ -43,9 +43,7 @@ impl PyannoteOnnxDiarizer {
             return None;
         }
 
-        let session = match Session::builder()
-            .and_then(|mut b| b.commit_from_file(&model_path))
-        {
+        let session = match Session::builder().and_then(|mut b| b.commit_from_file(&model_path)) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("Failed to load pyannote ONNX model: {e}");
@@ -73,10 +71,7 @@ impl PyannoteOnnxDiarizer {
         let outputs = session.run(ort::inputs!["input" => tensor]).ok()?;
 
         let output_entry = outputs.iter().next()?;
-        let (shape, data) = output_entry
-            .1
-            .try_extract_tensor::<f32>()
-            .ok()?;
+        let (shape, data) = output_entry.1.try_extract_tensor::<f32>().ok()?;
 
         // shape: [1, num_frames, num_speakers]
         let num_frames = shape[1] as usize;
@@ -114,7 +109,10 @@ impl DiarizationProvider for PyannoteOnnxDiarizer {
             if let Some(frames) = self.run_segmentation(window) {
                 // Map frames back to sample positions
                 let frames_per_sample = frames.len() as f32 / window.len() as f32;
-                for (sample_off, votes) in speaker_votes[window_start..window_end].iter_mut().enumerate() {
+                for (sample_off, votes) in speaker_votes[window_start..window_end]
+                    .iter_mut()
+                    .enumerate()
+                {
                     let frame_idx = (sample_off as f32 * frames_per_sample) as usize;
                     let frame_idx = frame_idx.min(frames.len() - 1);
                     let probs = &frames[frame_idx];
