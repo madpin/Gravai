@@ -6,6 +6,7 @@ mod export;
 mod intelligence;
 mod search;
 mod session;
+mod storage;
 mod tools;
 
 pub use audio::*;
@@ -14,6 +15,7 @@ pub use export::*;
 pub use intelligence::*;
 pub use search::*;
 pub use session::*;
+pub use storage::*;
 pub use tools::*;
 
 use gravai_core::AppState;

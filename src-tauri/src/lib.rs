@@ -127,6 +127,11 @@ pub fn run() {
             commands::detect_silence,
             commands::trim_silence,
             commands::get_perf_snapshot,
+            // Storage management
+            commands::get_storage_info,
+            commands::delete_session_audio,
+            commands::delete_full_session,
+            commands::save_realtime_transcript,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gravai");

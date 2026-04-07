@@ -223,6 +223,61 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         session.add_task(handle).await;
     }
 
+    // Real-time auto-save task (crash-safe transcript export every 30s)
+    if config.export.realtime_save {
+        let save_sid = session_id.clone();
+        let save_session = session.clone();
+        let save_config = config.export.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                if !save_session.is_active() {
+                    break;
+                }
+
+                let export_dir = save_config
+                    .transcript_folder
+                    .as_ref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| gravai_config::data_dir().join("exports"));
+                let _ = std::fs::create_dir_all(&export_dir);
+
+                let db_path = gravai_config::data_dir().join("gravai.db");
+                if let Ok(db) = gravai_storage::Database::open(&db_path) {
+                    if let Ok(utterances) = db.get_utterances(&save_sid) {
+                        if !utterances.is_empty() {
+                            let data = gravai_export::ExportData {
+                                session_id: save_sid.clone(),
+                                title: None,
+                                started_at: utterances[0].timestamp.clone(),
+                                ended_at: None,
+                                duration_seconds: None,
+                                meeting_app: None,
+                                utterances: utterances
+                                    .iter()
+                                    .map(|u| gravai_export::ExportUtterance {
+                                        timestamp: u.timestamp.clone(),
+                                        source: u.source.clone(),
+                                        speaker: u.speaker.clone(),
+                                        text: u.text.clone(),
+                                    })
+                                    .collect(),
+                                summary: None,
+                            };
+                            let md = gravai_export::markdown::export_markdown(
+                                &data,
+                                &gravai_export::ExportOptions::default(),
+                            );
+                            let path = export_dir.join(format!("{save_sid}.md"));
+                            let _ = std::fs::write(&path, &md);
+                        }
+                    }
+                }
+            }
+        });
+        session.add_task(handle).await;
+    }
+
     // Auto-name session from calendar events
     let calendar_title = gravai_meeting::calendar::find_meeting_title(
         config.features.meeting_detection.lead_time_seconds,

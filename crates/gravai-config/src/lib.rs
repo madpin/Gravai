@@ -304,6 +304,40 @@ pub struct FeaturesConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Export config
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportConfig {
+    /// Auto-export transcript on session end
+    pub auto_export_transcript: bool,
+    /// Auto-export audio on session end
+    pub auto_export_audio: bool,
+    /// Default folder for markdown/summary exports (None = ~/.gravai/exports/)
+    pub transcript_folder: Option<String>,
+    /// Default folder for audio exports (None = same as session folder)
+    pub audio_folder: Option<String>,
+    /// Default transcript format: "markdown", "pdf", "txt"
+    pub transcript_format: String,
+    /// Auto-save transcript in real-time (crash-safe)
+    pub realtime_save: bool,
+}
+
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            auto_export_transcript: false,
+            auto_export_audio: false,
+            transcript_folder: None,
+            audio_folder: None,
+            transcript_format: "markdown".into(),
+            realtime_save: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Top-level AppConfig
 // ---------------------------------------------------------------------------
 
@@ -316,6 +350,7 @@ pub struct AppConfig {
     pub vad: VadConfig,
     pub features: FeaturesConfig,
     pub llm: LlmConfig,
+    pub export: ExportConfig,
 }
 
 impl Default for AppConfig {
@@ -327,6 +362,7 @@ impl Default for AppConfig {
             vad: VadConfig::default(),
             features: FeaturesConfig::default(),
             llm: LlmConfig::default(),
+            export: ExportConfig::default(),
         }
     }
 }

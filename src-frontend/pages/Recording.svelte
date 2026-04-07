@@ -22,6 +22,15 @@
   let runningApps = $state<any[]>([]);
   let selectedAppBundleId = $state("");
 
+  // Export config (loaded once for display)
+  let exportAutoTranscript = $state(false);
+  let exportAutoAudio = $state(false);
+  let exportRealtimeSave = $state(true);
+
+  // Active preset/profile info
+  let activePreset = $state<any>(null);
+  let activeProfile = $state<any>(null);
+
   // Intervals and cleanup
   let timerInterval: number | null = null;
   let transcriptPoll: number | null = null;
@@ -172,6 +181,25 @@
     unlisteners.push(ue);
 
     await loadDevices();
+    // Load export config + active preset/profile for status display
+    try {
+      const cfg: any = await invoke("get_config");
+      exportAutoTranscript = cfg.export?.auto_export_transcript ?? false;
+      exportAutoAudio = cfg.export?.auto_export_audio ?? false;
+      exportRealtimeSave = cfg.export?.realtime_save ?? true;
+    } catch (_) {}
+    try {
+      const ps: any = await invoke("get_presets");
+      if (ps.active_preset_id && ps.presets?.[ps.active_preset_id]) {
+        activePreset = ps.presets[ps.active_preset_id];
+      }
+    } catch (_) {}
+    try {
+      const pr: any = await invoke("get_profiles");
+      if (pr.active_profile_id && pr.profiles?.[pr.active_profile_id]) {
+        activeProfile = pr.profiles[pr.active_profile_id];
+      }
+    } catch (_) {}
     checkMeetings();
     meetingPoll = window.setInterval(checkMeetings, 10000);
     log("Gravai ready");
@@ -199,6 +227,43 @@
   <span class="timer">{timer}</span>
 </div>
 
+<!-- Active preset/profile indicators -->
+{#if activePreset || activeProfile}
+  <div class="active-config-bar">
+    {#if activePreset}
+      <div class="config-pill-wrap">
+        <div class="config-pill">
+          <span class="config-pill-icon">🎛️</span>
+          <span class="config-pill-label">Preset:</span>
+          <span class="config-pill-value">{activePreset.name}</span>
+        </div>
+        <div class="config-tooltip">
+          <div class="config-tooltip-row">{activePreset.mic_enabled ? '🎤 Mic on' : '🎤 Mic off'} &middot; {activePreset.sys_enabled ? '💻 System on' : '💻 System off'}</div>
+          <div class="config-tooltip-row">{activePreset.sample_rate/1000}kHz &middot; {activePreset.bit_depth}-bit &middot; {activePreset.channels === 1 ? 'Mono' : 'Stereo'}</div>
+          <div class="config-tooltip-row">Format: {activePreset.export_format}</div>
+          {#if activePreset.output_folder}<div class="config-tooltip-row">Folder: {activePreset.output_folder}</div>{/if}
+        </div>
+      </div>
+    {/if}
+    {#if activeProfile}
+      <div class="config-pill-wrap">
+        <div class="config-pill">
+          <span class="config-pill-icon">👤</span>
+          <span class="config-pill-label">Profile:</span>
+          <span class="config-pill-value">{activeProfile.name}</span>
+        </div>
+        <div class="config-tooltip">
+          <div class="config-tooltip-row">🗣️ Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
+          <div class="config-tooltip-row">🤖 {activeProfile.llm_provider || 'ollama'} ({activeProfile.llm_model || 'gemma3:4b'})</div>
+          <div class="config-tooltip-row">👥 Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
+          {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row">📝 Auto-export transcript</div>{/if}
+          {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row">💾 Real-time save</div>{/if}
+        </div>
+      </div>
+    {/if}
+  </div>
+{/if}
+
 <!-- Transport -->
 <div class="transport">
   <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording} onclick={start} title="Record">⏺</button>
@@ -208,6 +273,15 @@
     {$isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
   </span>
 </div>
+
+<!-- Export status indicator -->
+{#if exportAutoTranscript || exportAutoAudio || exportRealtimeSave}
+  <div class="export-indicator">
+    {#if exportRealtimeSave}<span class="export-tag save">💾 Auto-save</span>{/if}
+    {#if exportAutoTranscript}<span class="export-tag transcript">📝 Auto-export transcript</span>{/if}
+    {#if exportAutoAudio}<span class="export-tag audio">🔊 Auto-export audio</span>{/if}
+  </div>
+{/if}
 
 <!-- Audio Sources -->
 <details class="card collapsible" open>
@@ -253,10 +327,9 @@
 <details class="card collapsible" open>
   <summary class="card-header">
     Live Transcript
-    <span class="header-toggle">
-      <input type="checkbox" checked={$autoScrollEnabled} onclick={(e) => e.stopPropagation()} onchange={(e) => autoScrollEnabled.set((e.target as HTMLInputElement).checked)} />
-      <span onclick={(e) => e.stopPropagation()}>Auto-scroll</span>
-    </span>
+    <button type="button" class="header-toggle-btn" onclick={(e) => { e.stopPropagation(); autoScrollEnabled.set(!$autoScrollEnabled); }}>
+      {$autoScrollEnabled ? "☑" : "☐"} Auto-scroll
+    </button>
   </summary>
   <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} />
 </details>
