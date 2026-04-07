@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen, fmtTimer, fmtDuration } from "../lib/tauri";
-  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled } from "../lib/store";
+  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary } from "../lib/store";
   import TranscriptView from "../components/TranscriptView.svelte";
   import AppPicker from "../components/AppPicker.svelte";
 
@@ -12,13 +12,9 @@
   let sysVolume = $state(100);
   let vuMic = $state(0);
   let vuSys = $state(0);
-  let utterances = $state<any[]>([]);
-  let logs = $state<string[]>([]);
   let meetingBanner = $state<string | null>(null);
-  let dismissedApps = $state<Set<string>>(new Set());  // Track dismissed app combinations
-  let summary = $state<any>(null);
+  let dismissedApps = $state<Set<string>>(new Set());
   let summaryLoading = $state(false);
-  let lastSessionId = $state<string | null>(null);
 
   // Device selection
   let micDevices = $state<any[]>([]);
@@ -34,13 +30,12 @@
 
   function log(msg: string) {
     const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    logs = [...logs.slice(-99), `[${t}] ${msg}`];
+    activityLogs.update(l => [...l.slice(-99), `[${t}] ${msg}`]);
   }
 
   async function start() {
     try {
       log("Starting recording...");
-      // Update config with source selections (fire-and-forget for speed)
       invoke("update_config", {
         patch: {
           audio: {
@@ -52,10 +47,10 @@
       const result: any = await invoke("start_session");
       isRecording.set(true); isPaused.set(false);
       currentSessionId.set(result.id); sessionStartTime.set(Date.now());
-      lastSessionId = result.id;
-      utterances = [];
-      summary = null;
-      meetingBanner = null; // Hide banner while recording
+      lastSessionIdStore.set(result.id);
+      liveUtterances.set([]);
+      liveSummary.set(null);
+      meetingBanner = null;
       startTimer();
       startTranscriptPoll();
       log(`Recording started: ${result.id}${result.title ? " — " + result.title : ""}`);
@@ -72,12 +67,12 @@
   async function stop() {
     try {
       const result: any = await invoke("stop_session");
-      lastSessionId = result.id; // Keep for summary generation
+      lastSessionIdStore.set(result.id);
       isRecording.set(false); isPaused.set(false);
       currentSessionId.set(null); sessionStartTime.set(null);
       stopTimer(); stopTranscriptPoll();
       vuMic = 0; vuSys = 0;
-      dismissedApps = new Set(); // Reset dismissals after recording ends
+      dismissedApps = new Set();
       log(`Stopped: ${result.id} (${fmtDuration(result.duration_seconds)})`);
     } catch (e) { log(`Error: ${e}`); }
   }
@@ -94,19 +89,18 @@
     transcriptPoll = window.setInterval(async () => {
       const sid = $currentSessionId;
       if (!sid) return;
-      try { utterances = await invoke("get_transcript", { sessionId: sid }); } catch (_) {}
+      try { liveUtterances.set(await invoke("get_transcript", { sessionId: sid })); } catch (_) {}
     }, 2000);
   }
   function stopTranscriptPoll() { if (transcriptPoll) { clearInterval(transcriptPoll); transcriptPoll = null; } }
 
   async function generateSummary() {
-    // Use lastSessionId (persists after stop) or currentSessionId
-    const sid = lastSessionId || $currentSessionId;
+    const sid = $lastSessionIdStore || $currentSessionId;
     if (!sid) { log("No session to summarize"); return; }
     summaryLoading = true;
     log("Generating summary...");
     try {
-      summary = await invoke("summarize_session", { sessionId: sid });
+      liveSummary.set(await invoke("summarize_session", { sessionId: sid }));
       log("Summary generated");
     } catch (e) { log(`Summary error: ${e}`); }
     summaryLoading = false;
@@ -166,7 +160,7 @@
     const ut = await listen("gravai:transcript", (e: any) => {
       const d = e.payload?.data || e.payload;
       if (d?.text && $currentSessionId) {
-        utterances = [...utterances, { ...d, timestamp: d.timestamp || new Date().toISOString() }];
+        liveUtterances.update(u => [...u, { ...d, timestamp: d.timestamp || new Date().toISOString() }]);
       }
     });
     unlisteners.push(ut);
@@ -264,11 +258,11 @@
       <span onclick={(e) => e.stopPropagation()}>Auto-scroll</span>
     </span>
   </summary>
-  <TranscriptView {utterances} autoScroll={$autoScrollEnabled} />
+  <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} />
 </details>
 
 <!-- Summary (visible when we have transcript OR after stop) -->
-{#if utterances.length > 0 || lastSessionId}
+{#if $liveUtterances.length > 0 || $lastSessionIdStore}
   <details class="card collapsible" open>
     <summary class="card-header">
       Summary
@@ -276,21 +270,21 @@
         {summaryLoading ? "⏳ Generating..." : "Generate Summary"}
       </button>
     </summary>
-    {#if summary}
+    {#if $liveSummary}
       <div class="summary-content">
         <h4>TL;DR</h4>
-        <p>{summary.tldr}</p>
-        {#if summary.key_decisions?.length}
+        <p>{$liveSummary.tldr}</p>
+        {#if $liveSummary.key_decisions?.length}
           <h4>Key Decisions</h4>
-          <ul>{#each summary.key_decisions as d}<li>{d}</li>{/each}</ul>
+          <ul>{#each $liveSummary.key_decisions as d}<li>{d}</li>{/each}</ul>
         {/if}
-        {#if summary.action_items?.length}
+        {#if $liveSummary.action_items?.length}
           <h4>Action Items</h4>
-          <ul>{#each summary.action_items as a}<li>{a.description} {#if a.owner}<span class="action-owner">@{a.owner}</span>{/if}</li>{/each}</ul>
+          <ul>{#each $liveSummary.action_items as a}<li>{a.description} {#if a.owner}<span class="action-owner">@{a.owner}</span>{/if}</li>{/each}</ul>
         {/if}
-        {#if summary.open_questions?.length}
+        {#if $liveSummary.open_questions?.length}
           <h4>Open Questions</h4>
-          <ul>{#each summary.open_questions as q}<li>{q}</li>{/each}</ul>
+          <ul>{#each $liveSummary.open_questions as q}<li>{q}</li>{/each}</ul>
         {/if}
       </div>
     {:else}
@@ -303,6 +297,6 @@
 <details class="card collapsible" open>
   <summary class="card-header">Activity Log</summary>
   <div class="log-panel">
-    {#each logs as line}<div>{line}</div>{/each}
+    {#each $activityLogs as line}<div>{line}</div>{/each}
   </div>
 </details>

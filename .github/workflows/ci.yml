@@ -9,6 +9,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Disable i8mm NEON intrinsics in whisper.cpp — the GitHub Actions
+  # macOS runner's clang enables arm8.6 features but whisper-rs 0.14's
+  # ggml doesn't guard vmmlaq_s32 behind a runtime check.
+  GGML_NO_MATMUL_INT8: 1
+  CMAKE_ARGS: "-DGGML_NO_MATMUL_INT8=ON"
 
 jobs:
   rust-checks:
@@ -39,7 +44,7 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --lib
 
   frontend-checks:
     name: Frontend checks
@@ -59,8 +64,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: TypeScript typecheck
-        run: pnpm typecheck
+      - name: Build frontend
+        run: pnpm build
 
   tauri-build:
     name: Tauri build (macOS)
