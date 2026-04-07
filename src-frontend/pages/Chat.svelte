@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "../lib/tauri";
+  import SessionPicker from "../components/SessionPicker.svelte";
 
   let question = $state("");
   let messages = $state<any[]>([]);
@@ -61,12 +62,7 @@
 
 <div class="page-header">
   <h2>Ask Gravai</h2>
-  <select class="select" style="min-width:200px" bind:value={sessionFilter} onchange={loadHistory}>
-    <option value={null}>All meetings</option>
-    {#each sessions as s}
-      <option value={s.id}>{s.title || s.id}</option>
-    {/each}
-  </select>
+  <SessionPicker {sessions} selected={sessionFilter} onselect={(id) => { sessionFilter = id; loadHistory(); }} />
 </div>
 
 <div class="card chat-container">

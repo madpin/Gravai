@@ -10,6 +10,11 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[
         "Embeddings and chat",
         include_str!("../sql/002_embeddings.sql"),
     ),
+    (
+        3,
+        "Sentiment columns",
+        include_str!("../sql/003_sentiment.sql"),
+    ),
 ];
 
 /// Run all pending migrations. Creates the schema_version table if needed.

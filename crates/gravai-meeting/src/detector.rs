@@ -1,24 +1,53 @@
-//! Meeting app detection via process monitoring.
+//! Meeting app detection via process monitoring + network port checks.
 //!
-//! Uses `ps` command to check running processes instead of ScreenCaptureKit,
-//! so we don't trigger the Screen Recording permission just for detection.
+//! Uses `ps` command to check running processes (no Screen Recording permission needed),
+//! then confirms an *active* meeting by verifying UDP network connections.
+//!
+//! Background: many meeting apps (Zoom, Teams) run as background processes for
+//! notifications even when not in a call.  They only open UDP connections to their
+//! media servers once a meeting actually starts, so counting UDP sockets is the
+//! most reliable cross-platform indicator of an active call.
 
 use serde::Serialize;
 use std::collections::HashSet;
 use tracing::{debug, info};
 
+/// Describes how to confirm a process is actually in an active meeting.
+#[derive(Clone, Copy)]
+enum ConfirmStrategy {
+    /// Process name alone is sufficient (e.g. CptHost only spawns during Zoom calls).
+    ProcessOnly,
+    /// Run `lsof -i 4UDP | grep <pattern>` and require count > 1.
+    UdpConnections(&'static str),
+}
+
+struct MeetingProcess {
+    /// Pattern matched against `ps` output.
+    process: &'static str,
+    /// Human-readable app name shown in the UI.
+    app_name: &'static str,
+    /// How to confirm the process represents an active meeting.
+    confirm: ConfirmStrategy,
+}
+
 /// Known meeting app process names and their display names.
-/// Only processes that indicate an *active call* — not just the app being open.
-/// FaceTime is excluded because the process always runs; it's detected via
-/// its call-specific helper processes instead.
-const MEETING_PROCESSES: &[(&str, &str)] = &[
-    ("zoom.us", "Zoom"),
-    ("CptHost", "Zoom"), // Zoom call host process
-    ("Microsoft Teams", "Microsoft Teams"),
-    ("Slack Helper (Renderer)", "Slack Huddle"),
-    ("Discord Helper (Renderer)", "Discord"),
-    ("Webex", "WebEx"),
-    ("rapportd", "FaceTime Call"), // FaceTime call daemon (only active during calls)
+const MEETING_PROCESSES: &[MeetingProcess] = &[
+    // zoom.us runs in the background for notifications; UDP > 1 = active meeting.
+    MeetingProcess { process: "zoom.us",                    app_name: "Zoom",            confirm: ConfirmStrategy::UdpConnections("zoom") },
+    // CptHost is Zoom's dedicated call-host process — only spawns during a call.
+    MeetingProcess { process: "CptHost",                    app_name: "Zoom",            confirm: ConfirmStrategy::ProcessOnly },
+    // Teams also idles in background; UDP confirms an active call.
+    MeetingProcess { process: "Microsoft Teams",            app_name: "Microsoft Teams", confirm: ConfirmStrategy::UdpConnections("Teams") },
+    // Slack & Discord helper renderers can be any tab, but audio call activity
+    // causes a burst of UDP traffic, so UDP > 1 is a reasonable gate.
+    MeetingProcess { process: "Slack Helper (Renderer)",    app_name: "Slack Huddle",    confirm: ConfirmStrategy::UdpConnections("Slack") },
+    MeetingProcess { process: "Discord Helper (Renderer)",  app_name: "Discord",         confirm: ConfirmStrategy::UdpConnections("Discord") },
+    // Webex keeps a process open; UDP gate avoids false positives.
+    MeetingProcess { process: "Webex",                      app_name: "WebEx",           confirm: ConfirmStrategy::UdpConnections("Webex") },
+    // FaceTime runs as a background app; UDP confirms an active call.
+    // callservicesd is the macOS call daemon — it opens UDP during any live call,
+    // so we match either process name in the lsof output.
+    MeetingProcess { process: "FaceTime",                   app_name: "FaceTime",        confirm: ConfirmStrategy::UdpConnections("FaceTime|callservicesd") },
 ];
 
 /// Known meeting app bundle IDs (used when SCK is already active during recording).
@@ -27,7 +56,7 @@ const MEETING_BUNDLE_IDS: &[(&str, &str)] = &[
     ("com.microsoft.teams2", "Microsoft Teams"),
     ("com.microsoft.teams", "Microsoft Teams"),
     ("com.tinyspeck.slackmacgap", "Slack"),
-    ("com.apple.FaceTime", "FaceTime"),
+    ("com.apple.facetime", "FaceTime"),
     ("com.discord.Discord", "Discord"),
     ("com.cisco.webexmeetingsapp", "WebEx"),
 ];
@@ -49,35 +78,108 @@ pub struct DetectedMeeting {
     pub source: String,
 }
 
-/// Check for running meeting apps using `ps` (no Screen Recording permission needed).
+/// Check for active meeting apps.
+///
+/// Two-stage detection:
+/// 1. Process check (`ps`) — fast, no permissions required.
+/// 2. Network confirmation (`lsof`) — verifies an active call for apps that
+///    idle in the background.
 pub fn detect_meeting_apps() -> Vec<DetectedMeeting> {
     let running = get_running_process_names();
-    let mut detected = Vec::new();
+    let mut detected: Vec<DetectedMeeting> = Vec::new();
+    let mut seen_apps: HashSet<String> = HashSet::new();
 
-    for (process_name, app_name) in MEETING_PROCESSES {
-        if running.iter().any(|p| p.contains(process_name)) {
-            // Find matching bundle ID if known
-            let bundle_id = MEETING_BUNDLE_IDS
-                .iter()
-                .find(|(_, name)| name == app_name)
-                .map(|(id, _)| id.to_string());
-
-            detected.push(DetectedMeeting {
-                app_name: app_name.to_string(),
-                bundle_id,
-                source: "process".into(),
-            });
+    for mp in MEETING_PROCESSES {
+        if !running.iter().any(|p| p.contains(mp.process)) {
+            continue;
         }
+
+        // Skip duplicate app names (e.g. both zoom.us and CptHost detected).
+        if seen_apps.contains(mp.app_name) {
+            continue;
+        }
+
+        let active = match mp.confirm {
+            ConfirmStrategy::ProcessOnly => true,
+            ConfirmStrategy::UdpConnections(grep_pattern) => {
+                is_in_active_meeting_via_udp(grep_pattern)
+            }
+        };
+
+        if !active {
+            debug!(
+                "{} process found but no active UDP connections — skipping",
+                mp.app_name
+            );
+            continue;
+        }
+
+        let bundle_id = MEETING_BUNDLE_IDS
+            .iter()
+            .find(|(_, name)| *name == mp.app_name)
+            .map(|(id, _)| id.to_string());
+
+        seen_apps.insert(mp.app_name.to_string());
+        detected.push(DetectedMeeting {
+            app_name: mp.app_name.to_string(),
+            bundle_id,
+            source: match mp.confirm {
+                ConfirmStrategy::ProcessOnly => "process".into(),
+                ConfirmStrategy::UdpConnections(_) => "process+udp".into(),
+            },
+        });
     }
 
     if !detected.is_empty() {
         debug!(
-            "Detected meeting apps: {:?}",
+            "Detected active meetings: {:?}",
             detected.iter().map(|d| &d.app_name).collect::<Vec<_>>()
         );
     }
 
     detected
+}
+
+/// Returns true if `grep_pattern` has more than one UDP socket open.
+///
+/// Logic (from community research):
+///   0 results  → app not running
+///   1 result   → app open but **not** in a meeting (idle listener)
+///   > 1 result → **active meeting** (media/SRTP UDP streams open)
+///
+/// Uses `lsof -i 4UDP` (IPv4 UDP only) to avoid false positives from
+/// IPv6 or TCP connections.
+fn is_in_active_meeting_via_udp(grep_pattern: &str) -> bool {
+    // lsof -i 4UDP lists all IPv4 UDP sockets; we grep for the app's process name.
+    let lsof = std::process::Command::new("lsof")
+        .args(["-i", "4UDP", "-n", "-P"])
+        .output();
+
+    match lsof {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // grep_pattern may be "A|B" — split on '|' and match any term.
+            let terms: Vec<String> = grep_pattern
+                .split('|')
+                .map(|t| t.trim().to_lowercase())
+                .collect();
+            let count = stdout
+                .lines()
+                .filter(|l| {
+                    let lower = l.to_lowercase();
+                    terms.iter().any(|t| lower.contains(t.as_str()))
+                })
+                .count();
+            debug!("UDP check for '{}': {count} socket(s)", grep_pattern);
+            count > 1
+        }
+        Err(e) => {
+            debug!("lsof unavailable ({e}), falling back to process-only detection");
+            // If lsof fails (e.g. permissions, missing tool), be optimistic and
+            // treat the process as an active meeting rather than silently missing it.
+            true
+        }
+    }
 }
 
 /// Get names of running processes using `ps` command (no SCK needed).
@@ -111,8 +213,10 @@ impl MeetingDetector {
         }
     }
 
-    /// Poll once and return newly detected meetings (not seen in previous poll).
-    pub fn poll(&mut self) -> Vec<DetectedMeeting> {
+    /// Poll once.
+    /// Returns `(new_meetings, ended_app_names)` — meetings newly detected
+    /// this tick, and app names that were active last tick but are gone now.
+    pub fn poll(&mut self) -> (Vec<DetectedMeeting>, Vec<String>) {
         let current = detect_meeting_apps();
         let current_names: HashSet<String> = current.iter().map(|d| d.app_name.clone()).collect();
 
@@ -121,8 +225,15 @@ impl MeetingDetector {
             .filter(|d| !self.last_detected.contains(&d.app_name))
             .collect();
 
+        let ended: Vec<String> = self
+            .last_detected
+            .iter()
+            .filter(|n| !current_names.contains(*n))
+            .cloned()
+            .collect();
+
         self.last_detected = current_names;
-        new_meetings
+        (new_meetings, ended)
     }
 
     pub fn is_auto_allowed(&self, app_name: &str) -> bool {
@@ -152,12 +263,16 @@ pub async fn run_detection_loop(
     );
 
     while active.load(std::sync::atomic::Ordering::Relaxed) {
-        let new_meetings = detector.poll();
+        let (new_meetings, ended) = detector.poll();
         for meeting in new_meetings {
             event_bus.publish(gravai_core::GravaiEvent::MeetingDetected {
                 app_name: meeting.app_name,
                 window_title: None,
             });
+        }
+        for app_name in ended {
+            info!("Meeting ended: {app_name}");
+            event_bus.publish(gravai_core::GravaiEvent::MeetingEnded { app_name });
         }
         tokio::time::sleep(detector.poll_interval()).await;
     }
@@ -172,7 +287,6 @@ mod tests {
     #[test]
     fn get_running_processes_returns_something() {
         let procs = get_running_process_names();
-        // Should at least find some processes on any system
         assert!(!procs.is_empty());
     }
 
@@ -181,5 +295,11 @@ mod tests {
         let config = gravai_config::MeetingDetectionConfig::default();
         let mut detector = MeetingDetector::new(&config);
         let _ = detector.poll();
+    }
+
+    #[test]
+    fn udp_check_does_not_panic() {
+        // Just verify lsof runs without panicking; result depends on system state.
+        let _ = is_in_active_meeting_via_udp("nonexistent_app_xyz");
     }
 }

@@ -25,6 +25,35 @@ pub fn memory_usage_bytes() -> u64 {
     0
 }
 
+/// Get instantaneous CPU usage of this process as a percentage (macOS only).
+/// Samples ps twice 250ms apart and returns the delta.
+#[cfg(target_os = "macos")]
+pub fn cpu_usage_pct() -> f64 {
+    fn sample() -> f64 {
+        match std::process::Command::new("ps")
+            .args(["-o", "%cpu=", "-p", &std::process::id().to_string()])
+            .output()
+        {
+            Ok(output) => String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<f64>()
+                .unwrap_or(0.0),
+            Err(_) => 0.0,
+        }
+    }
+    let a = sample();
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    let b = sample();
+    // ps %cpu is cumulative average; return the point-in-time reading from second sample
+    // For a single-process view the second sample is more current
+    b.max(a)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn cpu_usage_pct() -> f64 {
+    0.0
+}
+
 /// Get total system memory in bytes.
 #[cfg(target_os = "macos")]
 pub fn total_system_memory() -> u64 {
@@ -50,6 +79,7 @@ pub struct PerfSnapshot {
     pub rss_mb: f64,
     pub total_memory_gb: f64,
     pub memory_pct: f64,
+    pub cpu_pct: f64,
     pub uptime_seconds: f64,
     pub session_count: u32,
 }
@@ -76,6 +106,7 @@ pub fn snapshot(session_count: u32) -> PerfSnapshot {
         } else {
             0.0
         },
+        cpu_pct: cpu_usage_pct(),
         uptime_seconds: uptime,
         session_count,
     }

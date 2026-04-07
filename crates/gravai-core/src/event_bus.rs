@@ -23,6 +23,7 @@ pub enum GravaiEvent {
         session_id: String,
         utterance_id: i64,
         source: String,
+        speaker: Option<String>,
         text: String,
         timestamp: String,
     },
@@ -35,6 +36,9 @@ pub enum GravaiEvent {
         app_name: String,
         window_title: Option<String>,
     },
+
+    /// Meeting app ended (was previously detected, now gone)
+    MeetingEnded { app_name: String },
 
     /// Capture preset activated
     PresetActivated { preset_id: String },

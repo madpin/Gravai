@@ -17,6 +17,7 @@ pub struct Profile {
     pub transcription_language: Option<String>,
     /// Feature toggles
     pub diarization_enabled: Option<bool>,
+    pub sentiment_enabled: Option<bool>,
     pub echo_suppression_enabled: Option<bool>,
     /// LLM overrides
     pub llm_provider: Option<String>,
@@ -36,6 +37,7 @@ impl Default for Profile {
             transcription_model: None,
             transcription_language: None,
             diarization_enabled: None,
+            sentiment_enabled: None,
             echo_suppression_enabled: None,
             llm_provider: None,
             llm_model: None,
@@ -54,6 +56,7 @@ pub fn builtin_profiles() -> Vec<Profile> {
             preset_id: Some("meeting".into()),
             transcription_model: Some("medium".into()),
             diarization_enabled: Some(true),
+            sentiment_enabled: Some(true),
             ..Default::default()
         },
         Profile {

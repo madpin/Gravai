@@ -4,6 +4,7 @@
 
   let models = $state<any[]>([]);
   let silero = $state<any>(null);
+  let aiModels = $state<any[]>([]);
   let modelsDir = $state("");
   let downloading = $state<Record<string, { progress: number; status: string }>>({});
   let actionMsg = $state("");
@@ -32,6 +33,7 @@
       const info: any = await invoke("get_models_status");
       models = info.whisper_models || [];
       silero = info.silero_vad;
+      aiModels = info.ai_models || [];
       modelsDir = info.models_dir || "";
     } catch (_) {}
   }
@@ -184,6 +186,48 @@
   </div>
 {/if}
 
+<!-- AI Models: sentiment & diarization -->
+{#if aiModels.length > 0}
+  <div class="card">
+    <div class="card-header">AI Analysis Models</div>
+    <div class="model-list">
+      {#each aiModels as m}
+        <div class="model-row">
+          <div class="model-info">
+            <div class="model-name">{m.id}</div>
+            <div class="model-desc">
+              {m.description}
+              {#if m.note}<span class="ai-model-note"> — ⚠️ {m.note}</span>{/if}
+            </div>
+          </div>
+          <div class="model-status">
+            {#if downloading[m.id]}
+              <div class="model-progress">
+                <div class="model-progress-bar" style="width: {downloading[m.id].progress}%"></div>
+              </div>
+              <span class="model-progress-text">{downloading[m.id].progress}%</span>
+            {:else if m.downloaded}
+              <span class="model-size">{fmtBytes(m.actual_size)}</span>
+            {:else}
+              <span class="model-size muted">~{fmtBytes(m.approx_size)}</span>
+            {/if}
+          </div>
+          <div class="model-actions">
+            {#if downloading[m.id]}
+              <span style="font-size:11px;color:var(--text-tertiary)">Downloading...</span>
+            {:else if m.downloaded}
+              <span style="font-size:11px;color:var(--success)">✓ Ready</span>
+              <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
+            {:else}
+              <button class="btn btn-xs btn-accent" onclick={() => download(m.id)}>Download</button>
+            {/if}
+          </div>
+        </div>
+      {/each}
+    </div>
+  </div>
+{/if}
+
 <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Models stored in: {modelsDir}</p>
 
 <style>
@@ -211,4 +255,5 @@
     transition: width 0.3s;
   }
   .model-progress-text { font-size: 10px; color: var(--text-tertiary); margin-left: 4px; }
+  .ai-model-note { color: var(--warning, #f59e0b); }
 </style>

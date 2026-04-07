@@ -48,7 +48,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 #app { height: 100vh; }
-.app { display: flex; height: 100%; }
+.app { display: flex; flex-direction: column; height: 100%; }
+.app-body { display: flex; flex: 1; min-height: 0; }
 
 /* ===== Sidebar ===== */
 .sidebar {
@@ -56,7 +57,7 @@ body {
   border-right: 1px solid var(--border-subtle);
   display: flex; flex-direction: column;
   user-select: none; -webkit-user-select: none;
-  flex-shrink: 0;
+  flex-shrink: 0; overflow-y: auto;
 }
 .sidebar-header { padding: 20px 18px 14px; }
 .sidebar-header h1 {
@@ -97,18 +98,7 @@ body {
 .nav-section-toggle .nav-icon { font-size: 13px; }
 .nav-section-arrow { margin-left: auto; font-size: 10px; color: var(--text-tertiary); }
 .nav-sublist { list-style: none; padding: 2px 0 0; }
-.sidebar-footer {
-  padding: 12px 18px; border-top: 1px solid var(--border-subtle);
-  display: flex; align-items: center; gap: 8px;
-}
-.version { font-size: 11px; color: var(--text-tertiary); }
-.health-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  transition: background 0.3s;
-}
-.health-dot.green { background: var(--success); box-shadow: 0 0 6px var(--success); }
-.health-dot.yellow { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
-.health-dot.red { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+/* sidebar-footer removed — replaced by StatusBar at bottom of app */
 
 /* ===== Content ===== */
 .content {
@@ -186,22 +176,23 @@ body {
 }
 .header-toggle-btn:hover { color: var(--text-secondary); }
 
-/* ===== Source rows (grid for aligned columns) ===== */
+/* ===== Source rows (two-line per source, fits narrow split panel) ===== */
 .source-grid { padding: 0; }
 .source-row {
-  display: grid;
-  grid-template-columns: 140px 1fr 120px 130px;
-  align-items: center;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .source-row:last-child { border-bottom: none; }
-.source-toggle { font-size: 13px; display: flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
-.source-device { min-width: 0; }
-.source-meter { display: flex; align-items: center; }
-.source-volume { display: flex; align-items: center; gap: 6px; }
-.toggle-label { min-width: 130px; font-size: 13px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.source-row-top { display: flex; align-items: center; gap: 8px; }
+.source-row-bottom { display: flex; align-items: center; gap: 8px; }
+.source-toggle { font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; }
+.source-meter { display: flex; align-items: center; flex-shrink: 0; }
+.source-device { flex: 1; min-width: 0; }
+.source-volume { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.toggle-label { font-size: 13px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
 
 /* ===== VU Meter ===== */
 .vu-meter {
@@ -301,6 +292,10 @@ body {
   padding: 8px 0; min-height: 80px; max-height: 320px;
   overflow-y: auto; font-size: 13px;
 }
+/* In the split recording view the parent controls scroll — panel fills its container */
+.transcript-panel-body .transcript-panel {
+  max-height: none; height: 100%; overflow-y: visible;
+}
 .transcript-line {
   padding: 5px 16px; display: flex; gap: 10px;
   align-items: baseline; transition: background 0.1s;
@@ -316,6 +311,11 @@ body {
   font-weight: 600; font-size: 10px; font-family: -apple-system, sans-serif;
   padding: 1px 5px; border-radius: 3px;
   background: rgba(255,255,255,0.06);
+}
+.emotion-badge {
+  font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+  padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,0.04);
+  opacity: 0.85; cursor: help;
 }
 
 /* ===== Log ===== */

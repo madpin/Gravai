@@ -71,6 +71,7 @@ rubato = "0.16"
 webrtc-vad = "0.2"
 ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
 ndarray = "0.16"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 # Transcription
 whisper-rs = "0.14"

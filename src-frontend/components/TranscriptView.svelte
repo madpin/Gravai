@@ -1,7 +1,7 @@
 <script lang="ts">
   import { sourceIcon } from "../lib/tauri";
 
-  let { utterances = [], autoScroll = true }: { utterances: any[]; autoScroll?: boolean } = $props();
+  let { utterances = [], autoScroll = true, showEmotions = true }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean } = $props();
 
   const speakerColors = ["#7c6cff", "#34d399", "#fbbf24", "#f87171", "#60a5fa", "#a78bfa", "#fb923c", "#2dd4bf"];
   let speakerColorMap: Record<string, string> = {};
@@ -18,6 +18,27 @@
   function fmtTime(ts: string): string {
     try { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
     catch { return ""; }
+  }
+
+  const EMOTION_COLORS: Record<string, string> = {
+    joy: "var(--success, #34d399)",
+    love: "var(--success, #34d399)",
+    gratitude: "var(--success, #34d399)",
+    optimism: "var(--success, #34d399)",
+    excitement: "var(--success, #34d399)",
+    anger: "var(--danger, #f87171)",
+    disgust: "var(--danger, #f87171)",
+    disapproval: "var(--danger, #f87171)",
+    sadness: "var(--info, #60a5fa)",
+    grief: "var(--info, #60a5fa)",
+    disappointment: "var(--info, #60a5fa)",
+    fear: "#f59e0b",
+    nervousness: "#f59e0b",
+    neutral: "var(--text-tertiary)",
+  };
+
+  function emotionColor(label: string): string {
+    return EMOTION_COLORS[label] ?? "var(--text-tertiary)";
   }
 
   let el: HTMLElement;
@@ -43,6 +64,13 @@
           {/if}
         </span>
         <span class="transcript-text" class:low-confidence={u.confidence != null && u.confidence < 0.5}>{u.text}</span>
+        {#if showEmotions && u.sentiment_label}
+          <span
+            class="emotion-badge"
+            style="color: {emotionColor(u.sentiment_label)}"
+            title={u.sentiment_score != null ? `${u.sentiment_label} (${(u.sentiment_score * 100).toFixed(0)}%)` : u.sentiment_label}
+          >{u.sentiment_label}</span>
+        {/if}
       </div>
     {/each}
   {/if}

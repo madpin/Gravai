@@ -3,6 +3,8 @@
 //! Uses ONNX models (pyannote-based) for speaker segmentation.
 //! Stores speaker embeddings for cross-session identification.
 
+pub mod pyannote;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
@@ -152,5 +154,12 @@ impl Default for SpeakerRegistry {
 
 /// Create a diarization provider based on config.
 pub fn create_diarizer(config: &gravai_config::DiarizationConfig) -> Box<dyn DiarizationProvider> {
+    if config.model == "pyannote" {
+        if let Some(d) = pyannote::PyannoteOnnxDiarizer::try_load(config) {
+            info!("Using pyannote ONNX diarizer");
+            return Box::new(d);
+        }
+        tracing::warn!("Pyannote model not found, falling back to energy diarizer");
+    }
     Box::new(EnergyDiarizer::new(config))
 }

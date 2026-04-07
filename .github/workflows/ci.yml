@@ -42,7 +42,9 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace --lib
+        # gravai-audio links ScreenCaptureKit (Swift runtime) which isn't
+        # available in the CI sandbox; exclude it to avoid SIGABRT/dylib errors.
+        run: cargo test --workspace --lib --exclude gravai-audio
 
   frontend-checks:
     name: Frontend checks

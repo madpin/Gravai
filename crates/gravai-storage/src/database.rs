@@ -29,6 +29,12 @@ pub struct UtteranceRecord {
     pub confidence: Option<f64>,
     pub start_ms: Option<i64>,
     pub end_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sentiment_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sentiment_score: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emotions_json: Option<String>,
 }
 
 /// Main database handle.
@@ -160,7 +166,8 @@ impl Database {
         session_id: &str,
     ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms
+            "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
+                    sentiment_label, sentiment_score, emotions_json
              FROM utterances WHERE session_id = ?1 ORDER BY id ASC",
         )?;
         let rows = stmt.query_map(params![session_id], |row| {
@@ -174,6 +181,9 @@ impl Database {
                 confidence: row.get(6)?,
                 start_ms: row.get(7)?,
                 end_ms: row.get(8)?,
+                sentiment_label: row.get(9)?,
+                sentiment_score: row.get(10)?,
+                emotions_json: row.get(11)?,
             })
         })?;
         rows.collect()
@@ -199,6 +209,55 @@ impl Database {
                 confidence: row.get(6)?,
                 start_ms: row.get(7)?,
                 end_ms: row.get(8)?,
+                sentiment_label: None,
+                sentiment_score: None,
+                emotions_json: None,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Update sentiment fields on an existing utterance (by row id).
+    pub fn update_utterance_sentiment(
+        &self,
+        id: i64,
+        label: &str,
+        score: f64,
+        emotions_json: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE utterances SET sentiment_label = ?1, sentiment_score = ?2, emotions_json = ?3 WHERE id = ?4",
+            params![label, score, emotions_json, id],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch utterances with sentiment data for a session (only system-audio utterances with sentiment).
+    pub fn get_session_sentiment(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
+                    sentiment_label, sentiment_score, emotions_json
+             FROM utterances
+             WHERE session_id = ?1 AND source = 'system' AND sentiment_label IS NOT NULL
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(UtteranceRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                source: row.get(3)?,
+                speaker: row.get(4)?,
+                text: row.get(5)?,
+                confidence: row.get(6)?,
+                start_ms: row.get(7)?,
+                end_ms: row.get(8)?,
+                sentiment_label: row.get(9)?,
+                sentiment_score: row.get(10)?,
+                emotions_json: row.get(11)?,
             })
         })?;
         rows.collect()
@@ -245,6 +304,9 @@ impl Database {
                     confidence: row.get(8)?,
                     start_ms: row.get(9)?,
                     end_ms: row.get(10)?,
+                    sentiment_label: None,
+                    sentiment_score: None,
+                    emotions_json: None,
                 };
                 Ok((record, blob))
             })?

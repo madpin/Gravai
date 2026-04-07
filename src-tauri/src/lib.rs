@@ -4,8 +4,63 @@ mod commands;
 
 use gravai_config::load_config;
 use gravai_core::{AppState, GravaiEvent};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
+use tauri::Manager;
+
+/// Execute a list of automation actions by emitting events to the frontend.
+/// `currently_recording` is the live recording state at the time of the call.
+fn run_automation_actions(
+    handle: &tauri::AppHandle,
+    actions: &[gravai_config::automations::AutomationAction],
+    currently_recording: bool,
+) {
+    use gravai_config::automations::AutomationAction;
+    for action in actions {
+        match action {
+            AutomationAction::StartRecording => {
+                if !currently_recording {
+                    tracing::info!("Automation: starting recording");
+                    let _ = handle.emit("gravai:automation-start", ());
+                }
+            }
+            AutomationAction::StopRecording => {
+                if currently_recording {
+                    tracing::info!("Automation: stopping recording");
+                    let _ = handle.emit("gravai:stop-session", ());
+                }
+            }
+            AutomationAction::ShowNotification { message } => {
+                #[cfg(target_os = "macos")]
+                {
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = handle
+                        .notification()
+                        .builder()
+                        .title("Gravai Automation")
+                        .body(message)
+                        .show();
+                }
+            }
+            AutomationAction::ActivateProfile { profile_id } => {
+                // Profile activation is fire-and-forget via the frontend
+                let _ = handle.emit("gravai:automation-activate-profile", profile_id);
+            }
+            // Other actions (ActivatePreset, RunExport) are handled by the frontend
+            _ => {
+                let _ = handle.emit("gravai:automation-action", serde_json::to_value(action).ok());
+            }
+        }
+    }
+}
+
+/// Holds dynamic tray menu item references so the event bridge can update them.
+struct TrayItems {
+    stop:   tauri::menu::MenuItem<tauri::Wry>,
+    status: tauri::menu::MenuItem<tauri::Wry>,
+}
+type TrayItemsState = Arc<std::sync::Mutex<TrayItems>>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -41,40 +96,254 @@ pub fn run() {
     // Create shared app state
     let app_state = Arc::new(AppState::new(config));
 
-    // Clone for the event bridge
+    // Clone event bus for setup closure
     let event_bus = app_state.event_bus.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(app_state)
         .setup(move |app| {
-            // Bridge EventBus → Tauri frontend events
-            // Emit the inner data directly (not the tagged enum wrapper)
-            // so the frontend gets e.payload = { source, db } not { type: "VolumeLevel", data: { source, db } }
+            // ── System Tray ──────────────────────────────────────────────
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show_item     = MenuItemBuilder::with_id("show",  "Show Gravai").build(app)?;
+                let status_item   = MenuItemBuilder::with_id("status", "◉  Idle").enabled(false).build(app)?;
+                let stop_item     = MenuItemBuilder::with_id("stop",   "⏹  Stop Recording").enabled(false).build(app)?;
+                let recording_tab = MenuItemBuilder::with_id("go_rec", "⏺  Open Recording").build(app)?;
+                let models_tab    = MenuItemBuilder::with_id("go_models", "🧠  Models").build(app)?;
+                let quit_item     = MenuItemBuilder::with_id("quit",   "Quit Gravai").build(app)?;
+                let sep1 = PredefinedMenuItem::separator(app)?;
+                let sep2 = PredefinedMenuItem::separator(app)?;
+                let sep3 = PredefinedMenuItem::separator(app)?;
+
+                let menu = MenuBuilder::new(app)
+                    .item(&show_item)
+                    .item(&sep1)
+                    .item(&status_item)
+                    .item(&stop_item)
+                    .item(&sep2)
+                    .item(&recording_tab)
+                    .item(&models_tab)
+                    .item(&sep3)
+                    .item(&quit_item)
+                    .build()?;
+
+
+                let handle_for_tray_click = app.handle().clone();
+                let handle_for_menu = app.handle().clone();
+
+                TrayIconBuilder::with_id("gravai-tray")
+                    .icon(app.default_window_icon().ok_or("no tray icon")?.clone())
+                    .icon_as_template(true)
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .tooltip("Gravai")
+                    .on_tray_icon_event(move |_tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            if let Some(win) = handle_for_tray_click.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        }
+                    })
+                    .on_menu_event(move |app, event| {
+                        match event.id().as_ref() {
+                            "show" => {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                }
+                            }
+                            "stop" => {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.emit("gravai:stop-session", ());
+                                }
+                            }
+                            "go_rec" => {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                    let _ = win.emit("gravai:navigate", "recording");
+                                }
+                            }
+                            "go_models" => {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                    let _ = win.emit("gravai:navigate", "models");
+                                }
+                            }
+                            "quit" => {
+                                use tauri_plugin_dialog::DialogExt;
+                                let app_handle = handle_for_menu.clone();
+                                let state = app_handle.state::<Arc<AppState>>();
+                                let state_clone = state.inner().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let is_recording = {
+                                        let session = state_clone.session.read().await;
+                                        session.as_ref().map(|s| s.is_active()).unwrap_or(false)
+                                    };
+                                    if is_recording {
+                                        app_handle.dialog()
+                                            .message("A recording is in progress. Quitting will stop it. Are you sure?")
+                                            .title("Quit Gravai?")
+                                            .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+                                            .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancel)
+                                            .show(move |confirmed| {
+                                                if confirmed { app_handle.exit(0); }
+                                            });
+                                    } else {
+                                        app_handle.exit(0);
+                                    }
+                                });
+                            }
+                            _ => {}
+                        }
+                    })
+                    .build(app)?;
+
+                // Bundle menu items into managed state for dynamic updates
+                let tray_items: TrayItemsState = Arc::new(std::sync::Mutex::new(TrayItems { stop: stop_item, status: status_item }));
+                app.manage(tray_items);
+            }
+
+            // ── Close-to-tray ─────────────────────────────────────────────
+            if let Some(main_window) = app.get_webview_window("main") {
+                let win_clone = main_window.clone();
+                main_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = win_clone.hide();
+                    }
+                });
+            }
+
+            // ── Event Bridge → Frontend + Tray state ─────────────────────
             let handle = app.handle().clone();
             let mut rx = event_bus.subscribe();
+
+            // Shared state for silence monitoring
+            let is_recording = Arc::new(AtomicBool::new(false));
+            let last_audio_time = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+            let silence_alerted = Arc::new(AtomicBool::new(false));
+
+            let is_recording_silence = is_recording.clone();
+            let last_audio_silence = last_audio_time.clone();
+            let silence_alerted_clone = silence_alerted.clone();
+            let handle_for_silence = handle.clone();
+
+            // Silence monitor task — checks every 2s
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+                loop {
+                    interval.tick().await;
+                    if !is_recording_silence.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    let elapsed = last_audio_silence
+                        .lock()
+                        .unwrap()
+                        .elapsed()
+                        .as_secs();
+                    if elapsed >= 10 && !silence_alerted_clone.load(Ordering::Relaxed) {
+                        silence_alerted_clone.store(true, Ordering::Relaxed);
+                        // Emit to frontend
+                        let _ = handle_for_silence.emit("gravai:silence-alert", serde_json::json!({
+                            "message": "No audio detected on mic or system for 10+ seconds",
+                            "elapsed": elapsed
+                        }));
+                        // Also send macOS notification
+                        #[cfg(target_os = "macos")]
+                        {
+                            use tauri_plugin_notification::NotificationExt;
+                            let _ = handle_for_silence
+                                .notification()
+                                .builder()
+                                .title("Gravai — Silence Detected")
+                                .body("No audio detected for 10+ seconds. Check your microphone and system audio.")
+                                .show();
+                        }
+                    }
+                }
+            });
+
+            // Main event bridge loop
             tauri::async_runtime::spawn(async move {
                 loop {
                     match rx.recv().await {
                         Ok(event) => {
                             let (event_name, payload) = match &event {
-                                GravaiEvent::VolumeLevel { source, db } => (
-                                    "gravai:volume",
-                                    serde_json::json!({ "source": source, "db": db }),
-                                ),
-                                GravaiEvent::TranscriptUpdated { session_id, utterance_id, source, text, timestamp } => (
+                                GravaiEvent::VolumeLevel { source, db } => {
+                                    // Update last audio time if either channel is active
+                                    if *db > -50.0 {
+                                        *last_audio_time.lock().unwrap() = std::time::Instant::now();
+                                        silence_alerted.store(false, Ordering::Relaxed);
+                                    }
+                                    (
+                                        "gravai:volume",
+                                        serde_json::json!({ "source": source, "db": db }),
+                                    )
+                                }
+                                GravaiEvent::TranscriptUpdated { session_id, utterance_id, source, speaker, text, timestamp } => (
                                     "gravai:transcript",
-                                    serde_json::json!({ "session_id": session_id, "utterance_id": utterance_id, "source": source, "text": text, "timestamp": timestamp }),
+                                    serde_json::json!({ "session_id": session_id, "utterance_id": utterance_id, "source": source, "speaker": speaker, "text": text, "timestamp": timestamp }),
                                 ),
-                                GravaiEvent::SessionStateChanged { state, session_id } => (
-                                    "gravai:session",
-                                    serde_json::json!({ "state": state, "session_id": session_id }),
-                                ),
-                                GravaiEvent::MeetingDetected { app_name, window_title } => (
-                                    "gravai:meeting",
-                                    serde_json::json!({ "app_name": app_name, "window_title": window_title }),
-                                ),
+                                GravaiEvent::SessionStateChanged { state, session_id } => {
+                                    let recording = state == "recording";
+                                    is_recording.store(recording, Ordering::Relaxed);
+                                    if recording {
+                                        *last_audio_time.lock().unwrap() = std::time::Instant::now();
+                                        silence_alerted.store(false, Ordering::Relaxed);
+                                    }
+                                    // Update tray tooltip and dynamic menu items
+                                    if let Some(tray) = handle.tray_by_id("gravai-tray") {
+                                        let tooltip = if recording { "Gravai — Recording 🔴" } else { "Gravai" };
+                                        let _ = tray.set_tooltip(Some(tooltip));
+                                    }
+                                    // Update stop button and status label dynamically
+                                    if let Some(items) = handle.try_state::<TrayItemsState>() {
+                                        if let Ok(t) = items.lock() {
+                                            let _ = t.stop.set_enabled(recording);
+                                            let _ = t.status.set_text(if recording { "🔴  Recording" } else { "◉  Idle" });
+                                        }
+                                    }
+                                    (
+                                        "gravai:session",
+                                        serde_json::json!({ "state": state, "session_id": session_id }),
+                                    )
+                                }
+                                GravaiEvent::MeetingDetected { app_name, window_title } => {
+                                    // Fire any automations triggered by this meeting app
+                                    let store = gravai_config::automations::AutomationStore::load();
+                                    for automation in store.find_for_meeting_detected(app_name) {
+                                        run_automation_actions(&handle, &automation.actions, is_recording.load(Ordering::Relaxed));
+                                    }
+                                    (
+                                        "gravai:meeting",
+                                        serde_json::json!({ "app_name": app_name, "window_title": window_title }),
+                                    )
+                                }
+                                GravaiEvent::MeetingEnded { app_name } => {
+                                    // Fire any automations triggered by this meeting ending
+                                    let store = gravai_config::automations::AutomationStore::load();
+                                    for automation in store.find_for_meeting_ended(app_name) {
+                                        run_automation_actions(&handle, &automation.actions, is_recording.load(Ordering::Relaxed));
+                                    }
+                                    (
+                                        "gravai:meeting-ended",
+                                        serde_json::json!({ "app_name": app_name }),
+                                    )
+                                }
                                 GravaiEvent::Error { message } => (
                                     "gravai:error",
                                     serde_json::json!({ "message": message }),
@@ -90,6 +359,7 @@ pub fn run() {
                     }
                 }
             });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -116,6 +386,7 @@ pub fn run() {
             commands::summarize_session,
             commands::get_export_formats,
             commands::export_session_audio,
+            commands::get_session_sentiment,
             // Phase 3: Presets, profiles, shortcuts, automations
             commands::get_presets,
             commands::activate_preset,

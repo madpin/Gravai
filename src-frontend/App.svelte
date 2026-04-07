@@ -1,9 +1,10 @@
 <script lang="ts">
   import { currentPage, healthStatus } from "./lib/store";
-  import { invoke } from "./lib/tauri";
-  import { onMount } from "svelte";
+  import { invoke, listen } from "./lib/tauri";
+  import { onMount, onDestroy } from "svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import AlertBar from "./components/AlertBar.svelte";
+  import StatusBar from "./components/StatusBar.svelte";
 
   import Recording from "./pages/Recording.svelte";
   import Archive from "./pages/Archive.svelte";
@@ -32,10 +33,9 @@
     { id: "settings", label: "System", icon: "⚙️" },
   ];
 
-  let health = $state("ok");
   let showOnboarding = $state(false);
   let settingsOpen = $state(false);
-  healthStatus.subscribe((v) => (health = v));
+  let unlistenNavigate: (() => void) | null = null;
 
   onMount(async () => {
     if (!localStorage.getItem("gravai_onboarded")) {
@@ -45,7 +45,12 @@
       const report: any = await invoke("get_health_report");
       healthStatus.set(report.overall);
     } catch (_) {}
+    unlistenNavigate = await listen("gravai:navigate", (e: any) => {
+      if (e.payload) currentPage.set(e.payload);
+    });
   });
+
+  onDestroy(() => { unlistenNavigate?.(); });
 
   function setPage(id: string) {
     currentPage.set(id);
@@ -64,6 +69,7 @@
 {/if}
 
 <div class="app">
+  <div class="app-body">
   <nav class="sidebar">
     <div class="sidebar-header">
       <h1>Gravai</h1>
@@ -112,10 +118,6 @@
         {/if}
       </li>
     </ul>
-    <div class="sidebar-footer">
-      <div class="health-dot" class:green={health === "ok"} class:yellow={health === "warn"} class:red={health === "error"}></div>
-      <span class="version">v1.0.0</span>
-    </div>
   </nav>
 
   <main class="content">
@@ -142,4 +144,6 @@
       <Settings />
     {/if}
   </main>
+  </div>
+  <StatusBar />
 </div>

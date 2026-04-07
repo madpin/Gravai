@@ -14,6 +14,7 @@
   let vuMic = $state(0);
   let vuSys = $state(0);
   let summaryLoading = $state(false);
+  let sentimentData = $state<any>(null);
 
   // Device selection
   let micDevices = $state<any[]>([]);
@@ -29,6 +30,7 @@
   // Active preset/profile info
   let activePreset = $state<any>(null);
   let activeProfile = $state<any>(null);
+  let showEmotions = $derived(activeProfile?.sentiment_enabled ?? false);
 
   // Intervals and cleanup
   let timerInterval: number | null = null;
@@ -91,6 +93,10 @@
       vuMic = 0; vuSys = 0;
       dismissedMeetingApps.set(new Set());
       log(`Stopped: ${result.id} (${fmtDuration(result.duration_seconds)})`);
+      // Load sentiment summary after session ends (short delay for DB writes to complete)
+      setTimeout(async () => {
+        try { sentimentData = await invoke("get_session_sentiment", { sessionId: result.id }); } catch (_) {}
+      }, 3000);
     } catch (e) { log(`Error: ${e}`); }
   }
 
@@ -188,6 +194,16 @@
     });
     unlisteners.push(ut);
 
+    const us = await listen("gravai:silence-alert", (e: any) => {
+      const d = e.payload;
+      addAlert({
+        level: "warning",
+        message: d?.message || "No audio detected for 10+ seconds",
+        dismissable: true,
+      });
+    });
+    unlisteners.push(us);
+
     const ue = await listen("gravai:error", (e: any) => {
       const d = e.payload;
       const msg = d?.message || "Unknown error";
@@ -233,6 +249,12 @@
     } catch (_) {}
     checkMeetings();
     meetingPoll = window.setInterval(checkMeetings, 10000);
+    // If a session was started externally (e.g. by automation) while this page
+    // wasn't mounted, resume the timer and transcript poll.
+    if (get(isRecording) && !timerInterval) {
+      startTimer();
+      startTranscriptPoll();
+    }
     log("Gravai ready");
   });
 
@@ -241,161 +263,293 @@
     if (meetingPoll) clearInterval(meetingPoll);
     for (const u of unlisteners) u();
   });
+
+  // Split-screen resize
+  let leftWidth = $state(380);
+
+  function startResize(e: PointerEvent) {
+    const startX = e.clientX;
+    const startWidth = leftWidth;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
+    function onMove(ev: PointerEvent) {
+      leftWidth = Math.max(280, Math.min(620, startWidth + (ev.clientX - startX)));
+    }
+    function onUp(ev: PointerEvent) {
+      (e.target as HTMLElement).releasePointerCapture(ev.pointerId);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 </script>
 
 
-<div class="page-header">
-  <h2>Recording</h2>
-  <span class="timer">{timer}</span>
-</div>
+<div class="recording-layout">
+  <!-- Left panel: controls -->
+  <div class="recording-left" style="flex: 0 0 {leftWidth}px">
+    <div class="page-header">
+      <h2>Recording</h2>
+      <span class="timer">{timer}</span>
+    </div>
 
-<!-- Active preset/profile indicators -->
-{#if activePreset || activeProfile}
-  <div class="active-config-bar">
-    {#if activePreset}
-      <div class="config-pill-wrap">
-        <div class="config-pill">
-          <span class="config-pill-icon">🎛️</span>
-          <span class="config-pill-label">Preset:</span>
-          <span class="config-pill-value">{activePreset.name}</span>
-        </div>
-        <div class="config-tooltip">
-          <div class="config-tooltip-row">{activePreset.mic_enabled ? '🎤 Mic on' : '🎤 Mic off'} &middot; {activePreset.sys_enabled ? '💻 System on' : '💻 System off'}</div>
-          <div class="config-tooltip-row">{activePreset.sample_rate/1000}kHz &middot; {activePreset.bit_depth}-bit &middot; {activePreset.channels === 1 ? 'Mono' : 'Stereo'}</div>
-          <div class="config-tooltip-row">Format: {activePreset.export_format}</div>
-          {#if activePreset.output_folder}<div class="config-tooltip-row">📁 {activePreset.output_folder}</div>{/if}
-          {#if activeProfile}
-            <div class="config-tooltip-divider"></div>
-            <div class="config-tooltip-row">🗣️ Model: Whisper {activeProfile.transcription_model || 'medium'}</div>
-          {/if}
-        </div>
+    <!-- Active preset/profile indicators -->
+    {#if activePreset || activeProfile}
+      <div class="active-config-bar">
+        {#if activePreset}
+          <div class="config-pill-wrap">
+            <div class="config-pill">
+              <span class="config-pill-icon">🎛️</span>
+              <span class="config-pill-label">Preset:</span>
+              <span class="config-pill-value">{activePreset.name}</span>
+            </div>
+            <div class="config-tooltip">
+              <div class="config-tooltip-row">{activePreset.mic_enabled ? '🎤 Mic on' : '🎤 Mic off'} &middot; {activePreset.sys_enabled ? '💻 System on' : '💻 System off'}</div>
+              <div class="config-tooltip-row">{activePreset.sample_rate/1000}kHz &middot; {activePreset.bit_depth}-bit &middot; {activePreset.channels === 1 ? 'Mono' : 'Stereo'}</div>
+              <div class="config-tooltip-row">Format: {activePreset.export_format}</div>
+              {#if activePreset.output_folder}<div class="config-tooltip-row">📁 {activePreset.output_folder}</div>{/if}
+              {#if activeProfile}
+                <div class="config-tooltip-divider"></div>
+                <div class="config-tooltip-row">🗣️ Model: Whisper {activeProfile.transcription_model || 'medium'}</div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+        {#if activeProfile}
+          <div class="config-pill-wrap">
+            <div class="config-pill">
+              <span class="config-pill-icon">👤</span>
+              <span class="config-pill-label">Profile:</span>
+              <span class="config-pill-value">{activeProfile.name}</span>
+            </div>
+            <div class="config-tooltip">
+              <div class="config-tooltip-row">🗣️ Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
+              <div class="config-tooltip-row">🤖 {activeProfile.llm_provider || 'ollama'} ({activeProfile.llm_model || 'gemma3:4b'})</div>
+              <div class="config-tooltip-row">👥 Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
+              {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row">📝 Auto-export transcript</div>{/if}
+              {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row">💾 Real-time save</div>{/if}
+            </div>
+          </div>
+        {/if}
       </div>
     {/if}
-    {#if activeProfile}
-      <div class="config-pill-wrap">
-        <div class="config-pill">
-          <span class="config-pill-icon">👤</span>
-          <span class="config-pill-label">Profile:</span>
-          <span class="config-pill-value">{activeProfile.name}</span>
-        </div>
-        <div class="config-tooltip">
-          <div class="config-tooltip-row">🗣️ Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
-          <div class="config-tooltip-row">🤖 {activeProfile.llm_provider || 'ollama'} ({activeProfile.llm_model || 'gemma3:4b'})</div>
-          <div class="config-tooltip-row">👥 Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
-          {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row">📝 Auto-export transcript</div>{/if}
-          {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row">💾 Real-time save</div>{/if}
-        </div>
+
+    <!-- Transport -->
+    <div class="transport">
+      <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record">{starting ? "⏳" : "⏺"}</button>
+      <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}>{$isPaused ? "▶" : "⏸"}</button>
+      <button class="transport-btn stop" disabled={!$isRecording && !starting} onclick={stop} title="Stop">⏹</button>
+      <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording && !starting} class:starting={starting}>
+        {starting ? "Starting..." : $isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
+      </span>
+    </div>
+
+    <!-- Export status indicator -->
+    {#if exportAutoTranscript || exportAutoAudio || exportRealtimeSave}
+      <div class="export-indicator">
+        {#if exportRealtimeSave}<span class="export-tag save">💾 Auto-save</span>{/if}
+        {#if exportAutoTranscript}<span class="export-tag transcript">📝 Auto-export transcript</span>{/if}
+        {#if exportAutoAudio}<span class="export-tag audio">🔊 Auto-export audio</span>{/if}
       </div>
     {/if}
-  </div>
-{/if}
 
-<!-- Transport -->
-<div class="transport">
-  <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record">{starting ? "⏳" : "⏺"}</button>
-  <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}>{$isPaused ? "▶" : "⏸"}</button>
-  <button class="transport-btn stop" disabled={!$isRecording} onclick={stop} title="Stop">⏹</button>
-  <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording && !starting} class:starting={starting}>
-    {starting ? "Starting..." : $isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
-  </span>
-</div>
+    <!-- Audio Sources -->
+    <details class="card collapsible" open>
+      <summary class="card-header">Audio Sources</summary>
+      <div class="source-grid">
+        <!-- Mic row -->
+        <div class="source-row">
+          <div class="source-row-top">
+            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={micEnabled} /> 🎤 Microphone</label>
+            <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div></div>
+          </div>
+          <div class="source-row-bottom">
+            <div class="source-device">
+              <select class="select select-sm" bind:value={selectedMicIndex}>
+                <option value={-1}>Default mic</option>
+                {#each micDevices as d}
+                  <option value={d.index}>{d.name}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="source-volume">
+              <input type="range" class="slider" min="0" max="200" bind:value={micVolume} />
+              <span class="slider-value">{micVolume}%</span>
+            </div>
+          </div>
+        </div>
+        <!-- System audio row -->
+        <div class="source-row">
+          <div class="source-row-top">
+            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={sysEnabled} /> 💻 System Audio</label>
+            <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div></div>
+          </div>
+          <div class="source-row-bottom">
+            <div class="source-device">
+              <AppPicker
+                apps={runningApps}
+                selected={selectedAppBundleId}
+                onselect={(v) => selectedAppBundleId = v}
+              />
+            </div>
+            <div class="source-volume">
+              <input type="range" class="slider" min="0" max="200" bind:value={sysVolume} />
+              <span class="slider-value">{sysVolume}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </details>
 
-<!-- Export status indicator -->
-{#if exportAutoTranscript || exportAutoAudio || exportRealtimeSave}
-  <div class="export-indicator">
-    {#if exportRealtimeSave}<span class="export-tag save">💾 Auto-save</span>{/if}
-    {#if exportAutoTranscript}<span class="export-tag transcript">📝 Auto-export transcript</span>{/if}
-    {#if exportAutoAudio}<span class="export-tag audio">🔊 Auto-export audio</span>{/if}
-  </div>
-{/if}
+    <!-- Summary (visible when we have transcript OR after stop) -->
+    {#if $liveUtterances.length > 0 || $lastSessionIdStore}
+      <details class="card collapsible" open>
+        <summary class="card-header">
+          Summary
+          <button class="btn btn-xs btn-accent" onclick={(e) => { e.stopPropagation(); generateSummary(); }} disabled={summaryLoading}>
+            {summaryLoading ? "⏳ Generating..." : "Generate Summary"}
+          </button>
+        </summary>
+        {#if $liveSummary}
+          <div class="summary-content">
+            <h4>TL;DR</h4>
+            <p>{$liveSummary.tldr}</p>
+            {#if $liveSummary.key_decisions?.length}
+              <h4>Key Decisions</h4>
+              <ul>{#each $liveSummary.key_decisions as d}<li>{d}</li>{/each}</ul>
+            {/if}
+            {#if $liveSummary.action_items?.length}
+              <h4>Action Items</h4>
+              <ul>{#each $liveSummary.action_items as a}<li>{a.description} {#if a.owner}<span class="action-owner">@{a.owner}</span>{/if}</li>{/each}</ul>
+            {/if}
+            {#if $liveSummary.open_questions?.length}
+              <h4>Open Questions</h4>
+              <ul>{#each $liveSummary.open_questions as q}<li>{q}</li>{/each}</ul>
+            {/if}
+          </div>
+        {:else}
+          <div class="empty-state">Click "Generate Summary" to create a meeting brief.</div>
+        {/if}
+      </details>
+    {/if}
 
-<!-- Audio Sources -->
-<details class="card collapsible" open>
-  <summary class="card-header">Audio Sources</summary>
-  <div class="source-grid">
-    <!-- Mic row -->
-    <div class="source-row">
-      <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={micEnabled} /> 🎤 Microphone</label>
-      <div class="source-device">
-        <select class="select select-sm" bind:value={selectedMicIndex}>
-          <option value={-1}>Default mic</option>
-          {#each micDevices as d}
-            <option value={d.index}>{d.name}</option>
+    <!-- Sentiment Summary (shown after session stops, system audio only) -->
+    {#if sentimentData?.speakers?.length > 0}
+      <details class="card collapsible" open>
+        <summary class="card-header">Sentiment — Participants</summary>
+        <div class="sentiment-summary">
+          {#each sentimentData.speakers as sp}
+            <div class="sentiment-speaker">
+              <span class="sentiment-speaker-name">{sp.speaker}</span>
+              <span class="sentiment-dominant">{sp.dominant_emotion}</span>
+              <span class="sentiment-count">{sp.utterance_count} utterances</span>
+            </div>
           {/each}
-        </select>
-      </div>
-      <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div></div>
-      <div class="source-volume">
-        <input type="range" class="slider" min="0" max="200" bind:value={micVolume} />
-        <span class="slider-value">{micVolume}%</span>
-      </div>
-    </div>
-    <!-- System audio row -->
-    <div class="source-row">
-      <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={sysEnabled} /> 💻 System Audio</label>
-      <div class="source-device">
-        <AppPicker
-          apps={runningApps}
-          selected={selectedAppBundleId}
-          onselect={(v) => selectedAppBundleId = v}
-        />
-      </div>
-      <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div></div>
-      <div class="source-volume">
-        <input type="range" class="slider" min="0" max="200" bind:value={sysVolume} />
-        <span class="slider-value">{sysVolume}%</span>
-      </div>
-    </div>
-  </div>
-</details>
-
-<!-- Live Transcript -->
-<details class="card collapsible" open>
-  <summary class="card-header">
-    Live Transcript
-    <button type="button" class="header-toggle-btn" onclick={(e) => { e.stopPropagation(); autoScrollEnabled.set(!$autoScrollEnabled); }}>
-      {$autoScrollEnabled ? "☑" : "☐"} Auto-scroll
-    </button>
-  </summary>
-  <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} />
-</details>
-
-<!-- Summary (visible when we have transcript OR after stop) -->
-{#if $liveUtterances.length > 0 || $lastSessionIdStore}
-  <details class="card collapsible" open>
-    <summary class="card-header">
-      Summary
-      <button class="btn btn-xs btn-accent" onclick={(e) => { e.stopPropagation(); generateSummary(); }} disabled={summaryLoading}>
-        {summaryLoading ? "⏳ Generating..." : "Generate Summary"}
-      </button>
-    </summary>
-    {#if $liveSummary}
-      <div class="summary-content">
-        <h4>TL;DR</h4>
-        <p>{$liveSummary.tldr}</p>
-        {#if $liveSummary.key_decisions?.length}
-          <h4>Key Decisions</h4>
-          <ul>{#each $liveSummary.key_decisions as d}<li>{d}</li>{/each}</ul>
-        {/if}
-        {#if $liveSummary.action_items?.length}
-          <h4>Action Items</h4>
-          <ul>{#each $liveSummary.action_items as a}<li>{a.description} {#if a.owner}<span class="action-owner">@{a.owner}</span>{/if}</li>{/each}</ul>
-        {/if}
-        {#if $liveSummary.open_questions?.length}
-          <h4>Open Questions</h4>
-          <ul>{#each $liveSummary.open_questions as q}<li>{q}</li>{/each}</ul>
-        {/if}
-      </div>
-    {:else}
-      <div class="empty-state">Click "Generate Summary" to create a meeting brief.</div>
+        </div>
+      </details>
     {/if}
-  </details>
-{/if}
 
-<!-- Activity Log -->
-<details class="card collapsible" open>
-  <summary class="card-header">Activity Log</summary>
-  <div class="log-panel">
-    {#each $activityLogs as line}<div>{line}</div>{/each}
+    <!-- Activity Log -->
+    <details class="card collapsible" open>
+      <summary class="card-header">Activity Log</summary>
+      <div class="log-panel">
+        {#each $activityLogs as line}<div>{line}</div>{/each}
+      </div>
+    </details>
   </div>
-</details>
+
+  <!-- Drag resizer -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="recording-resizer" onpointerdown={startResize}></div>
+
+  <!-- Right panel: live transcript -->
+  <div class="recording-right">
+    <div class="transcript-panel-header">
+      <span class="transcript-panel-title">Live Transcript</span>
+      <button type="button" class="header-toggle-btn" onclick={() => autoScrollEnabled.set(!$autoScrollEnabled)}>
+        {$autoScrollEnabled ? "☑" : "☐"} Auto-scroll
+      </button>
+    </div>
+    <div class="transcript-panel-body">
+      <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} {showEmotions} />
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Override content area — remove all padding and scroll so panels fill the full area */
+  :global(.content:has(.recording-layout)) {
+    overflow: hidden;
+    padding: 0;
+    gap: 0;
+  }
+
+  .recording-layout {
+    display: flex;
+    flex: 1;
+    gap: 0;
+    min-height: 0;
+    height: 100%;
+  }
+  .recording-left {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    padding: 16px 8px 16px 20px;
+    min-width: 280px;
+    flex-shrink: 0;
+  }
+  .recording-resizer {
+    width: 6px;
+    cursor: col-resize;
+    background: transparent;
+    flex-shrink: 0;
+    border-radius: 3px;
+    transition: background 0.15s;
+    margin: 0 2px;
+  }
+  .recording-resizer:hover {
+    background: var(--border);
+  }
+  .recording-right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  .transcript-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 14px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .transcript-panel-title {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 11px;
+  }
+  .transcript-panel-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .sentiment-summary { padding: 8px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .sentiment-speaker {
+    display: flex; align-items: center; gap: 8px; font-size: 12px;
+  }
+  .sentiment-speaker-name { font-weight: 600; color: var(--text-primary); min-width: 70px; }
+  .sentiment-dominant {
+    background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+    color: var(--accent);
+  }
+  .sentiment-count { font-size: 10px; color: var(--text-tertiary); margin-left: auto; }
+</style>

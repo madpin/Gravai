@@ -2,6 +2,7 @@
 
 use gravai_core::AppState;
 use gravai_intelligence::SummarizationProvider;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::State;
 use tracing::info;
@@ -93,4 +94,50 @@ pub async fn export_session_audio(
         gravai_audio::encoder::merge_and_export(&session_dir, &output, fmt, 192)?;
         Ok(output.display().to_string())
     }
+}
+
+/// Retrieve per-speaker sentiment summary for a session.
+/// Returns a list of speakers with their dominant emotion and top emotion counts.
+#[tauri::command]
+pub async fn get_session_sentiment(session_id: String) -> Result<serde_json::Value, String> {
+    let db_path = gravai_config::data_dir().join("gravai.db");
+    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let utterances = db.get_session_sentiment(&session_id).map_err(|e| e.to_string())?;
+
+    // Group by speaker, accumulate emotion counts
+    let mut speakers: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for u in &utterances {
+        let speaker = u.speaker.clone().unwrap_or_else(|| "Remote".into());
+        let label = u.sentiment_label.clone().unwrap_or_else(|| "neutral".into());
+        let score = u.sentiment_score.unwrap_or(0.0);
+        speakers
+            .entry(speaker)
+            .or_default()
+            .push(serde_json::json!({ "label": label, "score": score }));
+    }
+
+    let summary: Vec<serde_json::Value> = speakers
+        .into_iter()
+        .map(|(speaker, emotions)| {
+            // Count each label
+            let mut counts: HashMap<String, u32> = HashMap::new();
+            for e in &emotions {
+                let label = e["label"].as_str().unwrap_or("neutral").to_string();
+                *counts.entry(label).or_default() += 1;
+            }
+            let dominant = counts
+                .iter()
+                .max_by_key(|(_, &v)| v)
+                .map(|(k, _)| k.clone())
+                .unwrap_or_else(|| "neutral".into());
+            serde_json::json!({
+                "speaker": speaker,
+                "dominant_emotion": dominant,
+                "utterance_count": emotions.len(),
+                "emotion_counts": counts,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "speakers": summary }))
 }

@@ -263,6 +263,8 @@ impl Default for LlmConfig {
 pub struct DiarizationConfig {
     pub enabled: bool,
     pub max_speakers: u8,
+    /// Diarization engine: "energy" (default, no model needed) or "pyannote" (ONNX, needs model files).
+    pub model: String,
 }
 
 impl Default for DiarizationConfig {
@@ -270,6 +272,7 @@ impl Default for DiarizationConfig {
         Self {
             enabled: false,
             max_speakers: 10,
+            model: "energy".into(),
         }
     }
 }

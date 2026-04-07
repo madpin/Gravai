@@ -7,7 +7,12 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutomationTrigger {
+    /// Any meeting app detected (generic).
     MeetingDetected,
+    /// Specific meeting app detected (e.g. "Zoom", "Microsoft Teams").
+    MeetingAppDetected { app_name: String },
+    /// Specific meeting app ended.
+    MeetingAppEnded { app_name: String },
     SessionStarted,
     SessionEnded,
     CalendarEventStarting,
@@ -69,6 +74,35 @@ pub fn builtin_automations() -> Vec<Automation> {
             run_count: 0,
         },
         Automation {
+            id: "zoom-auto-start".into(),
+            name: "Start recording when Zoom meeting starts".into(),
+            enabled: false,
+            trigger: AutomationTrigger::MeetingAppDetected {
+                app_name: "Zoom".into(),
+            },
+            conditions: vec![AutomationCondition::NoActiveSession],
+            actions: vec![
+                AutomationAction::ActivateProfile {
+                    profile_id: "meeting".into(),
+                },
+                AutomationAction::StartRecording,
+            ],
+            last_run: None,
+            run_count: 0,
+        },
+        Automation {
+            id: "zoom-auto-stop".into(),
+            name: "Stop recording when Zoom meeting ends".into(),
+            enabled: false,
+            trigger: AutomationTrigger::MeetingAppEnded {
+                app_name: "Zoom".into(),
+            },
+            conditions: vec![AutomationCondition::ActiveSession],
+            actions: vec![AutomationAction::StopRecording],
+            last_run: None,
+            run_count: 0,
+        },
+        Automation {
             id: "auto-export-on-stop".into(),
             name: "Export transcript on session end".into(),
             enabled: false,
@@ -92,16 +126,23 @@ pub struct AutomationStore {
 impl AutomationStore {
     pub fn load() -> Self {
         let path = super::data_dir().join("automations.json");
-        if path.exists() {
+        let mut store = if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(store) = serde_json::from_str(&content) {
-                    return store;
+                if let Ok(s) = serde_json::from_str::<Self>(&content) {
+                    s
+                } else {
+                    Self::default()
                 }
+            } else {
+                Self::default()
             }
-        }
-        let mut store = Self::default();
+        } else {
+            Self::default()
+        };
+        // Merge any builtin automations that don't yet exist in the store
+        // (handles the case where new builtins are added after first run).
         for a in builtin_automations() {
-            store.automations.insert(a.id.clone(), a);
+            store.automations.entry(a.id.clone()).or_insert(a);
         }
         store
     }
@@ -117,6 +158,42 @@ impl AutomationStore {
         self.automations
             .values()
             .filter(|a| a.enabled && a.trigger == *trigger)
+            .collect()
+    }
+
+    /// Find automations that should fire when a meeting app is detected.
+    /// Matches both the generic `MeetingDetected` trigger and
+    /// `MeetingAppDetected { app_name }` for the specific app.
+    pub fn find_for_meeting_detected(&self, app_name: &str) -> Vec<&Automation> {
+        self.automations
+            .values()
+            .filter(|a| {
+                a.enabled
+                    && matches!(
+                        &a.trigger,
+                        AutomationTrigger::MeetingDetected
+                            | AutomationTrigger::MeetingAppDetected { .. }
+                    )
+                    && match &a.trigger {
+                        AutomationTrigger::MeetingDetected => true,
+                        AutomationTrigger::MeetingAppDetected { app_name: n } => n == app_name,
+                        _ => false,
+                    }
+            })
+            .collect()
+    }
+
+    /// Find automations that should fire when a meeting app ends.
+    pub fn find_for_meeting_ended(&self, app_name: &str) -> Vec<&Automation> {
+        self.automations
+            .values()
+            .filter(|a| {
+                a.enabled
+                    && match &a.trigger {
+                        AutomationTrigger::MeetingAppEnded { app_name: n } => n == app_name,
+                        _ => false,
+                    }
+            })
             .collect()
     }
 

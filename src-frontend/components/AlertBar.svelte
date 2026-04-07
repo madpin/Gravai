@@ -29,6 +29,8 @@
   .alert-bar {
     display: flex; flex-direction: column; gap: 4px;
     animation: slideDown 0.2s ease;
+    padding: 10px 16px 0;
+    flex-shrink: 0;
   }
   @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
   .alert-item {

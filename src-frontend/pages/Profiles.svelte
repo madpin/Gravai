@@ -17,7 +17,7 @@
     vad_engine: "webrtc", vad_pause: 0.5, vad_min: 0.3, vad_max: 30,
     // Features
     echo_enabled: true, echo_threshold: 0.55,
-    meeting_enabled: true, diarization_enabled: false,
+    meeting_enabled: true, diarization_enabled: false, sentiment_enabled: false,
     // LLM
     llm_provider: "ollama", llm_model: "gemma3:4b", llm_url: "http://localhost:11434/v1",
     // Export
@@ -69,6 +69,7 @@
       e.echo_threshold = p.echo_threshold ?? 0.55;
       e.meeting_enabled = p.meeting_enabled ?? true;
       e.diarization_enabled = p.diarization_enabled ?? false;
+      e.sentiment_enabled = p.sentiment_enabled ?? false;
       e.llm_provider = p.llm_provider || "ollama";
       e.llm_model = p.llm_model || "gemma3:4b";
       e.llm_url = p.llm_url || "http://localhost:11434/v1";
@@ -84,7 +85,7 @@
         trans_engine: "whisper", trans_model: "medium", trans_lang: "en",
         vad_engine: "webrtc", vad_pause: 0.5, vad_min: 0.3, vad_max: 30,
         echo_enabled: true, echo_threshold: 0.55,
-        meeting_enabled: true, diarization_enabled: false,
+        meeting_enabled: true, diarization_enabled: false, sentiment_enabled: false,
         llm_provider: "ollama", llm_model: "gemma3:4b", llm_url: "http://localhost:11434/v1",
         auto_export_transcript: false, auto_export_audio: false,
         transcript_folder: "", audio_folder: "", transcript_format: "markdown", realtime_save: true,
@@ -102,7 +103,7 @@
       transcription_language: e.trans_lang,
       vad_engine: e.vad_engine, vad_pause: e.vad_pause, vad_min: e.vad_min, vad_max: e.vad_max,
       echo_suppression_enabled: e.echo_enabled, echo_threshold: e.echo_threshold,
-      meeting_enabled: e.meeting_enabled, diarization_enabled: e.diarization_enabled,
+      meeting_enabled: e.meeting_enabled, diarization_enabled: e.diarization_enabled, sentiment_enabled: e.sentiment_enabled,
       llm_provider: e.llm_provider, llm_model: e.llm_model, llm_url: e.llm_url,
       auto_export_transcript: e.auto_export_transcript, auto_export_audio: e.auto_export_audio,
       transcript_folder: e.transcript_folder || null, audio_folder: e.audio_folder || null,
@@ -138,7 +139,7 @@
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Engine</span></div>
         <select class="select" bind:value={e.trans_engine}><option value="whisper">Whisper</option><option value="http">External HTTP</option></select></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Model</span><span class="setting-desc">Larger = more accurate, slower. <button class="btn-link" onclick={() => { import("../lib/store").then(m => m.currentPage.set("models")); }}>Manage Models →</button></span></div>
-        <select class="select" bind:value={e.trans_model}><option value="tiny">Tiny</option><option value="base">Base</option><option value="small">Small</option><option value="medium">Medium</option><option value="large-v3">Large v3</option></select></div>
+        <select class="select" bind:value={e.trans_model}><option value="tiny">Tiny</option><option value="base">Base</option><option value="small">Small</option><option value="medium">Medium</option><option value="large-v3-turbo">Large v3 Turbo ⚡</option><option value="large-v3">Large v3</option></select></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Language</span></div>
         <select class="select" bind:value={e.trans_lang}><option value="en">English</option><option value="pt">Portuguese</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="pl">Polish</option><option value="ja">Japanese</option><option value="auto">Auto</option></select></div>
     </div>
@@ -158,7 +159,8 @@
     <div class="settings-grid">
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Echo Suppression</span></div><label class="switch"><input type="checkbox" bind:checked={e.echo_enabled} /><span class="switch-slider"></span></label></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Meeting Detection</span></div><label class="switch"><input type="checkbox" bind:checked={e.meeting_enabled} /><span class="switch-slider"></span></label></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Diarization</span></div><label class="switch"><input type="checkbox" bind:checked={e.diarization_enabled} /><span class="switch-slider"></span></label></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Diarization</span><span class="setting-desc">Speaker labels (You / Remote)</span></div><label class="switch"><input type="checkbox" bind:checked={e.diarization_enabled} /><span class="switch-slider"></span></label></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Emotion Detection</span><span class="setting-desc">Show emotions on system audio (requires go-emotions model)</span></div><label class="switch"><input type="checkbox" bind:checked={e.sentiment_enabled} /><span class="switch-slider"></span></label></div>
     </div>
 
     <!-- LLM -->
@@ -203,6 +205,7 @@
           {#if p.transcription_model}<span class="card-tag">Whisper: {p.transcription_model}</span>{/if}
           {#if p.transcription_language}<span class="card-tag">Lang: {p.transcription_language}</span>{/if}
           {#if p.diarization_enabled}<span class="card-tag">Diarization</span>{/if}
+          {#if p.sentiment_enabled}<span class="card-tag">Emotions</span>{/if}
           {#if p.llm_provider}<span class="card-tag">LLM: {p.llm_provider}</span>{/if}
         </div>
       </div>

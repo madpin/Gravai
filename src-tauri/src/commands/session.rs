@@ -89,6 +89,39 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     let session = Arc::new(Session::new(session_id.clone(), config.clone()));
     session.set_state(SessionState::Recording);
 
+    // Auto-name session from calendar events (before DB write)
+    let calendar_title = gravai_meeting::calendar::find_meeting_title(
+        config.features.meeting_detection.lead_time_seconds,
+    );
+
+    // Check for running meeting apps
+    let meeting_app = {
+        let meetings = gravai_meeting::detector::detect_meeting_apps();
+        meetings.first().map(|m| m.app_name.clone())
+    };
+
+    // Store session in DB early — pipelines may insert utterances before this block was reached
+    {
+        let db_path = gravai_config::data_dir().join("gravai.db");
+        if let Ok(db) = gravai_storage::Database::open(&db_path) {
+            let record = gravai_storage::SessionRecord {
+                id: session_id.clone(),
+                started_at: session.started_at.to_rfc3339(),
+                ended_at: None,
+                duration_seconds: None,
+                title: calendar_title.clone(),
+                meeting_app: meeting_app.clone(),
+                state: "recording".into(),
+            };
+            if let Err(e) = db.create_session(&record) {
+                error!("Failed to create session record: {e}");
+            }
+        }
+        // Register session in AppState early so stop_session works during startup
+        let mut session_lock = state.session.write().await;
+        *session_lock = Some(session.clone());
+    }
+
     // Determine output directory (custom folder or default)
     let output_dir = config
         .audio
@@ -233,6 +266,15 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
 
     // Speaker labels: mic = "You", system = "Remote" (always, no diarizer needed)
 
+    // Load sentiment engine (go-emotions ONNX) — only if model files are present
+    let sentiment_engine: Option<Arc<dyn gravai_intelligence::SentimentEngine>> =
+        tokio::task::spawn_blocking(|| {
+            gravai_intelligence::OnnxSentimentEngine::try_load()
+                .map(|e| Arc::new(e) as Arc<dyn gravai_intelligence::SentimentEngine>)
+        })
+        .await
+        .unwrap_or(None);
+
     // Callback that writes utterances to DB and publishes events
     let event_bus = state.event_bus.clone();
     let sid = session_id.clone();
@@ -252,6 +294,9 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 confidence: None,
                 start_ms: None,
                 end_ms: None,
+                sentiment_label: None,
+                sentiment_score: None,
+                emotions_json: None,
             };
             match db.insert_utterance(&record) {
                 Ok(id) => {
@@ -259,9 +304,37 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                         session_id: sid.clone(),
                         utterance_id: id,
                         source: utterance.source.clone(),
+                        speaker: utterance.speaker.clone(),
                         text: utterance.text.clone(),
                         timestamp,
                     });
+
+                    // Run sentiment on system audio only (async, non-blocking)
+                    if (utterance.source == "system_audio" || utterance.source == "system")
+                        && sentiment_engine.is_some()
+                    {
+                        let engine = sentiment_engine.as_ref().unwrap().clone();
+                        let text = utterance.text.clone();
+                        let db_path_clone = db_path.clone();
+                        tokio::spawn(async move {
+                            let result =
+                                tokio::task::spawn_blocking(move || engine.analyze(&text)).await;
+                            if let Ok(sentiment) = result {
+                                let emotions_json = sentiment
+                                    .emotions
+                                    .as_ref()
+                                    .and_then(|e| serde_json::to_string(e).ok());
+                                if let Ok(db) = gravai_storage::Database::open(&db_path_clone) {
+                                    let _ = db.update_utterance_sentiment(
+                                        id,
+                                        &sentiment.label,
+                                        sentiment.score,
+                                        emotions_json.as_deref(),
+                                    );
+                                }
+                            }
+                        });
+                    }
                 }
                 Err(e) => error!("Insert utterance: {e}"),
             }
@@ -354,39 +427,6 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             }
         });
         session.add_task(handle).await;
-    }
-
-    // Auto-name session from calendar events
-    let calendar_title = gravai_meeting::calendar::find_meeting_title(
-        config.features.meeting_detection.lead_time_seconds,
-    );
-
-    // Check for running meeting apps
-    let meeting_app = {
-        let meetings = gravai_meeting::detector::detect_meeting_apps();
-        meetings.first().map(|m| m.app_name.clone())
-    };
-
-    // Store session
-    {
-        let db_path = gravai_config::data_dir().join("gravai.db");
-        if let Ok(db) = gravai_storage::Database::open(&db_path) {
-            let record = gravai_storage::SessionRecord {
-                id: session_id.clone(),
-                started_at: session.started_at.to_rfc3339(),
-                ended_at: None,
-                duration_seconds: None,
-                title: calendar_title.clone(),
-                meeting_app: meeting_app.clone(),
-                state: "recording".into(),
-            };
-            if let Err(e) = db.create_session(&record) {
-                error!("Failed to create session record: {e}");
-            }
-        }
-
-        let mut session_lock = state.session.write().await;
-        *session_lock = Some(session.clone());
     }
 
     state.event_bus.publish(GravaiEvent::SessionStateChanged {
