@@ -73,6 +73,11 @@ install: ## Install all dependencies (Rust + Node)
 	rustup update stable
 	pnpm install
 
+update-deps: ## Update all dependencies (Rust + Node)
+	rustup update stable
+	cargo update --workspace
+	pnpm update
+
 setup: install ## Full setup (install deps + check build)
 	cargo check --workspace
 	pnpm build
