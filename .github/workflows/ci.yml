@@ -9,11 +9,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Disable i8mm NEON intrinsics in whisper.cpp — the GitHub Actions
-  # macOS runner's clang enables arm8.6 features but whisper-rs 0.14's
-  # ggml doesn't guard vmmlaq_s32 behind a runtime check.
-  GGML_NO_MATMUL_INT8: 1
-  CMAKE_ARGS: "-DGGML_NO_MATMUL_INT8=ON"
+  # Fix whisper.cpp i8mm compile error on GitHub Actions macOS runners.
+  # The runner's clang auto-enables armv8.6 features including i8mm,
+  # but whisper-rs 0.14's ggml uses vmmlaq_s32 without proper target guards.
+  # Downgrade the ARM target to v8.2-a which doesn't have i8mm.
+  CFLAGS: "-march=armv8.2-a"
+  CXXFLAGS: "-march=armv8.2-a"
 
 jobs:
   rust-checks:
