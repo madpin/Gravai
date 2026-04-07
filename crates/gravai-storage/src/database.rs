@@ -496,6 +496,9 @@ mod tests {
                 confidence: Some(0.95),
                 start_ms: Some(5000),
                 end_ms: Some(8000),
+                sentiment_label: None,
+                sentiment_score: None,
+                emotions_json: None,
             })
             .unwrap();
         assert!(id > 0);
@@ -534,6 +537,9 @@ mod tests {
             confidence: None,
             start_ms: None,
             end_ms: None,
+            sentiment_label: None,
+            sentiment_score: None,
+            emotions_json: None,
         })
         .unwrap();
 
