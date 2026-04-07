@@ -102,10 +102,12 @@ version: ## Bump version: make version V=1.2.3
 	@perl -i -pe 's/^version = ".*"/version = "$(V)"/' Cargo.toml
 	@perl -i -pe 's/"version": ".*"/"version": "$(V)"/' src-tauri/tauri.conf.json
 	@perl -i -pe 's/v\d+\.\d+\.\d+/v$(V)/g' src-frontend/components/StatusBar.svelte
+	@cargo update --workspace --quiet
 	@echo "✅ Version updated to $(V) in:"
 	@echo "   Cargo.toml (workspace)"
 	@echo "   src-tauri/tauri.conf.json"
 	@echo "   src-frontend/components/StatusBar.svelte"
+	@echo "   Cargo.lock"
 
 # ── Utility ──────────────────────────────────────────────────
 

@@ -137,11 +137,7 @@ impl AutomationStore {
         let path = super::data_dir().join("automations.json");
         let mut store = if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(s) = serde_json::from_str::<Self>(&content) {
-                    s
-                } else {
-                    Self::default()
-                }
+                serde_json::from_str::<Self>(&content).unwrap_or_default()
             } else {
                 Self::default()
             }
