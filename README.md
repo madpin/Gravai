@@ -22,6 +22,56 @@ Gravai eliminates the compromise:
 
 ---
 
+## Screenshots
+
+Gravai uses a dark, macOS-native shell: sidebar navigation, central workspace, and a live transcript column when recording.
+
+### Recording
+
+Live session with dual sources (microphone + system audio), VU meters, meeting summary controls, and a scrolling transcript with speaker labels (You / Remote) and optional tone tags.
+
+![Gravai recording in progress with live transcript](docs/assets/recording-live.png)
+
+Idle state: preset and profile pickers, transport controls, per-source levels, activity log, and an empty transcript pane until you speak.
+
+![Gravai recording view before start](docs/assets/recording-idle.png)
+
+### Archive & Ask Gravai
+
+Search past sessions by keyword or semantic mode, open a transcript in the preview pane, and jump into **Ask Gravai** for RAG-style Q&A with citations back to source meetings.
+
+![Gravai archive with session list and search](docs/assets/archive.png)
+
+![Gravai Ask Gravai chat with transcript scope and citations](docs/assets/ask-gravai.png)
+
+### Capture presets & profiles
+
+**Presets** bundle capture sources, quality, and export format (Meeting, Podcast, Streaming, and custom). **Profiles** layer transcription model, language, diarization, and LLM settings so you can switch whole stacks in one click.
+
+![Gravai capture presets grid](docs/assets/settings-presets.png)
+
+![Gravai profiles for Meeting, Minimal, and Podcast](docs/assets/settings-profiles.png)
+
+### Models, shortcuts, automations
+
+Download and manage Whisper weights (and Silero VAD), record global shortcuts for start/stop/pause, and wire triggers such as meeting detection or session end to exports and recording.
+
+![Gravai Whisper and VAD model management](docs/assets/settings-models.png)
+
+![Gravai keyboard shortcuts with global bindings](docs/assets/settings-shortcuts.png)
+
+![Gravai automation rules for Zoom and exports](docs/assets/settings-automations.png)
+
+### Storage & system health
+
+Inspect disk use per session, delete audio or full sessions, and run preflight-style checks (platform, data directory, devices, models, memory) from **System** settings.
+
+![Gravai storage overview and per-session actions](docs/assets/settings-storage.png)
+
+![Gravai system settings and health checks](docs/assets/settings-system.png)
+
+---
+
 ## Features
 
 ### Recording
