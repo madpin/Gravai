@@ -252,7 +252,11 @@
           <div class="config-tooltip-row">{activePreset.mic_enabled ? '🎤 Mic on' : '🎤 Mic off'} &middot; {activePreset.sys_enabled ? '💻 System on' : '💻 System off'}</div>
           <div class="config-tooltip-row">{activePreset.sample_rate/1000}kHz &middot; {activePreset.bit_depth}-bit &middot; {activePreset.channels === 1 ? 'Mono' : 'Stereo'}</div>
           <div class="config-tooltip-row">Format: {activePreset.export_format}</div>
-          {#if activePreset.output_folder}<div class="config-tooltip-row">Folder: {activePreset.output_folder}</div>{/if}
+          {#if activePreset.output_folder}<div class="config-tooltip-row">📁 {activePreset.output_folder}</div>{/if}
+          {#if activeProfile}
+            <div class="config-tooltip-divider"></div>
+            <div class="config-tooltip-row">🗣️ Model: Whisper {activeProfile.transcription_model || 'medium'}</div>
+          {/if}
         </div>
       </div>
     {/if}

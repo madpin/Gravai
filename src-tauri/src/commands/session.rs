@@ -222,16 +222,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     )));
     let pipeline_active = Arc::new(AtomicBool::new(true));
 
-    // Create diarizer if enabled
-    let diarizer: Option<
-        Arc<tokio::sync::Mutex<Box<dyn gravai_intelligence::DiarizationProvider>>>,
-    > = if config.features.diarization.enabled {
-        let d = gravai_intelligence::diarization::create_diarizer(&config.features.diarization);
-        info!("Diarization enabled ({} engine)", d.name());
-        Some(Arc::new(tokio::sync::Mutex::new(d)))
-    } else {
-        None
-    };
+    // Speaker labels: mic = "You", system = "Remote" (always, no diarizer needed)
 
     // Callback that writes utterances to DB and publishes events
     let event_bus = state.event_bus.clone();
@@ -276,7 +267,6 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             source: "microphone".into(),
             vad,
             transcriber: transcriber.clone(),
-            diarizer: diarizer.clone(),
             echo_suppressor: echo_suppressor.clone(),
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),
@@ -293,7 +283,6 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             source: "system_audio".into(),
             vad,
             transcriber: transcriber.clone(),
-            diarizer: diarizer.clone(),
             echo_suppressor: echo_suppressor.clone(),
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),

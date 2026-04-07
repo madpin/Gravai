@@ -138,7 +138,7 @@
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Engine</span></div>
         <select class="select" bind:value={e.trans_engine}><option value="whisper">Whisper</option><option value="http">External HTTP</option></select></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Model</span><span class="setting-desc">Larger = more accurate, slower. <button class="btn-link" onclick={() => { import("../lib/store").then(m => m.currentPage.set("models")); }}>Manage Models →</button></span></div>
-        <select class="select" bind:value={e.trans_model}><option value="tiny">Tiny</option><option value="base">Base</option><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></div>
+        <select class="select" bind:value={e.trans_model}><option value="tiny">Tiny</option><option value="base">Base</option><option value="small">Small</option><option value="medium">Medium</option><option value="large-v3">Large v3</option></select></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Language</span></div>
         <select class="select" bind:value={e.trans_lang}><option value="en">English</option><option value="pt">Portuguese</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="pl">Polish</option><option value="ja">Japanese</option><option value="auto">Auto</option></select></div>
     </div>

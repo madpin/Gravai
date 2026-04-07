@@ -274,7 +274,9 @@ impl AudioCaptureManager {
         let paused = self.paused.clone();
         let on_volume = self.on_volume.clone();
 
-        // SCK captures at 48kHz stereo typically
+        // SCK: request 48kHz stereo. The WAV recorder reads the actual
+        // format from the first audio chunk, so even if SCK delivers at
+        // a different rate, the header will match.
         let sck_sample_rate = 48000u32;
         let sck_channels = 2u16;
         self.sys_sample_rate = Some(sck_sample_rate);

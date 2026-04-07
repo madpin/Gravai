@@ -9,7 +9,7 @@ const WHISPER_MODELS: &[(&str, &str, u64)] = &[
     ("base", "Base — 142 MB", 142_000_000),
     ("small", "Small — 466 MB", 466_000_000),
     ("medium", "Medium — 1.5 GB, balanced", 1_500_000_000),
-    ("large", "Large — 3 GB, best accuracy", 3_000_000_000),
+    ("large-v3", "Large v3 — 3 GB, best accuracy", 3_000_000_000),
 ];
 
 /// Get list of all models with download status.
@@ -20,17 +20,25 @@ pub async fn get_models_status() -> Result<serde_json::Value, String> {
         .iter()
         .map(|(id, desc, approx_size)| {
             let path = models_dir.join(format!("ggml-{id}.bin"));
-            let downloaded = path.exists();
-            let actual_size = if downloaded {
+            let exists = path.exists();
+            let actual_size = if exists {
                 std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
             } else {
                 0
             };
+            // Flag as corrupted if file exists but is way too small
+            let corrupted = exists && actual_size < 1_000_000;
+            if corrupted {
+                tracing::warn!(
+                    "Model ggml-{id}.bin appears corrupted ({actual_size} bytes, expected ~{approx_size})"
+                );
+            }
             serde_json::json!({
                 "id": id,
                 "description": desc,
                 "approx_size": approx_size,
-                "downloaded": downloaded,
+                "downloaded": exists && !corrupted,
+                "corrupted": corrupted,
                 "actual_size": actual_size,
                 "path": path.display().to_string(),
             })
@@ -138,6 +146,21 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
                 }),
             );
         }
+    }
+
+    // Validate download — model files should be at least 1MB
+    let min_size = 1_000_000u64;
+    if downloaded < min_size {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        let msg = format!(
+            "Download appears corrupted ({} bytes, expected > 1MB). Deleted temp file.",
+            downloaded
+        );
+        let _ = app.emit(
+            "gravai:model-download",
+            serde_json::json!({ "model_id": model_id, "status": "error", "message": &msg }),
+        );
+        return Err(msg);
     }
 
     // Rename temp to final

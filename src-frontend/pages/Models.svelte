@@ -125,6 +125,8 @@
               <div class="model-progress-bar" style="width: {downloading[m.id].progress}%"></div>
             </div>
             <span class="model-progress-text">{downloading[m.id].progress}%</span>
+          {:else if m.corrupted}
+            <span class="model-size" style="color:var(--danger)">{fmtBytes(m.actual_size)} ⚠️ corrupted</span>
           {:else if m.downloaded}
             <span class="model-size">{fmtBytes(m.actual_size)}</span>
           {:else}
@@ -135,6 +137,10 @@
         <div class="model-actions">
           {#if downloading[m.id]}
             <span style="font-size:11px;color:var(--text-tertiary)">Downloading...</span>
+          {:else if m.corrupted}
+            <span style="font-size:11px;color:var(--danger)">❌ Corrupted</span>
+            <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
+            <button class="btn btn-xs btn-accent" onclick={() => { deleteModel(m.id).then(() => download(m.id)); }}>Re-download</button>
           {:else if m.downloaded}
             <span style="font-size:11px;color:var(--success)">✓ Ready</span>
             {#if activeModel !== m.id}

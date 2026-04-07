@@ -513,6 +513,9 @@ body {
   font-size: 11px; color: var(--text-secondary);
   padding: 2px 0; line-height: 1.4;
 }
+.config-tooltip-divider {
+  border-top: 1px solid var(--border); margin: 4px 0;
+}
 
 /* ===== Export indicator ===== */
 .export-indicator { display: flex; gap: 6px; flex-wrap: wrap; }

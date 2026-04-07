@@ -59,8 +59,6 @@ pub struct PipelineInput {
     pub source: String,
     pub vad: Box<dyn VadProvider>,
     pub transcriber: Option<Arc<dyn gravai_transcription::TranscriptionProvider>>,
-    pub diarizer:
-        Option<Arc<tokio::sync::Mutex<Box<dyn gravai_intelligence::DiarizationProvider>>>>,
     pub echo_suppressor: Arc<tokio::sync::Mutex<EchoSuppressor>>,
     pub config: PipelineConfig,
     pub on_utterance: OnUtterance,
@@ -78,7 +76,6 @@ pub async fn run_pipeline(input: PipelineInput) {
         source,
         mut vad,
         transcriber,
-        diarizer,
         echo_suppressor,
         config: pipeline_config,
         on_utterance,
@@ -121,7 +118,6 @@ pub async fn run_pipeline(input: PipelineInput) {
                     &speech_buffer,
                     &source,
                     &transcriber,
-                    &diarizer,
                     &echo_suppressor,
                     &last_text,
                 )
@@ -145,7 +141,6 @@ pub async fn run_pipeline(input: PipelineInput) {
                         &speech_buffer,
                         &source,
                         &transcriber,
-                        &diarizer,
                         &echo_suppressor,
                         &last_text,
                     )
@@ -172,7 +167,6 @@ pub async fn run_pipeline(input: PipelineInput) {
             &speech_buffer,
             &source,
             &transcriber,
-            &diarizer,
             &echo_suppressor,
             &last_text,
         )
@@ -202,7 +196,6 @@ async fn finalize(
     audio: &[f32],
     source: &str,
     transcriber: &Option<Arc<dyn gravai_transcription::TranscriptionProvider>>,
-    diarizer: &Option<Arc<tokio::sync::Mutex<Box<dyn gravai_intelligence::DiarizationProvider>>>>,
     echo_suppressor: &Arc<tokio::sync::Mutex<EchoSuppressor>>,
     last_text: &Option<String>,
 ) -> Option<FinalizeResult> {
@@ -256,27 +249,12 @@ async fn finalize(
 
     // Speaker assignment:
     // - Microphone source is always "You" (the local user)
-    // - System audio runs diarization to identify remote participants
+    // - System audio is always "Remote" (the other participants)
+    // Note: true multi-speaker diarization within system audio requires
+    // a proper ONNX pyannote model, which is a future upgrade.
     let speaker = if source == "microphone" || source == "mic" {
         Some("You".to_string())
-    } else if let Some(ref diarizer) = diarizer {
-        let d = diarizer.lock().await;
-        match d.diarize(audio) {
-            Ok(segments) if !segments.is_empty() => {
-                let mut counts: std::collections::HashMap<&str, u64> =
-                    std::collections::HashMap::new();
-                for seg in &segments {
-                    *counts.entry(&seg.speaker_id).or_default() += seg.end_ms - seg.start_ms;
-                }
-                counts
-                    .into_iter()
-                    .max_by_key(|&(_, dur)| dur)
-                    .map(|(id, _)| id.to_string())
-            }
-            _ => Some("Remote".to_string()),
-        }
     } else {
-        // No diarizer but system audio — label as "Remote"
         Some("Remote".to_string())
     };
 

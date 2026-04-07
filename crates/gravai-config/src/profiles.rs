@@ -61,7 +61,7 @@ pub fn builtin_profiles() -> Vec<Profile> {
             name: "Podcast".into(),
             description: "High-quality recording focus".into(),
             preset_id: Some("podcast".into()),
-            transcription_model: Some("large".into()),
+            transcription_model: Some("large-v3".into()),
             diarization_enabled: Some(true),
             ..Default::default()
         },

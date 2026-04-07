@@ -23,14 +23,28 @@ impl WhisperEngine {
 
         if !model_path.exists() {
             return Err(gravai_core::GravaiError::Model(format!(
-                "Whisper model not found at {}. Run the app once to download it.",
-                model_path.display()
+                "Whisper '{}' model not found. Go to Settings → Models to download it.",
+                config.model
+            )));
+        }
+
+        // Check for corrupted downloads (model files should be > 1MB)
+        let file_size = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
+        if file_size < 1_000_000 {
+            return Err(gravai_core::GravaiError::Model(format!(
+                "Whisper '{}' model appears corrupted ({} bytes). Delete it in Settings → Models and re-download.",
+                config.model, file_size
             )));
         }
 
         let params = WhisperContextParameters::default();
         let ctx = WhisperContext::new_with_params(model_path.to_str().unwrap_or(""), params)
-            .map_err(|e| gravai_core::GravaiError::Model(format!("Load whisper model: {e}")))?;
+            .map_err(|e| {
+                gravai_core::GravaiError::Model(format!(
+                    "Failed to load Whisper '{}' model ({}). The file may be corrupted — try deleting and re-downloading in Settings → Models.",
+                    config.model, e
+                ))
+            })?;
 
         info!(
             "Whisper engine loaded: model={}, language={}",

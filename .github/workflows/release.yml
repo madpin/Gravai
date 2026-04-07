@@ -50,6 +50,14 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
+      - name: Ad-hoc sign the app (removes quarantine/damaged error)
+        run: |
+          APP=$(find target/release/bundle/macos -name "*.app" -maxdepth 1 | head -1)
+          if [ -n "$APP" ]; then
+            codesign --force --deep --sign - "$APP"
+            echo "Ad-hoc signed: $APP"
+          fi
+
       - name: Get version
         id: version
         run: |
@@ -91,8 +99,13 @@ jobs:
             ### Installation
             1. Download `Gravai.dmg` or `Gravai.app.zip`
             2. Open the DMG and drag Gravai to Applications, or unzip the app
-            3. On first launch, macOS may ask you to allow it in System Settings → Privacy & Security
-            4. Gravai will download the Whisper transcription model on first run (~1.5 GB)
+            3. If macOS says "damaged and can't be opened", run in Terminal:
+               ```
+               xattr -cr /Applications/Gravai.app
+               ```
+               This removes the quarantine flag. The app is not code-signed with an Apple Developer certificate (yet).
+            4. On first launch, allow it in System Settings → Privacy & Security
+            5. Gravai will download the Whisper transcription model on first run (~1.5 GB)
 
             ### Requirements
             - macOS 13+ (Ventura or later)
