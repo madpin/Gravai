@@ -1,74 +1,111 @@
 //! Multi-track WAV recorder.
 //!
-//! Writes each audio source to its own WAV file at 48kHz/24-bit stereo.
-//! Also writes a mixed master track.
+//! Writes each audio source to its own WAV file using 32-bit float format
+//! (lossless for f32 audio data, widely supported).
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::capture::AudioChunk;
 
 /// A single-track WAV writer.
 pub struct TrackWriter {
-    writer: WavWriter<BufWriter<std::fs::File>>,
+    writer: Option<WavWriter<BufWriter<std::fs::File>>>,
     pub path: PathBuf,
     sample_count: u64,
     pub gain: f32,
-    pub pan: f32, // -1.0 = left, 0.0 = center, 1.0 = right
+    pub pan: f32,
+    /// Whether the spec has been set from the first chunk
+    spec_set: bool,
 }
 
 impl TrackWriter {
-    /// Create a new track writer at the given path.
-    pub fn new(path: PathBuf, sample_rate: u32, channels: u16) -> Result<Self, String> {
-        let spec = WavSpec {
-            channels,
-            sample_rate,
-            bits_per_sample: 24,
-            sample_format: SampleFormat::Int,
-        };
-
-        let writer = WavWriter::create(&path, spec)
-            .map_err(|e| format!("Create WAV {}: {e}", path.display()))?;
-
-        info!("Recording track: {}", path.display());
-
-        Ok(Self {
-            writer,
+    /// Create a new track writer. The actual WAV spec is set from the first audio chunk
+    /// to avoid sample rate/channel mismatches.
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            writer: None,
             path,
             sample_count: 0,
             gain: 1.0,
             pan: 0.0,
-        })
+            spec_set: false,
+        }
+    }
+
+    /// Initialize the WAV writer from the first chunk's actual format.
+    fn ensure_writer(&mut self, chunk: &AudioChunk) -> Result<(), String> {
+        if self.spec_set {
+            return Ok(());
+        }
+
+        let spec = WavSpec {
+            channels: chunk.channels,
+            sample_rate: chunk.sample_rate,
+            bits_per_sample: 32,
+            sample_format: SampleFormat::Float,
+        };
+
+        let writer = WavWriter::create(&self.path, spec)
+            .map_err(|e| format!("Create WAV {}: {e}", self.path.display()))?;
+
+        info!(
+            "Recording track: {} ({}Hz {}ch f32)",
+            self.path.display(),
+            chunk.sample_rate,
+            chunk.channels
+        );
+
+        self.writer = Some(writer);
+        self.spec_set = true;
+        Ok(())
     }
 
     /// Write audio chunk to this track. Applies gain.
     pub fn write(&mut self, chunk: &AudioChunk) -> Result<(), String> {
+        self.ensure_writer(chunk)?;
+        let writer = self.writer.as_mut().ok_or("Writer not initialized")?;
+
         for &sample in &chunk.samples {
-            let gained = sample * self.gain;
-            // Convert f32 [-1.0, 1.0] to i32 for 24-bit
-            let i24 = (gained.clamp(-1.0, 1.0) * 8_388_607.0) as i32;
-            self.writer
-                .write_sample(i24)
+            let gained = (sample * self.gain).clamp(-1.0, 1.0);
+            writer
+                .write_sample(gained)
                 .map_err(|e| format!("Write sample: {e}"))?;
             self.sample_count += 1;
         }
         Ok(())
     }
 
-    /// Finalize the WAV file.
-    pub fn finalize(self) -> Result<PathBuf, String> {
+    /// Finalize the WAV file (writes header with correct length).
+    pub fn finalize(mut self) -> Result<PathBuf, String> {
         let path = self.path.clone();
-        self.writer
-            .finalize()
-            .map_err(|e| format!("Finalize WAV: {e}"))?;
-        info!(
-            "Track finalized: {} ({} samples)",
-            path.display(),
-            self.sample_count
-        );
+        if let Some(writer) = self.writer.take() {
+            writer
+                .finalize()
+                .map_err(|e| format!("Finalize WAV: {e}"))?;
+            info!(
+                "Track finalized: {} ({} samples)",
+                path.display(),
+                self.sample_count
+            );
+        } else {
+            warn!("Track {} had no audio data", path.display());
+        }
         Ok(path)
+    }
+}
+
+impl Drop for TrackWriter {
+    fn drop(&mut self) {
+        // Safety finalize — if finalize() wasn't called explicitly,
+        // at least try to flush and close the WAV properly.
+        if let Some(writer) = self.writer.take() {
+            if let Err(e) = writer.finalize() {
+                warn!("Drop-finalize WAV {}: {e}", self.path.display());
+            }
+        }
     }
 }
 
@@ -77,27 +114,23 @@ pub struct MultiTrackRecorder {
     session_dir: PathBuf,
     tracks: Vec<(String, TrackWriter)>,
     master: Option<TrackWriter>,
-    pub sample_rate: u32,
-    pub channels: u16,
 }
 
 impl MultiTrackRecorder {
-    pub fn new(session_dir: &Path, sample_rate: u32, channels: u16) -> Result<Self, String> {
+    pub fn new(session_dir: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(session_dir).map_err(|e| format!("Create session dir: {e}"))?;
 
         Ok(Self {
             session_dir: session_dir.to_path_buf(),
             tracks: Vec::new(),
             master: None,
-            sample_rate,
-            channels,
         })
     }
 
     /// Add a named track (e.g. "mic", "system").
     pub fn add_track(&mut self, name: &str) -> Result<(), String> {
         let path = self.session_dir.join(format!("{name}.wav"));
-        let writer = TrackWriter::new(path, self.sample_rate, self.channels)?;
+        let writer = TrackWriter::new(path);
         self.tracks.push((name.to_string(), writer));
         Ok(())
     }
@@ -105,7 +138,7 @@ impl MultiTrackRecorder {
     /// Initialize the master mix track.
     pub fn init_master(&mut self) -> Result<(), String> {
         let path = self.session_dir.join("master.wav");
-        let writer = TrackWriter::new(path, self.sample_rate, self.channels)?;
+        let writer = TrackWriter::new(path);
         self.master = Some(writer);
         Ok(())
     }
@@ -139,13 +172,13 @@ impl MultiTrackRecorder {
         for (name, writer) in self.tracks {
             match writer.finalize() {
                 Ok(p) => paths.push(p),
-                Err(e) => error!("Finalize track {name}: {e}"),
+                Err(e) => warn!("Finalize track {name}: {e}"),
             }
         }
         if let Some(master) = self.master {
             match master.finalize() {
                 Ok(p) => paths.push(p),
-                Err(e) => error!("Finalize master: {e}"),
+                Err(e) => warn!("Finalize master: {e}"),
             }
         }
         paths
@@ -162,7 +195,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.wav");
 
-        let mut tw = TrackWriter::new(path.clone(), 48000, 2).unwrap();
+        let mut tw = TrackWriter::new(path.clone());
 
         let chunk = AudioChunk {
             samples: vec![0.0f32; 1024],
@@ -173,7 +206,13 @@ mod tests {
         let finalized = tw.finalize().unwrap();
         assert!(finalized.exists());
 
-        // Clean up
+        // Verify it's a valid WAV
+        let reader = hound::WavReader::open(&finalized).unwrap();
+        assert_eq!(reader.spec().sample_rate, 48000);
+        assert_eq!(reader.spec().channels, 2);
+        assert_eq!(reader.spec().bits_per_sample, 32);
+        assert_eq!(reader.spec().sample_format, SampleFormat::Float);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

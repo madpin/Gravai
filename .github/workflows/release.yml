@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_TERM_COLOR: always
+  CFLAGS: "-march=armv8.2-a"
+  CXXFLAGS: "-march=armv8.2-a"
+
+jobs:
+  build-and-release:
+    name: Build & Release (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
+
+      - name: Build Tauri app
+        run: pnpm tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "name=Gravai v${VERSION} (${SHORT_SHA})" >> $GITHUB_OUTPUT
+
+      - name: Find built artifacts
+        id: artifacts
+        run: |
+          DMG=$(find target/release/bundle/dmg -name "*.dmg" 2>/dev/null | head -1)
+          APP_ZIP=""
+          if [ -d "target/release/bundle/macos" ]; then
+            cd target/release/bundle/macos
+            APP=$(ls -d *.app 2>/dev/null | head -1)
+            if [ -n "$APP" ]; then
+              zip -r "Gravai.app.zip" "$APP"
+              APP_ZIP="$(pwd)/Gravai.app.zip"
+            fi
+            cd -
+          fi
+          echo "dmg=${DMG}" >> $GITHUB_OUTPUT
+          echo "app_zip=${APP_ZIP}" >> $GITHUB_OUTPUT
+          echo "Found DMG: ${DMG}"
+          echo "Found APP ZIP: ${APP_ZIP}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.name }}
+          body: |
+            **Gravai ${{ steps.version.outputs.version }}** — Audio Capture & AI Meeting Intelligence
+
+            Built from commit ${{ github.sha }}
+
+            ### Installation
+            1. Download `Gravai.dmg` or `Gravai.app.zip`
+            2. Open the DMG and drag Gravai to Applications, or unzip the app
+            3. On first launch, macOS may ask you to allow it in System Settings → Privacy & Security
+            4. Gravai will download the Whisper transcription model on first run (~1.5 GB)
+
+            ### Requirements
+            - macOS 13+ (Ventura or later)
+            - Apple Silicon recommended (M1/M2/M3/M4)
+            - [Ollama](https://ollama.ai/) for AI summaries (optional)
+          draft: false
+          prerelease: false
+          files: |
+            ${{ steps.artifacts.outputs.dmg }}
+            ${{ steps.artifacts.outputs.app_zip }}
+          generate_release_notes: true

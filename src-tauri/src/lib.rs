@@ -50,21 +50,38 @@ pub fn run() {
         .manage(app_state)
         .setup(move |app| {
             // Bridge EventBus → Tauri frontend events
+            // Emit the inner data directly (not the tagged enum wrapper)
+            // so the frontend gets e.payload = { source, db } not { type: "VolumeLevel", data: { source, db } }
             let handle = app.handle().clone();
             let mut rx = event_bus.subscribe();
             tauri::async_runtime::spawn(async move {
                 loop {
                     match rx.recv().await {
                         Ok(event) => {
-                            let event_name = match &event {
-                                GravaiEvent::VolumeLevel { .. } => "gravai:volume",
-                                GravaiEvent::TranscriptUpdated { .. } => "gravai:transcript",
-                                GravaiEvent::SessionStateChanged { .. } => "gravai:session",
-                                GravaiEvent::MeetingDetected { .. } => "gravai:meeting",
-                                GravaiEvent::Error { .. } => "gravai:error",
-                                _ => "gravai:event",
+                            let (event_name, payload) = match &event {
+                                GravaiEvent::VolumeLevel { source, db } => (
+                                    "gravai:volume",
+                                    serde_json::json!({ "source": source, "db": db }),
+                                ),
+                                GravaiEvent::TranscriptUpdated { session_id, utterance_id, source, text, timestamp } => (
+                                    "gravai:transcript",
+                                    serde_json::json!({ "session_id": session_id, "utterance_id": utterance_id, "source": source, "text": text, "timestamp": timestamp }),
+                                ),
+                                GravaiEvent::SessionStateChanged { state, session_id } => (
+                                    "gravai:session",
+                                    serde_json::json!({ "state": state, "session_id": session_id }),
+                                ),
+                                GravaiEvent::MeetingDetected { app_name, window_title } => (
+                                    "gravai:meeting",
+                                    serde_json::json!({ "app_name": app_name, "window_title": window_title }),
+                                ),
+                                GravaiEvent::Error { message } => (
+                                    "gravai:error",
+                                    serde_json::json!({ "message": message }),
+                                ),
+                                _ => ("gravai:event", serde_json::json!({})),
                             };
-                            let _ = handle.emit(event_name, &event);
+                            let _ = handle.emit(event_name, &payload);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             tracing::warn!("Event bridge lagged by {n} events");
@@ -127,6 +144,10 @@ pub fn run() {
             commands::detect_silence,
             commands::trim_silence,
             commands::get_perf_snapshot,
+            // Model management
+            commands::get_models_status,
+            commands::download_model,
+            commands::delete_model,
             // Storage management
             commands::get_storage_info,
             commands::delete_session_audio,

@@ -2,10 +2,14 @@
   import { onMount } from "svelte";
   import { invoke } from "../lib/tauri";
   import { healthStatus, currentPage } from "../lib/store";
+  import Onboarding from "../components/Onboarding.svelte";
 
   let healthChecks = $state<any[]>([]);
   let rawJson = $state("");
   let saveMsg = $state("");
+  let showWizard = $state(false);
+
+  function runWizard() { showWizard = true; }
   let perfInfo = $state<any>(null);
 
   onMount(async () => { await loadHealth(); await loadRawConfig(); await loadPerf(); });
@@ -52,12 +56,17 @@
   function goTo(page: string) { currentPage.set(page); }
 </script>
 
+{#if showWizard}
+  <Onboarding onComplete={() => showWizard = false} />
+{/if}
+
 <div class="page-header">
   <h2>Settings</h2>
   <div class="header-actions">
     {#if saveMsg}<span style="font-size:11px;color:var(--success)">{saveMsg}</span>{/if}
     <button class="btn btn-xs btn-ghost" onclick={importConfig}>Import</button>
     <button class="btn btn-xs btn-ghost" onclick={exportConfig}>Export</button>
+    <button class="btn btn-xs btn-ghost" onclick={runWizard}>🧙 Setup Wizard</button>
   </div>
 </div>
 

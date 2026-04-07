@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen, fmtTimer, fmtDuration } from "../lib/tauri";
-  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary } from "../lib/store";
+  import { get } from "svelte/store";
+  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, currentPage } from "../lib/store";
   import TranscriptView from "../components/TranscriptView.svelte";
   import AppPicker from "../components/AppPicker.svelte";
 
@@ -12,8 +13,6 @@
   let sysVolume = $state(100);
   let vuMic = $state(0);
   let vuSys = $state(0);
-  let meetingBanner = $state<string | null>(null);
-  let dismissedApps = $state<Set<string>>(new Set());
   let summaryLoading = $state(false);
 
   // Device selection
@@ -53,13 +52,14 @@
           }
         }
       });
+      clearAlerts(); // Clear previous session alerts
       const result: any = await invoke("start_session");
       isRecording.set(true); isPaused.set(false);
       currentSessionId.set(result.id); sessionStartTime.set(Date.now());
       lastSessionIdStore.set(result.id);
       liveUtterances.set([]);
       liveSummary.set(null);
-      meetingBanner = null;
+      dismissAlertsByLevel("meeting");
       startTimer();
       startTranscriptPoll();
       log(`Recording started: ${result.id}${result.title ? " — " + result.title : ""}`);
@@ -81,14 +81,14 @@
       currentSessionId.set(null); sessionStartTime.set(null);
       stopTimer(); stopTranscriptPoll();
       vuMic = 0; vuSys = 0;
-      dismissedApps = new Set();
+      dismissedMeetingApps.set(new Set());
       log(`Stopped: ${result.id} (${fmtDuration(result.duration_seconds)})`);
     } catch (e) { log(`Error: ${e}`); }
   }
 
   function startTimer() {
     timerInterval = window.setInterval(() => {
-      const st = $sessionStartTime;
+      const st = get(sessionStartTime);
       if (st) timer = fmtTimer(Math.floor((Date.now() - st) / 1000));
     }, 250);
   }
@@ -96,7 +96,7 @@
 
   function startTranscriptPoll() {
     transcriptPoll = window.setInterval(async () => {
-      const sid = $currentSessionId;
+      const sid = get(currentSessionId);
       if (!sid) return;
       try { liveUtterances.set(await invoke("get_transcript", { sessionId: sid })); } catch (_) {}
     }, 2000);
@@ -116,32 +116,33 @@
   }
 
   async function checkMeetings() {
-    if ($isRecording) { meetingBanner = null; return; }
+    if (get(isRecording)) { dismissAlertsByLevel("meeting"); return; }
     try {
       const meetings: any[] = await invoke("detect_meetings");
       if (meetings.length > 0) {
-        // Create a key from the detected app names to track dismissals
         const appKey = meetings.map(m => m.app_name).sort().join(",");
-        if (dismissedApps.has(appKey)) {
-          meetingBanner = null; // Already dismissed this exact combination
-        } else {
-          meetingBanner = `Meeting detected: ${meetings.map(m => m.app_name).join(", ")}`;
+        if (!$dismissedMeetingApps.has(appKey)) {
+          const names = meetings.map(m => m.app_name).join(", ");
+          addAlert({
+            level: "meeting",
+            message: `Meeting detected: ${names}`,
+            actions: [
+              { label: "Record", handler: () => { dismissMeeting(appKey); start(); } },
+              { label: "Dismiss", handler: () => dismissMeeting(appKey) },
+            ],
+            dismissable: false, // Use the explicit buttons instead
+          });
         }
       } else {
-        meetingBanner = null;
-        // If no meetings are running, clear dismissed set (apps changed)
-        if (dismissedApps.size > 0) dismissedApps = new Set();
+        dismissAlertsByLevel("meeting");
+        if ($dismissedMeetingApps.size > 0) dismissedMeetingApps.set(new Set());
       }
     } catch (_) {}
   }
 
-  function dismissBanner() {
-    // Track which app combination was dismissed so it doesn't reappear
-    if (meetingBanner) {
-      const appNames = meetingBanner.replace("Meeting detected: ", "");
-      dismissedApps = new Set([...dismissedApps, appNames.split(", ").sort().join(",")]);
-    }
-    meetingBanner = null;
+  function dismissMeeting(appKey: string) {
+    dismissedMeetingApps.update(s => { const n = new Set(s); n.add(appKey); return n; });
+    dismissAlertsByLevel("meeting");
   }
 
   async function loadDevices() {
@@ -158,8 +159,10 @@
   }
 
   onMount(async () => {
+    // Listen for real-time events from Rust EventBus
+    // Payload is flat JSON (e.g. { source, db } for volume, { text, source } for transcript)
     const uv = await listen("gravai:volume", (e: any) => {
-      const d = e.payload?.data || e.payload;
+      const d = e.payload;
       if (!d?.source) return;
       const pct = Math.max(0, Math.min(100, ((d.db + 60) / 60) * 100));
       if (d.source === "microphone") vuMic = pct; else vuSys = pct;
@@ -167,16 +170,33 @@
     unlisteners.push(uv);
 
     const ut = await listen("gravai:transcript", (e: any) => {
-      const d = e.payload?.data || e.payload;
-      if (d?.text && $currentSessionId) {
+      const d = e.payload;
+      if (d?.text && get(currentSessionId)) {
         liveUtterances.update(u => [...u, { ...d, timestamp: d.timestamp || new Date().toISOString() }]);
       }
     });
     unlisteners.push(ut);
 
     const ue = await listen("gravai:error", (e: any) => {
-      const d = e.payload?.data || e.payload;
-      log(`⚠️ ${d?.message || "Error"}`);
+      const d = e.payload;
+      const msg = d?.message || "Unknown error";
+      log(`⚠️ ${msg}`);
+
+      // Promote critical errors to visible alerts
+      if (msg.includes("Transcription unavailable") || msg.includes("Model")) {
+        addAlert({
+          level: "error",
+          message: msg,
+          actions: [{ label: "Go to Models", handler: () => currentPage.set("models") }],
+          dismissable: true,
+        });
+      } else if (msg.includes("closed") || msg.includes("Recording continues")) {
+        addAlert({
+          level: "warning",
+          message: msg,
+          dismissable: true,
+        });
+      }
     });
     unlisteners.push(ue);
 
@@ -212,15 +232,6 @@
   });
 </script>
 
-{#if meetingBanner}
-  <div class="banner banner-accent">
-    <span class="banner-text">{meetingBanner}</span>
-    <div class="banner-actions">
-      <button class="btn btn-xs btn-accent" onclick={() => { dismissBanner(); start(); }}>Record</button>
-      <button class="btn btn-xs btn-ghost" onclick={dismissBanner}>Dismiss</button>
-    </div>
-  </div>
-{/if}
 
 <div class="page-header">
   <h2>Recording</h2>

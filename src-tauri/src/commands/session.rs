@@ -1,6 +1,6 @@
 //! Session lifecycle commands: start, pause, resume, stop.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use gravai_audio::capture::{AudioCaptureManager, AudioChunk, VolumeCallback};
@@ -10,6 +10,15 @@ use gravai_audio::recorder::MultiTrackRecorder;
 use gravai_core::{AppState, GravaiEvent, Session, SessionState};
 use tauri::State;
 use tokio::sync::mpsc;
+
+// Shared stop flag for the capture thread — set to true on session stop
+// to release microphone and ScreenCaptureKit resources.
+static CAPTURE_STOP: std::sync::OnceLock<std::sync::Mutex<Option<Arc<AtomicBool>>>> =
+    std::sync::OnceLock::new();
+
+fn get_capture_stop() -> &'static std::sync::Mutex<Option<Arc<AtomicBool>>> {
+    CAPTURE_STOP.get_or_init(|| std::sync::Mutex::new(None))
+}
 use tracing::{error, info, warn};
 
 /// Start a new recording session.
@@ -25,7 +34,57 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         }
     }
 
-    let config = state.config.read().await.clone();
+    let mut config = state.config.read().await.clone();
+
+    // Apply active profile overrides to config before starting
+    let profile_store = gravai_config::profiles::ProfileStore::load();
+    if let Some(ref pid) = profile_store.active_profile_id {
+        if let Some(profile) = profile_store.profiles.get(pid) {
+            if let Some(ref engine) = profile.transcription_engine {
+                config.transcription.engine = engine.clone();
+            }
+            if let Some(ref model) = profile.transcription_model {
+                config.transcription.model = model.clone();
+            }
+            if let Some(ref lang) = profile.transcription_language {
+                config.transcription.language = lang.clone();
+            }
+            if let Some(ref provider) = profile.llm_provider {
+                config.llm.provider = provider.clone();
+            }
+            if let Some(ref model) = profile.llm_model {
+                config.llm.model = model.clone();
+            }
+            if let Some(enabled) = profile.diarization_enabled {
+                config.features.diarization.enabled = enabled;
+            }
+            if let Some(enabled) = profile.echo_suppression_enabled {
+                config.features.echo_suppression.enabled = enabled;
+            }
+            info!(
+                "Applied profile '{}' overrides (model: {})",
+                profile.name, config.transcription.model
+            );
+        }
+    }
+
+    // Also apply active preset overrides
+    let preset_store = gravai_config::presets::PresetStore::load();
+    if let Some(ref pid) = preset_store.active_preset_id {
+        if let Some(preset) = preset_store.presets.get(pid) {
+            config.audio.microphone.enabled = preset.mic_enabled;
+            config.audio.system_audio.enabled = preset.sys_enabled;
+            config.audio.recording.sample_rate = preset.sample_rate;
+            config.audio.recording.bit_depth = preset.bit_depth;
+            config.audio.recording.channels = preset.channels;
+            config.audio.recording.export_format = preset.export_format.clone();
+            if let Some(ref folder) = preset.output_folder {
+                config.audio.recording.output_folder = Some(folder.clone());
+            }
+            info!("Applied preset '{}' overrides", preset.name);
+        }
+    }
+
     let session_id = gravai_core::session::generate_session_id();
     let session = Arc::new(Session::new(session_id.clone(), config.clone()));
     session.set_state(SessionState::Recording);
@@ -42,10 +101,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     // Set up multi-track recorder (if recording is enabled)
     let recording_enabled = config.audio.recording.enabled;
     let recorder = if recording_enabled {
-        let recording_sr = config.audio.recording.sample_rate;
-        let recording_ch = config.audio.recording.channels;
-        let mut rec = MultiTrackRecorder::new(&output_dir, recording_sr, recording_ch)
-            .map_err(|e| format!("Recorder: {e}"))?;
+        let mut rec = MultiTrackRecorder::new(&output_dir).map_err(|e| format!("Recorder: {e}"))?;
 
         if config.audio.microphone.enabled {
             rec.add_track("mic")
@@ -55,7 +111,9 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             rec.add_track("system")
                 .map_err(|e| format!("Add system track: {e}"))?;
         }
-        rec.init_master().map_err(|e| format!("Init master: {e}"))?;
+        // No master track — each source writes its own file with correct format.
+        // Mixing sources with different sample rates into one file causes corruption.
+        // Users can combine tracks in a DAW if needed.
         Some(Arc::new(std::sync::Mutex::new(rec)))
     } else {
         info!("Recording to disk is disabled — transcription only mode");
@@ -74,7 +132,11 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     let capture_config = config.clone();
     let bus = state.event_bus.clone();
 
-    std::thread::spawn(move || {
+    // Shared flag to signal the capture thread to stop and release resources
+    let capture_stop = Arc::new(AtomicBool::new(false));
+    let capture_stop_clone = capture_stop.clone();
+
+    let _capture_thread = std::thread::spawn(move || {
         let mut capture = AudioCaptureManager::new(capture_config);
 
         let volume_cb: VolumeCallback = Arc::new(move |source: &str, db: f64| {
@@ -96,9 +158,17 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         let _ = sys_lq_tx_ch.send(capture.sys_lq_rx.take());
         let _ = result_tx.send(Ok(()));
 
-        // Keep capture alive until thread is unparked
-        std::thread::park();
+        // Wait for stop signal, then drop capture to release mic + SCK
+        while !capture_stop_clone.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        capture.stop();
+        info!("Audio capture thread exiting — mic and SCK released");
+        // capture drops here, releasing all OS audio resources
     });
+
+    // Store the stop flag so stop_session can signal it
+    *get_capture_stop().lock().unwrap() = Some(capture_stop);
 
     let start_result = result_rx
         .recv()
@@ -130,9 +200,19 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     // Set up transcription pipeline for LQ (16kHz mono) streams
     let transcriber: Option<Arc<dyn gravai_transcription::TranscriptionProvider>> =
         match gravai_transcription::create_provider(&config.transcription) {
-            Ok(provider) => Some(Arc::from(provider)),
+            Ok(provider) => {
+                info!("Transcription ready ({})", config.transcription.model);
+                Some(Arc::from(provider))
+            }
             Err(e) => {
                 warn!("Transcription not available: {e}");
+                // Notify the user via event bus so the UI can show a warning
+                state.event_bus.publish(GravaiEvent::Error {
+                    message: format!(
+                        "Transcription unavailable: {}. Go to Settings → Models to download the '{}' model.",
+                        e, config.transcription.model
+                    ),
+                });
                 None
             }
         };
@@ -411,6 +491,12 @@ pub async fn stop_session(state: State<'_, Arc<AppState>>) -> Result<serde_json:
     session.set_state(SessionState::Stopped);
     session.abort_tasks().await;
 
+    // Signal the capture thread to stop and release mic + SCK resources
+    if let Some(stop_flag) = get_capture_stop().lock().unwrap().take() {
+        stop_flag.store(true, Ordering::SeqCst);
+        info!("Signaled capture thread to release audio resources");
+    }
+
     // Update session record in DB
     let db_path = gravai_config::data_dir().join("gravai.db");
     if let Ok(db) = gravai_storage::Database::open(&db_path) {
@@ -475,7 +561,7 @@ pub async fn detect_meetings() -> Result<serde_json::Value, String> {
     serde_json::to_value(&meetings).map_err(|e| e.to_string())
 }
 
-/// Record audio chunks from a receiver to a named track + master.
+/// Record audio chunks from a receiver to a named track file.
 async fn record_track(
     mut rx: mpsc::Receiver<AudioChunk>,
     recorder: Arc<std::sync::Mutex<MultiTrackRecorder>>,
@@ -485,9 +571,6 @@ async fn record_track(
         let mut rec = recorder.lock().unwrap();
         if let Err(e) = rec.write_track(track_name, &chunk) {
             error!("Write track {track_name}: {e}");
-        }
-        if let Err(e) = rec.write_master(&chunk) {
-            error!("Write master from {track_name}: {e}");
         }
     }
 }

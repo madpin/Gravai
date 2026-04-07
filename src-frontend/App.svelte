@@ -3,6 +3,7 @@
   import { invoke } from "./lib/tauri";
   import { onMount } from "svelte";
   import Onboarding from "./components/Onboarding.svelte";
+  import AlertBar from "./components/AlertBar.svelte";
 
   import Recording from "./pages/Recording.svelte";
   import Archive from "./pages/Archive.svelte";
@@ -12,6 +13,7 @@
   import Automations from "./pages/Automations.svelte";
   import Chat from "./pages/Chat.svelte";
   import Storage from "./pages/Storage.svelte";
+  import Models from "./pages/Models.svelte";
   import Settings from "./pages/Settings.svelte";
 
   const mainPages = [
@@ -23,6 +25,7 @@
   const configPages = [
     { id: "presets", label: "Presets", icon: "🎛️" },
     { id: "profiles", label: "Profiles", icon: "👤" },
+    { id: "models", label: "Models", icon: "🧠" },
     { id: "shortcuts", label: "Shortcuts", icon: "⌨️" },
     { id: "automations", label: "Automations", icon: "⚡" },
     { id: "storage", label: "Storage", icon: "💿" },
@@ -116,6 +119,7 @@
   </nav>
 
   <main class="content">
+    <AlertBar />
     {#if $currentPage === "recording"}
       <Recording />
     {:else if $currentPage === "archive"}
@@ -132,6 +136,8 @@
       <Automations />
     {:else if $currentPage === "storage"}
       <Storage />
+    {:else if $currentPage === "models"}
+      <Models />
     {:else if $currentPage === "settings"}
       <Settings />
     {/if}

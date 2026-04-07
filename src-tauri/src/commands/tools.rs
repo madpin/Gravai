@@ -12,10 +12,7 @@ pub async fn detect_silence(
     min_duration_ms: Option<u64>,
 ) -> Result<serde_json::Value, String> {
     let session_dir = gravai_config::sessions_dir().join(&session_id);
-    let wav_path = session_dir.join("master.wav");
-    if !wav_path.exists() {
-        return Err("No master recording found".into());
-    }
+    let wav_path = find_wav(&session_dir).ok_or("No recording found")?;
 
     let regions = gravai_audio::silence::detect_silence(
         &wav_path,
@@ -34,10 +31,7 @@ pub async fn trim_silence(
     min_duration_ms: Option<u64>,
 ) -> Result<String, String> {
     let session_dir = gravai_config::sessions_dir().join(&session_id);
-    let wav_path = session_dir.join("master.wav");
-    if !wav_path.exists() {
-        return Err("No master recording found".into());
-    }
+    let wav_path = find_wav(&session_dir).ok_or("No recording found")?;
 
     let regions = gravai_audio::silence::detect_silence(
         &wav_path,
@@ -49,7 +43,8 @@ pub async fn trim_silence(
         return Ok("No silence detected — nothing to trim".into());
     }
 
-    let output_path = session_dir.join("master_trimmed.wav");
+    let stem = wav_path.file_stem().unwrap_or_default().to_string_lossy();
+    let output_path = session_dir.join(format!("{stem}_trimmed.wav"));
     gravai_audio::silence::trim_silence(&wav_path, &output_path, &regions)?;
 
     let trimmed_ms: u64 = regions.iter().map(|r| r.duration_ms).sum();
@@ -75,4 +70,22 @@ pub async fn get_perf_snapshot(
     };
     let snapshot = gravai_core::perf::snapshot(session_count);
     serde_json::to_value(&snapshot).map_err(|e| e.to_string())
+}
+
+fn find_wav(session_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    for name in &["mic.wav", "system.wav"] {
+        let p = session_dir.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    std::fs::read_dir(session_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+        })
+        .map(|e| e.path())
 }

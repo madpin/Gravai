@@ -68,17 +68,29 @@ pub async fn get_export_formats() -> Result<serde_json::Value, String> {
 }
 
 /// Export a session's audio to a different format.
+/// Merges all tracks (mic + system) into one file automatically.
 #[tauri::command]
-pub async fn export_session_audio(session_id: String, format: String) -> Result<String, String> {
+pub async fn export_session_audio(
+    session_id: String,
+    format: String,
+    source_track: Option<String>,
+) -> Result<String, String> {
     let session_dir = gravai_config::sessions_dir().join(&session_id);
-    let source = session_dir.join("master.wav");
-    if !source.exists() {
-        return Err("No master recording found for this session".into());
-    }
-
     let fmt = gravai_audio::encoder::ExportFormat::parse(&format);
-    let output = session_dir.join(format!("master.{}", fmt.extension()));
 
-    gravai_audio::encoder::export_audio(&source, &output, fmt, 192)?;
-    Ok(output.display().to_string())
+    if let Some(track) = source_track {
+        // Export a specific track only
+        let source = session_dir.join(format!("{track}.wav"));
+        if !source.exists() {
+            return Err(format!("Track not found: {track}.wav"));
+        }
+        let output = session_dir.join(format!("{track}.{}", fmt.extension()));
+        gravai_audio::encoder::export_audio(&source, &output, fmt, 192)?;
+        Ok(output.display().to_string())
+    } else {
+        // Default: merge all tracks into one export
+        let output = session_dir.join(format!("export.{}", fmt.extension()));
+        gravai_audio::encoder::merge_and_export(&session_dir, &output, fmt, 192)?;
+        Ok(output.display().to_string())
+    }
 }

@@ -92,12 +92,13 @@
           <td>{b.description}</td>
           <td>
             <input
+              id="shortcut-{actionId}"
               class="key-input"
               class:recording={recordingAction === actionId}
-              bind:value={b.key_sequence}
-              onkeydown={(e) => handleKeyCapture(e, actionId)}
-              placeholder={recordingAction === actionId ? "Press keys..." : ""}
-              readonly={recordingAction === actionId}
+              value={recordingAction === actionId ? "⏺ Press keys..." : b.key_sequence}
+              onkeydown={(e) => { e.preventDefault(); handleKeyCapture(e, actionId); }}
+              onfocus={() => startRecording(actionId)}
+              onblur={() => { if (recordingAction === actionId) recordingAction = null; }}
             />
           </td>
           <td>
@@ -107,8 +108,8 @@
             </label>
           </td>
           <td style="display:flex;gap:4px">
-            <button class="btn btn-xs" class:btn-accent={recordingAction === actionId} class:btn-ghost={recordingAction !== actionId} onclick={() => startRecording(actionId)}>
-              {recordingAction === actionId ? "⏺ Press keys..." : "Record"}
+            <button class="btn btn-xs btn-ghost" onclick={() => { const el = document.getElementById(`shortcut-${actionId}`); el?.focus(); }}>
+              Record
             </button>
             {#if saveStatus[actionId]}
               <span style="font-size:10px;color:var(--text-tertiary)">{saveStatus[actionId]}</span>

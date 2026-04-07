@@ -55,9 +55,13 @@
   }
 
   function next() {
-    if (step === 3) runSystemCheck();
-    if (step < steps.length - 1) step++;
-    else finish();
+    if (step < steps.length - 1) {
+      step++;
+      // Auto-run system check when arriving at the check step
+      if (step === 3) runSystemCheck();
+    } else {
+      finish();
+    }
   }
   function prev() { if (step > 0) step--; }
   function finish() {

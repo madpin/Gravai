@@ -108,20 +108,31 @@ pub fn trim_silence(
     let sample_rate = spec.sample_rate;
     let channels = spec.channels as u32;
 
-    let samples: Vec<i32> = match spec.sample_format {
-        hound::SampleFormat::Int => reader
-            .into_samples::<i32>()
-            .filter_map(|s| s.ok())
-            .collect(),
+    // Read all samples as f32 (works for both int and float WAVs)
+    let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader
             .into_samples::<f32>()
             .filter_map(|s| s.ok())
-            .map(|s| (s * 8_388_607.0) as i32)
             .collect(),
+        hound::SampleFormat::Int => {
+            let max_val = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            reader
+                .into_samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / max_val)
+                .collect()
+        }
     };
 
+    // Always write as 32-bit float for consistency
+    let out_spec = hound::WavSpec {
+        channels: spec.channels,
+        sample_rate: spec.sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
     let mut writer =
-        hound::WavWriter::create(output_path, spec).map_err(|e| format!("Create WAV: {e}"))?;
+        hound::WavWriter::create(output_path, out_spec).map_err(|e| format!("Create WAV: {e}"))?;
 
     let samples_per_ms = (sample_rate * channels) / 1000;
 
