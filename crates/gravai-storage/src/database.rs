@@ -203,6 +203,182 @@ impl Database {
         })?;
         rows.collect()
     }
+
+    // -- Embeddings --
+
+    pub fn store_embedding(
+        &self,
+        utterance_id: i64,
+        session_id: &str,
+        vector: &[f32],
+    ) -> Result<(), rusqlite::Error> {
+        let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        self.conn.execute(
+            "INSERT INTO embeddings (utterance_id, session_id, vector, dimension) VALUES (?1, ?2, ?3, ?4)",
+            params![utterance_id, session_id, blob, vector.len() as i32],
+        )?;
+        Ok(())
+    }
+
+    /// Find utterances by cosine similarity to a query vector. Returns (utterance, score).
+    pub fn semantic_search(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(UtteranceRecord, f64)>, rusqlite::Error> {
+        // Load all embeddings and compute cosine similarity in Rust
+        // (SQLite doesn't have native vector operations)
+        let mut stmt = self.conn.prepare(
+            "SELECT e.utterance_id, e.vector, u.id, u.session_id, u.timestamp, u.source, u.speaker, u.text, u.confidence, u.start_ms, u.end_ms
+             FROM embeddings e JOIN utterances u ON e.utterance_id = u.id",
+        )?;
+        let mut results: Vec<(UtteranceRecord, f64)> = stmt
+            .query_map([], |row| {
+                let blob: Vec<u8> = row.get(1)?;
+                let record = UtteranceRecord {
+                    id: row.get(2)?,
+                    session_id: row.get(3)?,
+                    timestamp: row.get(4)?,
+                    source: row.get(5)?,
+                    speaker: row.get(6)?,
+                    text: row.get(7)?,
+                    confidence: row.get(8)?,
+                    start_ms: row.get(9)?,
+                    end_ms: row.get(10)?,
+                };
+                Ok((record, blob))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(record, blob)| {
+                let stored: Vec<f32> = blob
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                let score = cosine_similarity(query_vec, &stored);
+                if score > 0.0 {
+                    Some((record, score))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        Ok(results)
+    }
+
+    // -- Advanced search with filters --
+
+    pub fn search_sessions_filtered(
+        &self,
+        _query: Option<&str>,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+        meeting_app: Option<&str>,
+    ) -> Result<Vec<SessionRecord>, rusqlite::Error> {
+        let mut sql = String::from(
+            "SELECT id, started_at, ended_at, duration_seconds, title, meeting_app, state FROM sessions WHERE 1=1",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(from) = date_from {
+            sql.push_str(" AND started_at >= ?");
+            param_values.push(Box::new(from.to_string()));
+        }
+        if let Some(to) = date_to {
+            sql.push_str(" AND started_at <= ?");
+            param_values.push(Box::new(to.to_string()));
+        }
+        if let Some(app) = meeting_app {
+            sql.push_str(" AND meeting_app = ?");
+            param_values.push(Box::new(app.to_string()));
+        }
+        sql.push_str(" ORDER BY started_at DESC");
+
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(SessionRecord {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                ended_at: row.get(2)?,
+                duration_seconds: row.get(3)?,
+                title: row.get(4)?,
+                meeting_app: row.get(5)?,
+                state: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    // -- Chat messages --
+
+    pub fn save_chat_message(
+        &self,
+        session_id: Option<&str>,
+        role: &str,
+        content: &str,
+        citations: Option<&str>,
+    ) -> Result<i64, rusqlite::Error> {
+        self.conn.execute(
+            "INSERT INTO chat_messages (session_id, role, content, citations) VALUES (?1, ?2, ?3, ?4)",
+            params![session_id, role, content, citations],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_chat_history(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+        let (sql, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(sid) =
+            session_id
+        {
+            ("SELECT role, content, citations, created_at FROM chat_messages WHERE session_id = ?1 ORDER BY id DESC LIMIT ?2",
+             vec![Box::new(sid.to_string()), Box::new(limit as i64)])
+        } else {
+            ("SELECT role, content, citations, created_at FROM chat_messages WHERE session_id IS NULL ORDER BY id DESC LIMIT ?1",
+             vec![Box::new(limit as i64)])
+        };
+        let params: Vec<&dyn rusqlite::types::ToSql> = param.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            let citations_str: Option<String> = row.get(2)?;
+            Ok(serde_json::json!({
+                "role": row.get::<_, String>(0)?,
+                "content": row.get::<_, String>(1)?,
+                "citations": citations_str.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                "created_at": row.get::<_, String>(3)?,
+            }))
+        })?;
+        let mut msgs: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
+        msgs.reverse();
+        Ok(msgs)
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| *x as f64 * *y as f64).sum();
+    let mag_a: f64 = a
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
+    let mag_b: f64 = b
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
+    if mag_a < 1e-10 || mag_b < 1e-10 {
+        return 0.0;
+    }
+    dot / (mag_a * mag_b)
 }
 
 #[cfg(test)]

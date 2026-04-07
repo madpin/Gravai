@@ -2,13 +2,19 @@
 
 mod audio;
 mod config_extras;
+mod export;
 mod intelligence;
+mod search;
 mod session;
+mod tools;
 
 pub use audio::*;
 pub use config_extras::*;
+pub use export::*;
 pub use intelligence::*;
+pub use search::*;
 pub use session::*;
+pub use tools::*;
 
 use gravai_core::AppState;
 use std::sync::Arc;

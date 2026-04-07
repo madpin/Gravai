@@ -4,6 +4,7 @@ pub mod app_state;
 pub mod error;
 pub mod event_bus;
 pub mod logging;
+pub mod perf;
 pub mod preflight;
 pub mod session;
 

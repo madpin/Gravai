@@ -8,4 +8,5 @@ pub mod pipeline;
 pub mod recorder;
 pub mod resampler;
 pub mod screencapturekit;
+pub mod silence;
 pub mod vad;

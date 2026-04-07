@@ -3,8 +3,14 @@
 use rusqlite::Connection;
 
 /// All migrations in order. Each is a (version, description, sql) tuple.
-const MIGRATIONS: &[(u32, &str, &str)] =
-    &[(1, "Initial schema", include_str!("../sql/001_initial.sql"))];
+const MIGRATIONS: &[(u32, &str, &str)] = &[
+    (1, "Initial schema", include_str!("../sql/001_initial.sql")),
+    (
+        2,
+        "Embeddings and chat",
+        include_str!("../sql/002_embeddings.sql"),
+    ),
+];
 
 /// Run all pending migrations. Creates the schema_version table if needed.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {

@@ -8,14 +8,17 @@ use std::collections::HashSet;
 use tracing::{debug, info};
 
 /// Known meeting app process names and their display names.
+/// Only processes that indicate an *active call* — not just the app being open.
+/// FaceTime is excluded because the process always runs; it's detected via
+/// its call-specific helper processes instead.
 const MEETING_PROCESSES: &[(&str, &str)] = &[
     ("zoom.us", "Zoom"),
+    ("CptHost", "Zoom"), // Zoom call host process
     ("Microsoft Teams", "Microsoft Teams"),
-    ("Slack", "Slack"),
-    ("FaceTime", "FaceTime"),
-    ("Discord", "Discord"),
+    ("Slack Helper (Renderer)", "Slack Huddle"),
+    ("Discord Helper (Renderer)", "Discord"),
     ("Webex", "WebEx"),
-    ("Google Chrome", "Google Chrome"), // Could be running Meet
+    ("rapportd", "FaceTime Call"), // FaceTime call daemon (only active during calls)
 ];
 
 /// Known meeting app bundle IDs (used when SCK is already active during recording).

@@ -9,7 +9,8 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true
+    "noEmit": true,
+    "verbatimModuleSyntax": true
   },
-  "include": ["src-frontend/**/*.ts"]
+  "include": ["src-frontend/**/*.ts", "src-frontend/**/*.svelte"]
 }

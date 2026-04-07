@@ -1,5 +1,6 @@
 //! AI intelligence: summarization, diarization, embeddings, LLM client, chat.
 
+pub mod chat;
 pub mod diarization;
 pub mod embeddings;
 pub mod llm_client;

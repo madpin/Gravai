@@ -11,6 +11,7 @@ use tauri::Emitter;
 pub fn run() {
     // Initialize logging
     gravai_core::logging::init_logging();
+    gravai_core::perf::init();
     tracing::info!("Gravai starting up");
 
     // Load config
@@ -45,6 +46,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(move |app| {
             // Bridge EventBus → Tauri frontend events
@@ -109,6 +111,22 @@ pub fn run() {
             commands::get_automations,
             commands::toggle_automation,
             commands::save_automation,
+            // Phase 4: Search + Chat + Export
+            commands::generate_embeddings,
+            commands::semantic_search,
+            commands::hybrid_search,
+            commands::search_sessions_filtered,
+            commands::ask_gravai,
+            commands::get_chat_history,
+            commands::export_markdown,
+            commands::export_markdown_file,
+            commands::export_pdf,
+            commands::export_obsidian,
+            commands::export_notion,
+            // Phase 5: Tools
+            commands::detect_silence,
+            commands::trim_silence,
+            commands::get_perf_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gravai");
