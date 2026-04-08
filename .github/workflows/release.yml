@@ -70,22 +70,43 @@ jobs:
 
       - name: Ad-hoc sign and collect artifacts
         id: artifacts
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
 
-          # Ad-hoc sign the .app bundle (removes macOS quarantine "damaged" error)
+          # 1. Ad-hoc sign the .app bundle
           APP=$(find target/release/bundle/macos -name "*.app" -maxdepth 1 | head -1)
           if [ -n "$APP" ]; then
             codesign --force --deep --sign - "$APP"
             echo "Ad-hoc signed: $APP"
           fi
 
-          DMG=$(find target/release/bundle/dmg -name "*.dmg" 2>/dev/null | head -1)
-          # Tauri produces .app.tar.gz + .app.tar.gz.sig when signing key is set
-          TARGZ=$(find target/release/bundle/macos -name "*.app.tar.gz" 2>/dev/null | head -1)
-          SIG="${TARGZ}.sig"
+          # 2. Recreate DMG from the signed .app so users don't get "damaged" error.
+          #    pnpm tauri build creates the DMG before our signing step, so the original
+          #    DMG contains the unsigned .app. We rebuild it here with the signed copy.
+          STAGING=$(mktemp -d)
+          cp -R "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          NEW_DMG="target/release/bundle/dmg/Gravai_${VERSION}_aarch64.dmg"
+          hdiutil create -volname "Gravai" -srcfolder "$STAGING" -ov -format UDZO "$NEW_DMG"
+          codesign --force --sign - "$NEW_DMG"
+          rm -rf "$STAGING"
+          echo "Rebuilt DMG from signed .app: $NEW_DMG"
 
-          echo "dmg=${DMG}" >> $GITHUB_OUTPUT
+          # 3. Recreate .app.tar.gz from the signed .app and re-sign for the in-app updater.
+          #    The original tar.gz was also built from the unsigned .app.
+          APP_DIR=$(dirname "$APP")
+          APP_BASENAME=$(basename "$APP")
+          TARGZ="${APP_DIR}/${APP_BASENAME}.tar.gz"
+          tar -czf "$TARGZ" -C "$APP_DIR" "$APP_BASENAME"
+          pnpm tauri signer sign "$TARGZ"
+          SIG="${TARGZ}.sig"
+          echo "Recreated and re-signed: $TARGZ"
+
+          echo "dmg=${NEW_DMG}" >> $GITHUB_OUTPUT
           echo "targz=${TARGZ}" >> $GITHUB_OUTPUT
 
           # Build latest.json for the in-app updater endpoint
@@ -125,12 +146,8 @@ jobs:
 
             ### Installation
             1. Download `Gravai.dmg` and drag Gravai to Applications
-            2. If macOS says "damaged and can't be opened", run in Terminal:
-               ```
-               xattr -cr /Applications/Gravai.app
-               ```
-            3. On first launch, allow it in System Settings → Privacy & Security
-            4. Gravai will download the Whisper transcription model on first run (~1.5 GB)
+            2. On first launch, allow it in System Settings → Privacy & Security
+            3. Gravai will download the Whisper transcription model on first run (~1.5 GB)
 
             ### In-App Updates
             Once installed, Gravai updates itself automatically. You can also go to **Settings → App Updates → Check Now**.
