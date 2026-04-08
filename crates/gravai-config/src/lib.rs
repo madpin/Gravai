@@ -341,6 +341,23 @@ impl Default for ExportConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Updates config
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    /// Check for updates automatically when the app launches.
+    pub auto_check: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self { auto_check: true }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Top-level AppConfig
 // ---------------------------------------------------------------------------
 
@@ -354,6 +371,7 @@ pub struct AppConfig {
     pub features: FeaturesConfig,
     pub llm: LlmConfig,
     pub export: ExportConfig,
+    pub updates: UpdatesConfig,
 }
 
 impl Default for AppConfig {
@@ -366,6 +384,7 @@ impl Default for AppConfig {
             features: FeaturesConfig::default(),
             llm: LlmConfig::default(),
             export: ExportConfig::default(),
+            updates: UpdatesConfig::default(),
         }
     }
 }

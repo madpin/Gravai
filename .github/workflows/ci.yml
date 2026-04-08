@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-progress runs for the same branch/PR when a newer commit arrives.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   CARGO_TERM_COLOR: always
@@ -64,12 +72,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Type check
+        run: pnpm typecheck
+
       - name: Build frontend
         run: pnpm build
 
   tauri-build:
     name: Tauri build (macOS)
     runs-on: macos-latest
+    # Only run on PRs — pushes to main are built & released by release.yml
+    if: github.event_name == 'pull_request'
     needs: [rust-checks, frontend-checks]
     steps:
       - uses: actions/checkout@v4
@@ -96,10 +109,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-build-
+          # Shared cache key prefix with release.yml so PR builds warm the release cache.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build Tauri app
         run: pnpm tauri build
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ""
+          # Secrets are not available for PRs from forks; build will succeed without signing.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

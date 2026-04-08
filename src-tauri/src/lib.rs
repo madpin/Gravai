@@ -145,11 +145,15 @@ pub fn run() {
         });
     }
 
+    // Auto-check for updates once on launch (5 s delay so window is ready)
+    let auto_check_updates = config.updates.auto_check;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::default().build())
         .manage(app_state)
         .setup(move |app| {
             // ── System Tray ──────────────────────────────────────────────
@@ -430,6 +434,32 @@ pub fn run() {
                 }
             });
 
+            // Auto-update check — fires once 5 s after launch if enabled
+            if auto_check_updates {
+                use tauri_plugin_updater::UpdaterExt;
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    match handle.updater() {
+                        Ok(updater) => match updater.check().await {
+                            Ok(Some(update)) => {
+                                let _ = handle.emit(
+                                    "gravai:update-available",
+                                    serde_json::json!({
+                                        "version": update.version,
+                                        "current_version": update.current_version,
+                                        "body": update.body,
+                                    }),
+                                );
+                            }
+                            Ok(None) => tracing::info!("Gravai is up to date"),
+                            Err(e) => tracing::warn!("Update check failed: {e}"),
+                        },
+                        Err(e) => tracing::warn!("Updater not available: {e}"),
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -495,6 +525,10 @@ pub fn run() {
             commands::delete_session_audio,
             commands::delete_full_session,
             commands::save_realtime_transcript,
+            // Updates
+            commands::get_app_version,
+            commands::check_for_update,
+            commands::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gravai");

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { currentPage, healthStatus } from "./lib/store";
+  import { currentPage, healthStatus, addAlert } from "./lib/store";
   import { invoke, listen } from "./lib/tauri";
   import { onMount, onDestroy } from "svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -36,6 +36,7 @@
   let showOnboarding = $state(false);
   let settingsOpen = $state(false);
   let unlistenNavigate: (() => void) | null = null;
+  let unlistenUpdate: (() => void) | null = null;
 
   onMount(async () => {
     if (!localStorage.getItem("gravai_onboarded")) {
@@ -48,9 +49,18 @@
     unlistenNavigate = await listen("gravai:navigate", (e: any) => {
       if (e.payload) currentPage.set(e.payload);
     });
+    unlistenUpdate = await listen("gravai:update-available", (e: any) => {
+      const v = e.payload?.version;
+      addAlert({
+        level: "info",
+        message: `Gravai v${v} is available — go to Settings to update`,
+        actions: [{ label: "Settings", handler: () => currentPage.set("settings") }],
+        dismissable: true,
+      });
+    });
   });
 
-  onDestroy(() => { unlistenNavigate?.(); });
+  onDestroy(() => { unlistenNavigate?.(); unlistenUpdate?.(); });
 
   function setPage(id: string) {
     currentPage.set(id);

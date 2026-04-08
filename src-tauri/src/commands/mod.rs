@@ -109,3 +109,41 @@ pub async fn get_health_report(
     let report = gravai_core::preflight::run_preflight_checks(&config);
     serde_json::to_value(&report).map_err(|e| e.to_string())
 }
+
+/// Return the current app version from Cargo.toml (compiled in).
+#[tauri::command]
+pub async fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Check GitHub releases for a newer version via the Tauri updater plugin.
+#[tauri::command]
+pub async fn check_for_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(serde_json::json!({
+            "available": true,
+            "version": update.version,
+            "current_version": update.current_version,
+            "body": update.body,
+        })),
+        Ok(None) => Ok(serde_json::json!({ "available": false })),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Download and install the latest update, then restart the app.
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update
+            .download_and_install(|_, _| {}, || {})
+            .await
+            .map_err(|e| e.to_string())?;
+        app.restart();
+    }
+    Ok(())
+}

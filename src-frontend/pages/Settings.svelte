@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { invoke } from "../lib/tauri";
   import { healthStatus, currentPage } from "../lib/store";
   import Onboarding from "../components/Onboarding.svelte";
@@ -12,7 +12,28 @@
   function runWizard() { showWizard = true; }
   let perfInfo = $state<any>(null);
 
-  onMount(async () => { await loadHealth(); await loadRawConfig(); await loadPerf(); });
+  // Updates state
+  let currentVersion = $state("");
+  let autoCheck = $state(true);
+  let checking = $state(false);
+  let installing = $state(false);
+  let updateInfo = $state<any>(null);
+  let unlistenUpdate: (() => void) | null = null;
+
+  onMount(async () => {
+    await loadHealth();
+    await loadRawConfig();
+    await loadPerf();
+    await loadUpdatesConfig();
+    try { currentVersion = await invoke("get_app_version"); } catch (_) {}
+    // Listen for auto-check result fired at startup
+    const { listen } = await import("../lib/tauri");
+    unlistenUpdate = await listen("gravai:update-available", (e: any) => {
+      updateInfo = { ...e.payload, available: true };
+    });
+  });
+
+  onDestroy(() => { unlistenUpdate?.(); });
 
   async function loadHealth() {
     try {
@@ -54,6 +75,29 @@
   }
 
   function goTo(page: string) { currentPage.set(page); }
+
+  async function loadUpdatesConfig() {
+    try {
+      const cfg: any = await invoke("get_config");
+      autoCheck = cfg.updates?.auto_check ?? true;
+    } catch (_) {}
+  }
+
+  async function saveAutoCheck() {
+    try { await invoke("update_config", { patch: { updates: { auto_check: autoCheck } } }); } catch (_) {}
+  }
+
+  async function checkUpdate() {
+    checking = true;
+    updateInfo = null;
+    try { updateInfo = await invoke("check_for_update"); } catch (e: any) { updateInfo = { error: String(e) }; }
+    checking = false;
+  }
+
+  async function doInstall() {
+    installing = true;
+    try { await invoke("install_update"); } catch (e: any) { saveMsg = `Update failed: ${e}`; setTimeout(() => saveMsg = "", 4000); installing = false; }
+  }
 </script>
 
 {#if showWizard}
@@ -131,6 +175,36 @@
   </div>
 </div>
 
+<!-- Updates -->
+<div class="card">
+  <div class="card-header">
+    App Updates
+    {#if currentVersion}<span class="update-version-badge">v{currentVersion}</span>{/if}
+  </div>
+  <div class="updates-row">
+    <label class="update-toggle-label">
+      <input type="checkbox" bind:checked={autoCheck} onchange={saveAutoCheck} />
+      Auto-check for updates on launch
+    </label>
+    <button class="btn btn-xs btn-accent" onclick={checkUpdate} disabled={checking}>
+      {checking ? "Checking…" : "Check Now"}
+    </button>
+  </div>
+  {#if updateInfo?.available}
+    <div class="update-banner">
+      <span class="update-banner-title">🎉 v{updateInfo.version} available</span>
+      {#if updateInfo.body}<p class="update-notes">{updateInfo.body}</p>{/if}
+      <button class="btn btn-xs btn-accent" onclick={doInstall} disabled={installing}>
+        {installing ? "Installing…" : "Download & Install"}
+      </button>
+    </div>
+  {:else if updateInfo && !updateInfo.available}
+    <p class="update-ok">✓ You're up to date</p>
+  {:else if updateInfo?.error}
+    <p class="update-error">⚠ {updateInfo.error}</p>
+  {/if}
+</div>
+
 <!-- Advanced JSON -->
 <details class="card collapsible">
   <summary class="card-header">Advanced: Raw Config JSON</summary>
@@ -153,4 +227,14 @@
   .settings-link-info strong { font-size: 13px; color: var(--text-primary); }
   .settings-link-info span { font-size: 11px; color: var(--text-tertiary); }
   .settings-link-arrow { color: var(--text-tertiary); font-size: 16px; }
+
+  /* Updates card */
+  .update-version-badge { font-size: 11px; font-weight: 400; color: var(--text-tertiary); margin-left: 8px; }
+  .updates-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0 4px; gap: 12px; }
+  .update-toggle-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+  .update-banner { margin-top: 10px; padding: 12px 14px; background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary)); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .update-banner-title { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .update-notes { font-size: 12px; color: var(--text-secondary); margin: 0; white-space: pre-wrap; max-height: 80px; overflow-y: auto; }
+  .update-ok { margin: 8px 0 0; font-size: 12px; color: var(--success); }
+  .update-error { margin: 8px 0 0; font-size: 12px; color: var(--danger); }
 </style>
