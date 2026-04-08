@@ -55,8 +55,8 @@
       liveUtterances.set([]);
       liveSummary.set(null);
 
-      // Update config (fire-and-forget)
-      invoke("update_config", {
+      // Update config before starting — must await so start_session reads the correct settings
+      await invoke("update_config", {
         patch: {
           audio: {
             microphone: { enabled: micEnabled, device_index: selectedMicIndex },
@@ -234,6 +234,9 @@
       exportAutoTranscript = cfg.export?.auto_export_transcript ?? false;
       exportAutoAudio = cfg.export?.auto_export_audio ?? false;
       exportRealtimeSave = cfg.export?.realtime_save ?? true;
+      micEnabled = cfg.audio?.microphone?.enabled ?? true;
+      sysEnabled = cfg.audio?.system_audio?.enabled ?? true;
+      if (cfg.audio?.microphone?.device_index != null) selectedMicIndex = cfg.audio.microphone.device_index;
     } catch (_) {}
     try {
       const ps: any = await invoke("get_presets");
