@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Gravai uses the microphone to record and transcribe meetings.</string>
+    <key>NSScreenRecordingUsageDescription</key>
+    <string>Gravai captures system audio to record and transcribe meetings.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Gravai reads your calendar to detect and name meetings automatically.</string>
+</dict>
+</plist>
