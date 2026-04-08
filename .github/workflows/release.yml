@@ -80,7 +80,7 @@ jobs:
           # 1. Ad-hoc sign the .app bundle
           APP=$(find target/release/bundle/macos -name "*.app" -maxdepth 1 | head -1)
           if [ -n "$APP" ]; then
-            codesign --force --deep --sign - "$APP"
+            codesign --force --deep --sign - --entitlements src-tauri/Entitlements.plist "$APP"
             echo "Ad-hoc signed: $APP"
           fi
 
