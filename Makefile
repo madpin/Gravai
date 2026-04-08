@@ -44,8 +44,16 @@ bundle-app: ## Build .app only (fast, no DMG)
 
 # ── Quality ──────────────────────────────────────────────────
 
-check: ## Check Rust compilation (fast, no codegen)
-	cargo check --workspace
+check: ## Pre-push checks: fmt, clippy, tests, typecheck
+	@echo "── fmt ──────────────────────────────────────────────"
+	cargo fmt --all -- --check
+	@echo "── clippy ───────────────────────────────────────────"
+	cargo clippy --workspace -- -D warnings
+	@echo "── tests ────────────────────────────────────────────"
+	cargo test --workspace --lib
+	@echo "── typecheck ────────────────────────────────────────"
+	pnpm typecheck
+	@echo "✅ All checks passed."
 
 test: ## Run all tests
 	cargo test --workspace --lib
