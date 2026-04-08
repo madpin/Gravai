@@ -541,7 +541,7 @@
   }
   .transcript-panel-body {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
     min-height: 0;
   }
   .sentiment-summary { padding: 8px 14px; display: flex; flex-direction: column; gap: 6px; }

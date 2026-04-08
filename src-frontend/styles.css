@@ -294,9 +294,9 @@ body {
   padding: 8px 0; min-height: 80px; max-height: 320px;
   overflow-y: auto; font-size: 13px;
 }
-/* In the split recording view the parent controls scroll — panel fills its container */
+/* In the split recording view the panel itself scrolls, filling its container */
 .transcript-panel-body .transcript-panel {
-  max-height: none; height: 100%; overflow-y: visible;
+  max-height: none; height: 100%; overflow-y: auto;
 }
 .transcript-line {
   padding: 5px 16px; display: flex; gap: 10px;
