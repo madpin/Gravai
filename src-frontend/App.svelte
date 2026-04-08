@@ -72,8 +72,11 @@
   <div class="app-body">
   <nav class="sidebar">
     <div class="sidebar-header">
-      <h1>Gravai</h1>
-      <span class="subtitle">Audio Intelligence</span>
+      <img src="/icon.png" alt="Gravai" class="app-icon" />
+      <div class="sidebar-header-text">
+        <h1>Gravai</h1>
+        <span class="subtitle">Audio Intelligence</span>
+      </div>
     </div>
     <ul class="nav-list">
       {#each mainPages as page}

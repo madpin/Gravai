@@ -121,8 +121,10 @@ version: ## Bump version: make version V=1.2.3  (omit V to auto-increment patch)
 
 # ── Utility ──────────────────────────────────────────────────
 
-icons: ## Regenerate app icons from source PNG
+icons: ## Regenerate app icons from the waveform design
+	python3 scripts/gen_icon.py /tmp/gravai-icon.png
 	pnpm tauri icon /tmp/gravai-icon.png
+	cp src-tauri/icons/32x32.png public/icon.png
 
 loc: ## Count lines of code
 	@echo "Rust:"
