@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.conf.dev.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

@@ -12,10 +12,10 @@ help: ## Show this help
 # ── Development ──────────────────────────────────────────────
 
 dev: ## Run in development mode (Rust + Vite hot-reload)
-	pnpm tauri dev
+	pnpm tauri:dev
 
 run: ## Build and run the app (debug mode, Vite dev server for frontend)
-	pnpm tauri dev
+	pnpm tauri:dev
 
 run-release: ## Build release app bundle and open it
 	pnpm tauri build || true
@@ -89,8 +89,8 @@ clean: ## Remove all build artifacts
 	cargo clean
 	rm -rf dist node_modules/.vite
 
-clean-data: ## Remove Gravai user data (~/.gravai/)
-	rm -rf ~/.gravai
+clean-data: ## Remove Gravai user data (~/.gravai/ and ~/.gravai-dev/)
+	rm -rf ~/.gravai ~/.gravai-dev
 
 reset: clean clean-data ## Full reset (build artifacts + user data)
 	@echo "✅ Reset complete."

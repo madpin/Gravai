@@ -20,7 +20,7 @@ use std::path::PathBuf;
 pub fn data_dir() -> PathBuf {
     dirs::home_dir()
         .expect("Cannot determine home directory")
-        .join(".gravai")
+        .join(if cfg!(debug_assertions) { ".gravai-dev" } else { ".gravai" })
 }
 
 pub fn config_path() -> PathBuf {
