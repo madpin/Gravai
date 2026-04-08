@@ -85,5 +85,8 @@ indicatif = "0.17"
 # UUID
 uuid = { version = "1", features = ["v4"] }
 
+# Native OS APIs (sandbox-safe alternative to spawning ps/sysctl subprocesses)
+libc = "0.2"
+
 # File I/O for downloads
 futures-util = "0.3"

@@ -2,21 +2,14 @@
 
 use serde::Serialize;
 
-/// Get current process memory usage (RSS) in bytes.
+/// Get current process memory usage (RSS) in bytes via getrusage — sandbox-safe.
 #[cfg(target_os = "macos")]
 pub fn memory_usage_bytes() -> u64 {
-    match std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-        .output()
-    {
-        Ok(output) => {
-            String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .parse::<u64>()
-                .unwrap_or(0)
-                * 1024 // ps reports in KB
-        }
-        Err(_) => 0,
+    unsafe {
+        let mut usage = std::mem::zeroed::<libc::rusage>();
+        libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+        // ru_maxrss is in bytes on macOS (unlike Linux where it's KB)
+        usage.ru_maxrss as u64
     }
 }
 
@@ -25,28 +18,44 @@ pub fn memory_usage_bytes() -> u64 {
     0
 }
 
+// Stores (wall_time, user_cpu_secs, sys_cpu_secs) from the last cpu_usage_pct call.
+#[cfg(target_os = "macos")]
+static PREV_CPU: std::sync::Mutex<Option<(std::time::Instant, f64, f64)>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+fn timeval_secs(tv: &libc::timeval) -> f64 {
+    tv.tv_sec as f64 + tv.tv_usec as f64 / 1_000_000.0
+}
+
 /// Get instantaneous CPU usage of this process as a percentage (macOS only).
-/// Samples ps twice 250ms apart and returns the delta.
+/// Uses getrusage deltas between calls — sandbox-safe, no subprocess.
 #[cfg(target_os = "macos")]
 pub fn cpu_usage_pct() -> f64 {
-    fn sample() -> f64 {
-        match std::process::Command::new("ps")
-            .args(["-o", "%cpu=", "-p", &std::process::id().to_string()])
-            .output()
-        {
-            Ok(output) => String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .parse::<f64>()
-                .unwrap_or(0.0),
-            Err(_) => 0.0,
-        }
+    unsafe {
+        let mut usage = std::mem::zeroed::<libc::rusage>();
+        libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+        let now = std::time::Instant::now();
+        let user = timeval_secs(&usage.ru_utime);
+        let sys = timeval_secs(&usage.ru_stime);
+
+        let mut guard = PREV_CPU.lock().unwrap();
+        let result = if let Some((prev_time, prev_user, prev_sys)) = *guard {
+            let wall = now.duration_since(prev_time).as_secs_f64();
+            if wall > 0.05 {
+                ((user - prev_user + sys - prev_sys) / wall * 100.0)
+                    .max(0.0)
+                    .min(100.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        *guard = Some((now, user, sys));
+        result
     }
-    let a = sample();
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    let b = sample();
-    // ps %cpu is cumulative average; return the point-in-time reading from second sample
-    // For a single-process view the second sample is more current
-    b.max(a)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -54,18 +63,22 @@ pub fn cpu_usage_pct() -> f64 {
     0.0
 }
 
-/// Get total system memory in bytes.
+/// Get total system memory in bytes via sysctl syscall — sandbox-safe.
 #[cfg(target_os = "macos")]
 pub fn total_system_memory() -> u64 {
-    match std::process::Command::new("sysctl")
-        .args(["-n", "hw.memsize"])
-        .output()
-    {
-        Ok(output) => String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse::<u64>()
-            .unwrap_or(0),
-        Err(_) => 0,
+    unsafe {
+        let mut mib = [libc::CTL_HW, libc::HW_MEMSIZE];
+        let mut size: u64 = 0;
+        let mut len = std::mem::size_of::<u64>();
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            2,
+            &mut size as *mut u64 as *mut libc::c_void,
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        );
+        size
     }
 }
 

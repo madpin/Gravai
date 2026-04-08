@@ -147,8 +147,9 @@ jobs:
             ### Installation
             1. Download `Gravai.dmg` and drag Gravai to Applications
             2. **First launch:** macOS will block Gravai because it isn't notarized. To allow it:
-               - **Right-click** `Gravai.app` → **Open** → **Open** — easiest method
-               - Or: try to open normally, then go to **System Settings → Privacy & Security → Open Anyway**
+               - Open normally (double-click), dismiss the warning, then go to **System Settings → Privacy & Security → scroll down → Open Anyway**
+               - Or run in Terminal: `xattr -dr com.apple.quarantine /Applications/Gravai.app`
+               - ⚠️ Right-click → Open no longer bypasses Gatekeeper on macOS Sequoia and later
             3. Gravai will download the Whisper transcription model on first run (~1.5 GB)
 
             ### In-App Updates
