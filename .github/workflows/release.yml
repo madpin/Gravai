@@ -96,21 +96,21 @@ jobs:
             FILENAME=$(basename "$TARGZ")
             URL="https://github.com/madpin/Gravai/releases/download/${TAG}/${FILENAME}"
             cat > latest.json << EOF
-{
-  "version": "${VERSION}",
-  "notes": "See full release notes on GitHub.",
-  "pub_date": "${PUB_DATE}",
-  "platforms": {
-    "darwin-aarch64": { "signature": "${SIGNATURE}", "url": "${URL}" },
-    "darwin-x86_64":  { "signature": "${SIGNATURE}", "url": "${URL}" }
-  }
-}
-EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See full release notes on GitHub.",
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+              "darwin-aarch64": { "signature": "${SIGNATURE}", "url": "${URL}" },
+              "darwin-x86_64":  { "signature": "${SIGNATURE}", "url": "${URL}" }
+            }
+          }
+          EOF
           else
             echo "WARNING: No signed .app.tar.gz found. Was TAURI_SIGNING_PRIVATE_KEY set in secrets?"
             cat > latest.json << EOF
-{ "version": "${VERSION}", "notes": "", "pub_date": "${PUB_DATE}", "platforms": {} }
-EOF
+          { "version": "${VERSION}", "notes": "", "pub_date": "${PUB_DATE}", "platforms": {} }
+          EOF
           fi
 
       - name: Create Release
