@@ -39,15 +39,18 @@ build-release: ## Build optimized release binary
 bundle: ## Build distributable .app + .dmg (needs create-dmg for DMG)
 	pnpm tauri build
 
-bundle-app: ## Build .app only (fast, no DMG)
+bundle-app: ## Build .app only (fast, no DMG) with stable cert-based signing
 	pnpm tauri build --bundles app
+	$(MAKE) sign
 
-sign: ## Re-sign the built .app with the persistent code-signing cert (cert must be in login keychain)
+sign: ## Sign the built .app with cert-based requirements so TCC permissions persist across updates
 	@APP=$$(find target/release/bundle/macos -name "*.app" -maxdepth 1 2>/dev/null | head -1); \
 	if [ -n "$$APP" ]; then \
-		codesign --force --deep --sign "Gravai Developer Certificate" \
+		codesign --force --deep \
+			--sign "Gravai Developer Certificate" \
+			--requirements '= designated => identifier "com.gravai.app" and certificate leaf = H"FEC8D826B9873249819360FDEB415484D47B0283"' \
 			--entitlements src-tauri/Entitlements.plist "$$APP"; \
-		echo "✅ Signed: $$APP"; \
+		echo "✅ Signed with cert-based requirements: $$APP"; \
 	else \
 		echo "❌ No .app found — run make bundle-app first"; \
 	fi

@@ -102,10 +102,13 @@ jobs:
           SIGN_ID="${APPLE_CERTIFICATE:+Gravai Developer Certificate}"
           SIGN_ID="${SIGN_ID:--}"
 
-          # 1. Sign the .app bundle
+          # 1. Sign the .app bundle with explicit cert-based requirements so TCC persists across updates
           APP=$(find target/release/bundle/macos -name "*.app" -maxdepth 1 | head -1)
           if [ -n "$APP" ]; then
-            codesign --force --deep --sign "$SIGN_ID" --entitlements src-tauri/Entitlements.plist "$APP"
+            SIGN_REQS='= designated => identifier "com.gravai.app" and certificate leaf = H"FEC8D826B9873249819360FDEB415484D47B0283"'
+            codesign --force --deep --sign "$SIGN_ID" \
+              --requirements "$SIGN_REQS" \
+              --entitlements src-tauri/Entitlements.plist "$APP"
             echo "Signed ($SIGN_ID): $APP"
           fi
 
