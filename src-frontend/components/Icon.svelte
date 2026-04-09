@@ -152,6 +152,8 @@
       '<polyline points="6,9 12,15 18,9"/>',
     'chevron-right':
       '<polyline points="9,18 15,12 9,6"/>',
+    'chevron-left':
+      '<polyline points="15,18 9,12 15,6"/>',
     'arrow-right':
       '<line x1="5" y1="12" x2="19" y2="12"/>' +
       '<polyline points="12,5 19,12 12,19"/>',

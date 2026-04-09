@@ -103,6 +103,26 @@
   }
 
   let searchTimeout: number;
+
+  let selectedSession = $derived(sessions.find(s => s.id === selectedId) ?? null);
+  let editingSessionTitle = $state(false);
+  let sessionTitleEdit = $state("");
+
+  function startSessionTitleEdit() {
+    sessionTitleEdit = selectedSession?.title ?? "";
+    editingSessionTitle = true;
+  }
+
+  async function saveSessionTitle() {
+    const trimmed = sessionTitleEdit.trim();
+    editingSessionTitle = false;
+    if (!selectedId) return;
+    if (trimmed === (selectedSession?.title ?? "")) return;
+    try {
+      await invoke("rename_session", { sessionId: selectedId, title: trimmed });
+      await load();
+    } catch (_) {}
+  }
 </script>
 
 <style>
@@ -113,6 +133,28 @@
   .filter-body { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; }
   .filter-input { max-width: none; font-size: 11px; }
   .select-compact { min-width: 100px; font-size: 11px; }
+  .archive-detail-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 8px;
+  }
+  .archive-session-title {
+    font-size: 16px; font-weight: 600; color: var(--text-primary);
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .archive-title-input {
+    font-size: 15px; font-weight: 600; flex: 1;
+    background: var(--bg-elevated); border: 1px solid var(--accent-dim);
+    border-radius: var(--radius-sm); color: var(--text-primary);
+    padding: 3px 10px; font-family: inherit;
+  }
+  .title-edit-btn {
+    background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+    padding: 2px 4px; border-radius: 4px;
+    display: flex; align-items: center; flex-shrink: 0;
+  }
+  .title-edit-btn:hover { color: var(--text-secondary); background: var(--bg-secondary); }
 </style>
 
 <div class="page-header"><h2>Archive</h2></div>
@@ -162,6 +204,23 @@
 
   <div class="archive-detail">
     {#if selectedId}
+      <div class="archive-detail-header">
+        {#if editingSessionTitle}
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="archive-title-input"
+            bind:value={sessionTitleEdit}
+            autofocus
+            onblur={saveSessionTitle}
+            onkeydown={(e) => { if (e.key === "Enter") saveSessionTitle(); if (e.key === "Escape") editingSessionTitle = false; }}
+          />
+        {:else}
+          <h3 class="archive-session-title">{selectedSession?.title || selectedId}</h3>
+          <button class="title-edit-btn" onclick={startSessionTitleEdit} title="Rename session" aria-label="Rename session">
+            <Icon name="pencil" size={13}/>
+          </button>
+        {/if}
+      </div>
       <div class="archive-actions">
         <button class="btn btn-xs btn-accent" onclick={summarize} disabled={summaryLoading}>
           {#if summaryLoading}Summarizing...{:else}<Icon name="file-text" size={13}/> Summarize{/if}

@@ -26,12 +26,41 @@ pub fn get_current_events(lead_time_seconds: u32) -> Vec<CalendarEvent> {
         set eventList to {{}}
         tell application "Calendar"
             repeat with cal in calendars
-                set evts to (every event of cal whose start date ≥ (now - 5 * minutes) and start date ≤ windowEnd)
-                repeat with evt in evts
-                    set eventTitle to summary of evt
-                    set eventStart to start date of evt
-                    set eventEnd to end date of evt
-                    set end of eventList to eventTitle & "|" & (eventStart as string) & "|" & (eventEnd as string)
+                -- In-progress events: started before now, not yet ended
+                set inProgress to (every event of cal whose start date ≤ now and end date ≥ now)
+                repeat with evt in inProgress
+                    try
+                        set eventTitle to summary of evt
+                        set eventStart to start date of evt
+                        set eventEnd to end date of evt
+                        set eventNotes to ""
+                        try
+                            set eventNotes to description of evt
+                        end try
+                        set eventLocation to ""
+                        try
+                            set eventLocation to location of evt
+                        end try
+                        set end of eventList to "inprogress|" & eventTitle & "|" & (eventStart as string) & "|" & (eventEnd as string) & "|" & eventNotes & "|" & eventLocation
+                    end try
+                end repeat
+                -- Upcoming events within the look-ahead window
+                set upcoming to (every event of cal whose start date > now and start date ≤ windowEnd)
+                repeat with evt in upcoming
+                    try
+                        set eventTitle to summary of evt
+                        set eventStart to start date of evt
+                        set eventEnd to end date of evt
+                        set eventNotes to ""
+                        try
+                            set eventNotes to description of evt
+                        end try
+                        set eventLocation to ""
+                        try
+                            set eventLocation to location of evt
+                        end try
+                        set end of eventList to "upcoming|" & eventTitle & "|" & (eventStart as string) & "|" & (eventEnd as string) & "|" & eventNotes & "|" & eventLocation
+                    end try
                 end repeat
             end repeat
         end tell
@@ -69,9 +98,28 @@ pub fn get_current_events(_lead_time_seconds: u32) -> Vec<CalendarEvent> {
 }
 
 /// Try to find a matching calendar event for session naming.
+///
+/// Prefers events that are currently in progress (started in the past, not yet
+/// ended) over upcoming events, and further prefers events that contain a Zoom
+/// link in their location or notes.
 pub fn find_meeting_title(lead_time_seconds: u32) -> Option<String> {
     let events = get_current_events(lead_time_seconds);
-    // Return the first event's title if any
+    if events.is_empty() {
+        return None;
+    }
+
+    // Prefer events with a Zoom link (most likely the active Zoom meeting)
+    let zoom_event = events.iter().find(|e| {
+        let loc = e.location.as_deref().unwrap_or("").to_lowercase();
+        let notes = e.notes.as_deref().unwrap_or("").to_lowercase();
+        loc.contains("zoom.us") || notes.contains("zoom.us")
+            || loc.contains("zoommtg://") || notes.contains("zoommtg://")
+    });
+    if let Some(ev) = zoom_event {
+        return Some(ev.title.clone());
+    }
+
+    // Fall back to the first event
     events.first().map(|e| e.title.clone())
 }
 
@@ -81,11 +129,25 @@ fn parse_calendar_output(output: &str) -> Vec<CalendarEvent> {
         return Vec::new();
     }
 
+    // New format: "status|title|start|end|notes|location"
+    // Preserve in-progress events first (they appear first in the output).
     trimmed
         .split("||")
         .filter_map(|entry| {
             let parts: Vec<&str> = entry.split('|').collect();
-            if parts.len() >= 3 {
+            // Minimum: status|title|start|end (4 fields)
+            if parts.len() >= 4 {
+                let notes = parts.get(4).map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from);
+                let location = parts.get(5).map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from);
+                Some(CalendarEvent {
+                    title: parts[1].trim().to_string(),
+                    start_time: parts[2].trim().to_string(),
+                    end_time: parts[3].trim().to_string(),
+                    notes,
+                    location,
+                })
+            } else if parts.len() == 3 {
+                // Backwards-compatible: old format without status prefix
                 Some(CalendarEvent {
                     title: parts[0].trim().to_string(),
                     start_time: parts[1].trim().to_string(),

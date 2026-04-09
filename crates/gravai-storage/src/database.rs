@@ -163,6 +163,15 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// Rename a session — sets the `title` column for the given session ID.
+    pub fn rename_session(&self, session_id: &str, title: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE sessions SET title = ?1 WHERE id = ?2",
+            params![title, session_id],
+        )?;
+        Ok(())
+    }
+
     // -- Utterances --
 
     pub fn insert_utterance(&self, u: &UtteranceRecord) -> Result<i64, rusqlite::Error> {

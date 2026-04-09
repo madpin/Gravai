@@ -126,6 +126,17 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         meetings.first().map(|m| m.app_name.clone())
     };
 
+    // Calendar title is the primary source (Zoom doesn't expose meeting topic in window title).
+    // get_zoom_window_title() is retained as a last-resort fallback but will rarely return
+    // a useful topic since Zoom windows are titled "Zoom Meetings" generically.
+    let session_title = if calendar_title.is_some() {
+        calendar_title.clone()
+    } else if meeting_app.as_deref() == Some("Zoom") {
+        gravai_meeting::detector::get_zoom_window_title()
+    } else {
+        None
+    };
+
     // Store session in DB early — pipelines may insert utterances before this block was reached
     {
         let db_path = gravai_config::data_dir().join("gravai.db");
@@ -135,7 +146,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 started_at: session.started_at.to_rfc3339(),
                 ended_at: None,
                 duration_seconds: None,
-                title: calendar_title.clone(),
+                title: session_title.clone(),
                 meeting_app: meeting_app.clone(),
                 state: "recording".into(),
             };
@@ -615,7 +626,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     Ok(serde_json::json!({
         "id": session_id,
         "state": "recording",
-        "title": calendar_title,
+        "title": session_title,
         "meeting_app": meeting_app,
     }))
 }
@@ -773,6 +784,16 @@ pub async fn list_sessions() -> Result<serde_json::Value, String> {
 pub async fn detect_meetings() -> Result<serde_json::Value, String> {
     let meetings = gravai_meeting::detector::detect_meeting_apps();
     serde_json::to_value(&meetings).map_err(|e| e.to_string())
+}
+
+/// Rename a session — updates the `title` column in the sessions table.
+#[tauri::command]
+pub async fn rename_session(session_id: String, title: String) -> Result<(), String> {
+    let title = title.trim().to_string();
+    let db_path = gravai_config::data_dir().join("gravai.db");
+    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    db.rename_session(&session_id, &title)
+        .map_err(|e| e.to_string())
 }
 
 /// Async task that corrects a batch of utterances via LLM and updates the DB.

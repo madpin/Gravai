@@ -45,6 +45,9 @@
   }
 
   let starting = $state(false);
+  let sessionTitle = $state<string>("");
+  let editingTitle = $state(false);
+  let titleEditValue = $state("");
 
   async function start() {
     if (starting) return;
@@ -70,6 +73,7 @@
       isRecording.set(true); isPaused.set(false);
       currentSessionId.set(result.id); sessionStartTime.set(Date.now());
       lastSessionIdStore.set(result.id);
+      sessionTitle = result.title ?? "";
       startTimer();
       startTranscriptPoll();
       log(`Recording started: ${result.id}${result.title ? " — " + result.title : ""}`);
@@ -90,6 +94,7 @@
       lastSessionIdStore.set(result.id);
       isRecording.set(false); isPaused.set(false);
       currentSessionId.set(null); sessionStartTime.set(null);
+      sessionTitle = "";
       stopTimer(); stopTranscriptPoll();
       vuMic = 0; vuSys = 0;
       dismissedMeetingApps.set(new Set());
@@ -280,6 +285,23 @@
     for (const u of unlisteners) u();
   });
 
+  function startTitleEdit() {
+    titleEditValue = sessionTitle;
+    editingTitle = true;
+  }
+
+  async function saveTitle() {
+    const trimmed = titleEditValue.trim();
+    editingTitle = false;
+    if (trimmed === sessionTitle) return;
+    const sid = $currentSessionId;
+    if (!sid) return;
+    try {
+      await invoke("rename_session", { sessionId: sid, title: trimmed });
+      sessionTitle = trimmed;
+    } catch (e) { log(`Title save error: ${e}`); }
+  }
+
   // Split-screen resize
   let leftWidth = $state(380);
 
@@ -306,7 +328,27 @@
   <!-- Left panel: controls -->
   <div class="recording-left" style="flex: 0 0 {leftWidth}px">
     <div class="page-header">
-      <h2>Recording</h2>
+      {#if $isRecording}
+        <div class="session-title-row">
+          {#if editingTitle}
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              class="session-title-input"
+              bind:value={titleEditValue}
+              autofocus
+              onblur={saveTitle}
+              onkeydown={(e) => { if (e.key === "Enter") saveTitle(); if (e.key === "Escape") editingTitle = false; }}
+            />
+          {:else}
+            <h2 class="session-title-display">{sessionTitle || "Recording"}</h2>
+            <button class="title-edit-btn" onclick={startTitleEdit} title="Rename session" aria-label="Rename session">
+              <Icon name="pencil" size={13}/>
+            </button>
+          {/if}
+        </div>
+      {:else}
+        <h2>Recording</h2>
+      {/if}
       <span class="timer">{timer}</span>
     </div>
 
@@ -570,4 +612,23 @@
     color: var(--accent);
   }
   .sentiment-count { font-size: 10px; color: var(--text-tertiary); margin-left: auto; }
+  .session-title-row {
+    display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  }
+  .session-title-display {
+    font-size: 22px; font-weight: 700;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-title-input {
+    font-size: 18px; font-weight: 600; flex: 1; min-width: 0;
+    background: var(--bg-elevated); border: 1px solid var(--accent-dim);
+    border-radius: var(--radius-sm); color: var(--text-primary);
+    padding: 2px 8px; font-family: inherit;
+  }
+  .title-edit-btn {
+    background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+    padding: 2px 4px; border-radius: 4px; flex-shrink: 0;
+    display: flex; align-items: center;
+  }
+  .title-edit-btn:hover { color: var(--text-secondary); background: var(--bg-secondary); }
 </style>

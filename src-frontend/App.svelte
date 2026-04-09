@@ -38,6 +38,12 @@
 
   let showOnboarding = $state(false);
   let settingsOpen = $state(false);
+  let sidebarCollapsed = $state(localStorage.getItem("gravai_sidebar_collapsed") === "true");
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    localStorage.setItem("gravai_sidebar_collapsed", String(sidebarCollapsed));
+  }
   let unlistenNavigate: (() => void) | null = null;
   let unlistenUpdate: (() => void) | null = null;
   let unlistenDownload: (() => void) | null = null;
@@ -119,13 +125,15 @@
 
 <div class="app">
   <div class="app-body">
-  <nav class="sidebar">
+  <nav class="sidebar" class:collapsed={sidebarCollapsed}>
     <div class="sidebar-header">
-      <img src="/icon.png" alt="Gravai" class="app-icon" />
-      <div class="sidebar-header-text">
-        <h1>Gravai</h1>
-        <span class="subtitle">Audio Intelligence</span>
-      </div>
+      <img src="/icon.png" alt="Gravai" class="app-icon" title={sidebarCollapsed ? "Gravai" : undefined} />
+      {#if !sidebarCollapsed}
+        <div class="sidebar-header-text">
+          <h1>Gravai</h1>
+          <span class="subtitle">Audio Intelligence</span>
+        </div>
+      {/if}
     </div>
     <ul class="nav-list">
       {#each mainPages as page}
@@ -135,22 +143,27 @@
           class:active={$currentPage === page.id}
           role="button"
           tabindex="0"
+          title={sidebarCollapsed ? page.label : undefined}
           onclick={() => setPage(page.id)}
           onkeydown={(e) => { if (e.key === "Enter") setPage(page.id); }}
         >
           <span class="nav-icon"><Icon name={page.icon} size={18} /></span>
-          {page.label}
+          {#if !sidebarCollapsed}{page.label}{/if}
         </li>
       {/each}
 
       <!-- Settings group -->
       <li class="nav-section">
-        <button class="nav-section-toggle" onclick={() => settingsOpen = !settingsOpen}>
+        <button class="nav-section-toggle"
+          title={sidebarCollapsed ? "Settings" : undefined}
+          onclick={() => { if (sidebarCollapsed) { toggleSidebar(); settingsOpen = true; } else settingsOpen = !settingsOpen; }}>
           <span class="nav-icon"><Icon name="settings" size={18} /></span>
-          Settings
-          <span class="nav-section-arrow" class:open={settingsOpen}><Icon name={settingsOpen ? "chevron-down" : "chevron-right"} size={14} /></span>
+          {#if !sidebarCollapsed}
+            Settings
+            <span class="nav-section-arrow" class:open={settingsOpen}><Icon name={settingsOpen ? "chevron-down" : "chevron-right"} size={14} /></span>
+          {/if}
         </button>
-        {#if settingsOpen}
+        {#if settingsOpen && !sidebarCollapsed}
           <ul class="nav-sublist">
             {#each configPages as page}
               <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
@@ -170,6 +183,16 @@
         {/if}
       </li>
     </ul>
+    <div class="sidebar-collapse-btn-wrap">
+      <button
+        class="sidebar-collapse-btn"
+        onclick={toggleSidebar}
+        title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
+        <Icon name={sidebarCollapsed ? "chevron-right" : "chevron-left"} size={14} />
+      </button>
+    </div>
   </nav>
 
   <main class="content">

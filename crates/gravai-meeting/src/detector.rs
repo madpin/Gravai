@@ -168,6 +168,57 @@ pub fn detect_meeting_apps() -> Vec<DetectedMeeting> {
     detected
 }
 
+/// Capture the title of the active Zoom meeting window via AppleScript.
+///
+/// Queries `System Events` for the `zoom.us` process windows and returns the
+/// first window title that is non-empty and does not start with "zoom" (which
+/// filters out the base app window and lobby screen).
+///
+/// Requires Accessibility permission. Returns `None` silently on any failure.
+#[cfg(target_os = "macos")]
+pub fn get_zoom_window_title() -> Option<String> {
+    let script = r#"
+        tell application "System Events"
+            if exists process "zoom.us" then
+                tell process "zoom.us"
+                    set allWindows to every window
+                    repeat with w in allWindows
+                        try
+                            set wTitle to name of w
+                            if wTitle is missing value then
+                                -- skip inaccessible windows
+                            else if wTitle is "" then
+                                -- skip untitled windows
+                            else if wTitle is "Zoom" then
+                                -- skip the base app launcher window
+                            else
+                                return wTitle
+                            end if
+                        end try
+                    end repeat
+                end tell
+            end if
+        end tell
+        return ""
+    "#;
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Guard against AppleScript returning the literal string "missing value"
+    if title.is_empty() || title == "missing value" { None } else { Some(title) }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn get_zoom_window_title() -> Option<String> {
+    None
+}
+
 /// Returns true if `grep_pattern` has more than one UDP socket open.
 ///
 /// Logic (from community research):
@@ -293,9 +344,14 @@ pub async fn run_detection_loop(
     while active.load(std::sync::atomic::Ordering::Relaxed) {
         let (new_meetings, ended) = detector.poll();
         for meeting in new_meetings {
+            let window_title = if meeting.app_name == "Zoom" {
+                get_zoom_window_title()
+            } else {
+                None
+            };
             event_bus.publish(gravai_core::GravaiEvent::MeetingDetected {
                 app_name: meeting.app_name,
-                window_title: None,
+                window_title,
             });
         }
         for app_name in ended {

@@ -56,6 +56,7 @@ svg.icon {
   --border-subtle: #1f1f3a;
   /* Sizing */
   --sidebar-w: 220px;
+  --sidebar-collapsed-w: 52px;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -82,7 +83,18 @@ body {
   display: flex; flex-direction: column;
   user-select: none; -webkit-user-select: none;
   flex-shrink: 0; overflow-y: auto;
+  transition: width 0.22s var(--ease);
 }
+.sidebar.collapsed {
+  width: var(--sidebar-collapsed-w);
+  overflow: hidden;
+}
+.sidebar.collapsed .nav-item {
+  padding: 9px 0; justify-content: center; gap: 0;
+}
+.sidebar.collapsed .nav-icon { width: auto; margin: 0; }
+.sidebar.collapsed .nav-section-toggle { padding: 9px 0; justify-content: center; }
+.sidebar.collapsed .sidebar-header { padding: 16px 0; justify-content: center; }
 .sidebar-header { padding: 20px 18px 14px; display: flex; align-items: center; gap: 10px; }
 .sidebar-header .app-icon { width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0; }
 .sidebar-header-text { display: flex; flex-direction: column; }
@@ -125,6 +137,18 @@ body {
 .nav-section-arrow { margin-left: auto; font-size: 10px; color: var(--text-tertiary); }
 .nav-sublist { list-style: none; padding: 2px 0 0; }
 /* sidebar-footer removed — replaced by StatusBar at bottom of app */
+.sidebar-collapse-btn-wrap {
+  padding: 6px 8px; border-top: 1px solid var(--border-subtle);
+  display: flex; justify-content: flex-end; flex-shrink: 0;
+}
+.sidebar.collapsed .sidebar-collapse-btn-wrap { justify-content: center; }
+.sidebar-collapse-btn {
+  background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+  border-radius: var(--radius-sm); padding: 4px 6px;
+  display: flex; align-items: center; transition: color 0.15s, background 0.15s;
+  font-family: inherit;
+}
+.sidebar-collapse-btn:hover { color: var(--text-secondary); background: var(--bg-secondary); }
 
 /* ===== Content ===== */
 .content {
