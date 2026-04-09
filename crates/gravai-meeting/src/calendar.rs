@@ -112,8 +112,10 @@ pub fn find_meeting_title(lead_time_seconds: u32) -> Option<String> {
     let zoom_event = events.iter().find(|e| {
         let loc = e.location.as_deref().unwrap_or("").to_lowercase();
         let notes = e.notes.as_deref().unwrap_or("").to_lowercase();
-        loc.contains("zoom.us") || notes.contains("zoom.us")
-            || loc.contains("zoommtg://") || notes.contains("zoommtg://")
+        loc.contains("zoom.us")
+            || notes.contains("zoom.us")
+            || loc.contains("zoommtg://")
+            || notes.contains("zoommtg://")
     });
     if let Some(ev) = zoom_event {
         return Some(ev.title.clone());
@@ -137,8 +139,16 @@ fn parse_calendar_output(output: &str) -> Vec<CalendarEvent> {
             let parts: Vec<&str> = entry.split('|').collect();
             // Minimum: status|title|start|end (4 fields)
             if parts.len() >= 4 {
-                let notes = parts.get(4).map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from);
-                let location = parts.get(5).map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from);
+                let notes = parts
+                    .get(4)
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
+                let location = parts
+                    .get(5)
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
                 Some(CalendarEvent {
                     title: parts[1].trim().to_string(),
                     start_time: parts[2].trim().to_string(),

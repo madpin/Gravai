@@ -211,7 +211,11 @@ pub fn get_zoom_window_title() -> Option<String> {
     }
     let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
     // Guard against AppleScript returning the literal string "missing value"
-    if title.is_empty() || title == "missing value" { None } else { Some(title) }
+    if title.is_empty() || title == "missing value" {
+        None
+    } else {
+        Some(title)
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
