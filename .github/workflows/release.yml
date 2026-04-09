@@ -53,6 +53,27 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+            security create-keychain -p "" build.keychain
+            security import /tmp/certificate.p12 -k build.keychain \
+              -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-keychain-settings -lut 21600 build.keychain
+            security list-keychains -d user \
+              -s build.keychain $(security list-keychains -d user | tr -d '"')
+            security unlock-keychain -p "" build.keychain
+            security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+            rm /tmp/certificate.p12
+            echo "✅ Signing certificate imported"
+          else
+            echo "⚠️  APPLE_CERTIFICATE not set — build will be ad-hoc signed"
+          fi
+
       - name: Build Tauri app (with updater signing)
         run: pnpm tauri build
         env:
@@ -77,11 +98,15 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.version }}"
 
-          # 1. Ad-hoc sign the .app bundle
+          # Determine signing identity: use stable cert if available, fall back to ad-hoc
+          SIGN_ID="${APPLE_CERTIFICATE:+Gravai Developer Certificate}"
+          SIGN_ID="${SIGN_ID:--}"
+
+          # 1. Sign the .app bundle
           APP=$(find target/release/bundle/macos -name "*.app" -maxdepth 1 | head -1)
           if [ -n "$APP" ]; then
-            codesign --force --deep --sign - --entitlements src-tauri/Entitlements.plist "$APP"
-            echo "Ad-hoc signed: $APP"
+            codesign --force --deep --sign "$SIGN_ID" --entitlements src-tauri/Entitlements.plist "$APP"
+            echo "Signed ($SIGN_ID): $APP"
           fi
 
           # 2. Recreate DMG from the signed .app so users don't get "damaged" error.
@@ -92,7 +117,7 @@ jobs:
           ln -s /Applications "$STAGING/Applications"
           NEW_DMG="target/release/bundle/dmg/Gravai_${VERSION}_aarch64.dmg"
           hdiutil create -volname "Gravai" -srcfolder "$STAGING" -ov -format UDZO "$NEW_DMG"
-          codesign --force --sign - "$NEW_DMG"
+          codesign --force --sign "$SIGN_ID" "$NEW_DMG"
           rm -rf "$STAGING"
           echo "Rebuilt DMG from signed .app: $NEW_DMG"
 

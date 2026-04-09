@@ -41,7 +41,7 @@
     "longDescription": "Gravai captures, transcribes, and summarizes your meetings locally with on-device AI. No cloud, no bots, no data leaving your Mac.",
     "macOS": {
       "entitlements": "Entitlements.plist",
-      "signingIdentity": null,
+      "signingIdentity": "Gravai Developer Certificate",
       "minimumSystemVersion": "13.0",
       "frameworks": [],
       "providerShortName": null

@@ -42,6 +42,16 @@ bundle: ## Build distributable .app + .dmg (needs create-dmg for DMG)
 bundle-app: ## Build .app only (fast, no DMG)
 	pnpm tauri build --bundles app
 
+sign: ## Re-sign the built .app with the persistent code-signing cert (cert must be in login keychain)
+	@APP=$$(find target/release/bundle/macos -name "*.app" -maxdepth 1 2>/dev/null | head -1); \
+	if [ -n "$$APP" ]; then \
+		codesign --force --deep --sign "Gravai Developer Certificate" \
+			--entitlements src-tauri/Entitlements.plist "$$APP"; \
+		echo "✅ Signed: $$APP"; \
+	else \
+		echo "❌ No .app found — run make bundle-app first"; \
+	fi
+
 # ── Quality ──────────────────────────────────────────────────
 
 # Set CHECK_VERBOSE=1 for section banners and full Cargo progress (e.g. make check CHECK_VERBOSE=1)
@@ -129,15 +139,18 @@ reset: clean clean-data ## Full reset (build artifacts + user data)
 
 # ── Versioning ───────────────────────────────────────────────
 
-version: ## Bump version: make version V=1.2.3  (omit V to auto-increment patch)
-	@if [ -z "$(V)" ]; then \
+version: ## Bump version: make version V=1.2.3  (omit V to auto-increment patch; runs make check first)
+	@if [ -z "$(SKIP_VERSION_CHECK)" ]; then \
+		$(MAKE) check || exit 1; \
+	fi; \
+	if [ -z "$(V)" ]; then \
 		CURRENT=$$(grep '^version' Cargo.toml | head -1 | perl -pe 's/version = "(.*)"/$$1/; chomp'); \
 		MAJOR=$$(echo $$CURRENT | cut -d. -f1); \
 		MINOR=$$(echo $$CURRENT | cut -d. -f2); \
 		PATCH=$$(echo $$CURRENT | cut -d. -f3); \
 		NEW_V="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
 		echo "Auto-incrementing patch: $$CURRENT → $$NEW_V"; \
-		$(MAKE) version V=$$NEW_V; \
+		$(MAKE) version V=$$NEW_V SKIP_VERSION_CHECK=1; \
 	else \
 		echo "Bumping version to $(V)..."; \
 		perl -i -pe 's/^version = ".*"/version = "$(V)"/' Cargo.toml; \
