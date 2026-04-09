@@ -46,7 +46,7 @@
   <h2>Storage</h2>
   <div class="header-actions">
     <button class="btn btn-xs btn-ghost" onclick={load}>Refresh</button>
-    {#if actionMsg}<span style="font-size:11px;color:var(--success)">{actionMsg}</span>{/if}
+    {#if actionMsg}<span class="action-msg">{actionMsg}</span>{/if}
   </div>
 </div>
 

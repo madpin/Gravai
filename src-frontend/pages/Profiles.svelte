@@ -134,7 +134,7 @@
     </div>
 
     <!-- Transcription -->
-    <div class="card-header" style="border-top:1px solid var(--border-subtle)">Transcription</div>
+    <div class="card-header section">Transcription</div>
     <div class="settings-grid">
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Engine</span></div>
         <select class="select" bind:value={e.trans_engine}><option value="whisper">Whisper</option><option value="http">External HTTP</option></select></div>
@@ -145,7 +145,7 @@
     </div>
 
     <!-- VAD -->
-    <div class="card-header" style="border-top:1px solid var(--border-subtle)">Voice Activity Detection</div>
+    <div class="card-header section">Voice Activity Detection</div>
     <div class="settings-grid">
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Engine</span></div>
         <select class="select" bind:value={e.vad_engine}><option value="webrtc">WebRTC</option><option value="silero">Silero</option></select></div>
@@ -155,7 +155,7 @@
     </div>
 
     <!-- Features -->
-    <div class="card-header" style="border-top:1px solid var(--border-subtle)">Features</div>
+    <div class="card-header section">Features</div>
     <div class="settings-grid">
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Echo Suppression</span></div><label class="switch"><input type="checkbox" bind:checked={e.echo_enabled} /><span class="switch-slider"></span></label></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Meeting Detection</span></div><label class="switch"><input type="checkbox" bind:checked={e.meeting_enabled} /><span class="switch-slider"></span></label></div>
@@ -164,7 +164,7 @@
     </div>
 
     <!-- LLM -->
-    <div class="card-header" style="border-top:1px solid var(--border-subtle)">AI / LLM</div>
+    <div class="card-header section">AI / LLM</div>
     <div class="settings-grid">
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Provider</span></div>
         <select class="select" bind:value={e.llm_provider}><option value="ollama">Ollama</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div>
@@ -173,18 +173,18 @@
     </div>
 
     <!-- Export -->
-    <div class="card-header" style="border-top:1px solid var(--border-subtle)">Export</div>
+    <div class="card-header section">Export</div>
     <div class="settings-grid">
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Auto-Export Transcript</span></div><label class="switch"><input type="checkbox" bind:checked={e.auto_export_transcript} /><span class="switch-slider"></span></label></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Auto-Export Audio</span></div><label class="switch"><input type="checkbox" bind:checked={e.auto_export_audio} /><span class="switch-slider"></span></label></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Transcript Folder</span></div>
-        <div style="display:flex;gap:6px;align-items:center"><input class="input" bind:value={e.transcript_folder} placeholder="Default" style="max-width:180px" /><button class="btn btn-xs btn-ghost" onclick={async () => { const s = await openDialog({ directory: true }); if (s) e.transcript_folder = s as string; }}>Browse</button></div></div>
+        <div class="folder-row"><input class="input folder-input" bind:value={e.transcript_folder} placeholder="Default" /><button class="btn btn-xs btn-ghost" onclick={async () => { const s = await openDialog({ directory: true }); if (s) e.transcript_folder = s as string; }}>Browse</button></div></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Audio Folder</span></div>
-        <div style="display:flex;gap:6px;align-items:center"><input class="input" bind:value={e.audio_folder} placeholder="Default" style="max-width:180px" /><button class="btn btn-xs btn-ghost" onclick={async () => { const s = await openDialog({ directory: true }); if (s) e.audio_folder = s as string; }}>Browse</button></div></div>
+        <div class="folder-row"><input class="input folder-input" bind:value={e.audio_folder} placeholder="Default" /><button class="btn btn-xs btn-ghost" onclick={async () => { const s = await openDialog({ directory: true }); if (s) e.audio_folder = s as string; }}>Browse</button></div></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Real-Time Auto-Save</span><span class="setting-desc">Save transcript every 30s (crash-safe)</span></div><label class="switch"><input type="checkbox" bind:checked={e.realtime_save} /><span class="switch-slider"></span></label></div>
     </div>
 
-    <div class="card-footer" style="gap:6px">
+    <div class="card-footer">
       <button class="btn btn-xs btn-accent" onclick={saveEdit}>Save Profile</button>
       <button class="btn btn-xs btn-ghost" onclick={cancelEdit}>Cancel</button>
     </div>
@@ -197,11 +197,11 @@
     <div class="card" class:active-card={activeId === id}>
       <div class="card-header">
         {p.name}
-        {#if activeId === id}<span class="card-tag" style="background:var(--accent-glow);color:var(--accent)">Active</span>{/if}
+        {#if activeId === id}<span class="card-tag card-tag-active">Active</span>{/if}
       </div>
       <div class="card-body">
         <p>{p.description}</p>
-        <div style="margin-top:6px">
+        <div class="tags-row">
           {#if p.transcription_model}<span class="card-tag">Whisper: {p.transcription_model}</span>{/if}
           {#if p.transcription_language}<span class="card-tag">Lang: {p.transcription_language}</span>{/if}
           {#if p.diarization_enabled}<span class="card-tag">Diarization</span>{/if}
@@ -218,3 +218,7 @@
     </div>
   {/each}
 </div>
+
+<style>
+  .folder-input { max-width: 180px; }
+</style>

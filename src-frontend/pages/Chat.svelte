@@ -133,7 +133,7 @@
 
   <div class="conversation-bar">
     <select
-      class="conv-select"
+      class="select conv-select"
       value={currentConversationId ?? ""}
       onchange={(e) => selectConversation((e.target as HTMLSelectElement).value || null)}
     >
@@ -144,7 +144,7 @@
     </select>
     <button class="btn btn-sm" onclick={newChat} title="Start a new conversation">+ New</button>
     <button
-      class="btn btn-sm btn-danger"
+      class="btn btn-sm btn-ghost btn-danger"
       onclick={deleteConversation}
       disabled={!currentConversationId}
       title="Delete this conversation"
@@ -217,15 +217,11 @@
 
   .conversation-bar { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
   .conv-select {
-    flex: 1; background: var(--bg-elevated); color: var(--text-primary);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 4px 8px; font-size: 12px; cursor: pointer; outline: none;
+    flex: 1;
+    min-width: unset;
     max-width: 360px;
+    padding: 4px 8px;
   }
-  .conv-select:focus { border-color: var(--accent); }
-  .btn-sm { padding: 4px 10px; font-size: 12px; }
-  .btn-danger { color: var(--danger, #f87171); }
-  .btn-danger:not(:disabled):hover { background: var(--danger, #f87171); color: #fff; }
 
   .chat-container { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }

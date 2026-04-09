@@ -156,7 +156,7 @@
 <div class="page-header">
   <h2>Settings</h2>
   <div class="header-actions">
-    {#if saveMsg}<span style="font-size:11px;color:var(--success)">{saveMsg}</span>{/if}
+    {#if saveMsg}<span class="action-msg">{saveMsg}</span>{/if}
     <button class="btn btn-xs btn-ghost" onclick={importConfig}>Import</button>
     <button class="btn btn-xs btn-ghost" onclick={exportConfig}>Export</button>
     <button class="btn btn-xs btn-ghost" onclick={runWizard}>🧙 Setup Wizard</button>
@@ -306,7 +306,7 @@
           <span class="setting-desc">Leave empty to use the main LLM model</span>
           <input
             type="text"
-            class="setting-input"
+            class="input"
             bind:value={corrModel}
             placeholder="e.g. llama3.2:3b  (empty = use main model)"
           />
@@ -317,7 +317,7 @@
             data-tooltip="How many new utterances to collect before triggering a correction call. Larger batches give the LLM more context (better quality) but introduce more latency. Smaller batches are faster but may miss cross-sentence patterns. Recommended: 3–6."
           >Batch size</span>
           <span class="setting-desc">Utterances collected per correction call</span>
-          <input type="number" class="setting-input setting-input-sm" bind:value={corrBatchSize} min="1" max="20" />
+          <input type="number" class="input input-narrow" bind:value={corrBatchSize} min="1" max="20" />
         </label>
         <label class="setting-field">
           <span
@@ -325,7 +325,7 @@
             data-tooltip="After the last utterance arrives, wait this many seconds before sending the batch — so a quick burst of speech is grouped into one call instead of many. If the batch size is reached first, correction fires immediately regardless of this timer."
           >Debounce (s)</span>
           <span class="setting-desc">Seconds to wait after the last utterance</span>
-          <input type="number" class="setting-input setting-input-sm" bind:value={corrDebounce} min="1" max="60" />
+          <input type="number" class="input input-narrow" bind:value={corrDebounce} min="1" max="60" />
         </label>
       </div>
 
@@ -361,7 +361,7 @@
     {#if corrEnabled}
       <button class="btn btn-xs btn-ghost" onclick={() => goTo("knowledge")} title="Add names, projects, and jargon that guide corrections">Manage Knowledge Base →</button>
     {/if}
-    {#if corrSaveMsg}<span class="corr-save-msg">{corrSaveMsg}</span>{/if}
+    {#if corrSaveMsg}<span class="action-msg">{corrSaveMsg}</span>{/if}
   </div>
 </div>
 
@@ -413,21 +413,6 @@
     flex-direction: column;
     gap: 3px;
   }
-  .setting-input {
-    background: var(--input-bg, #2a2a2a);
-    border: 1px solid var(--border, #333);
-    border-radius: 4px;
-    padding: 5px 8px;
-    color: var(--text-primary, #eee);
-    font-size: 12px;
-    font-family: inherit;
-    margin-top: 4px;
-  }
-  .setting-input:focus {
-    outline: none;
-    border-color: var(--accent, #7c6cff);
-  }
-  .setting-input-sm { width: 80px; }
   .corr-prompt-row {
     display: flex;
     justify-content: space-between;
@@ -436,7 +421,6 @@
   }
   .corr-reset-btn { margin-top: 2px; flex-shrink: 0; }
   .corr-prompt-editor { margin: 0 16px 4px; }
-  .corr-save-msg { font-size: 11px; color: var(--success); }
   .corr-prompt-hint {
     margin: 2px 16px 0;
     font-size: 11px;

@@ -94,15 +94,25 @@
   let searchTimeout: number;
 </script>
 
+<style>
+  .search-row { display: flex; gap: 4px; }
+  .search-input { max-width: none; flex: 1; }
+  .select-mode { min-width: 90px; font-size: 11px; padding: 4px 8px; }
+  .filter-summary { font-size: 11px; color: var(--text-tertiary); cursor: pointer; }
+  .filter-body { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; }
+  .filter-input { max-width: none; font-size: 11px; }
+  .select-compact { min-width: 100px; font-size: 11px; }
+</style>
+
 <div class="page-header"><h2>Archive</h2></div>
 
 <div class="archive-layout">
   <div class="archive-sidebar">
     <!-- Search bar -->
-    <div style="display:flex;gap:4px">
-      <input class="input" style="max-width:none;flex:1" placeholder="Search transcripts..." bind:value={searchQuery}
+    <div class="search-row">
+      <input class="input search-input" placeholder="Search transcripts..." bind:value={searchQuery}
         oninput={() => { clearTimeout(searchTimeout); searchTimeout = window.setTimeout(search, 400); }} />
-      <select class="select" style="min-width:90px;font-size:10px" bind:value={searchMode} onchange={search}>
+      <select class="select select-mode" bind:value={searchMode} onchange={search}>
         <option value="keyword">Keyword</option>
         <option value="semantic">Semantic</option>
         <option value="hybrid">Hybrid</option>
@@ -111,11 +121,11 @@
 
     <!-- Filters -->
     <details class="filter-panel">
-      <summary style="font-size:11px;color:var(--text-tertiary);cursor:pointer">Filters</summary>
-      <div style="display:flex;flex-direction:column;gap:4px;padding:6px 0">
-        <input class="input" style="max-width:none;font-size:11px" type="date" bind:value={filterDateFrom} onchange={load} />
-        <input class="input" style="max-width:none;font-size:11px" type="date" bind:value={filterDateTo} onchange={load} />
-        <input class="input" style="max-width:none;font-size:11px" placeholder="Meeting app..." bind:value={filterApp} onchange={load} />
+      <summary class="filter-summary">Filters</summary>
+      <div class="filter-body">
+        <input class="input filter-input" type="date" bind:value={filterDateFrom} onchange={load} />
+        <input class="input filter-input" type="date" bind:value={filterDateTo} onchange={load} />
+        <input class="input filter-input" placeholder="Meeting app..." bind:value={filterApp} onchange={load} />
       </div>
     </details>
 
@@ -146,11 +156,11 @@
           {summaryLoading ? "Summarizing..." : "📝 Summarize"}
         </button>
         <button class="btn btn-xs btn-ghost" onclick={exportMd}>📄 Markdown</button>
-        <select class="select" style="min-width:100px;font-size:11px" bind:value={exportFormat}>
+        <select class="select select-compact" bind:value={exportFormat}>
           {#each exportFormats as f}<option value={f.id}>{f.label}</option>{/each}
         </select>
         <button class="btn btn-xs btn-ghost" onclick={exportAudio}>🔊 Export Audio</button>
-        {#if exportMsg}<span style="font-size:11px;color:var(--success)">{exportMsg}</span>{/if}
+        {#if exportMsg}<span class="action-msg">{exportMsg}</span>{/if}
       </div>
     {/if}
 

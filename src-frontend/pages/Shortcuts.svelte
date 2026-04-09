@@ -88,7 +88,7 @@
     <tbody>
       {#each Object.entries(bindings) as [actionId, b]}
         <tr>
-          <td style="font-family: monospace; font-size: 11px; color: var(--text-tertiary)">{actionId}</td>
+          <td class="action-id-cell">{actionId}</td>
           <td>{b.description}</td>
           <td>
             <input
@@ -102,17 +102,17 @@
             />
           </td>
           <td>
-            <label class="toggle-label" style="min-width:auto">
+            <label class="toggle-label">
               <input type="checkbox" class="toggle" checked={b.is_global} onchange={() => toggleGlobal(actionId)} />
               {b.is_global ? "Global" : "Local"}
             </label>
           </td>
-          <td style="display:flex;gap:4px">
+          <td class="action-btns-cell">
             <button class="btn btn-xs btn-ghost" onclick={() => { const el = document.getElementById(`shortcut-${actionId}`); el?.focus(); }}>
               Record
             </button>
             {#if saveStatus[actionId]}
-              <span style="font-size:10px;color:var(--text-tertiary)">{saveStatus[actionId]}</span>
+              <span class="save-status-text">{saveStatus[actionId]}</span>
             {/if}
           </td>
         </tr>
@@ -122,6 +122,9 @@
 </div>
 
 <style>
+  .action-id-cell { font-family: "SF Mono", monospace; font-size: 11px; color: var(--text-tertiary); }
+  .action-btns-cell { display: flex; gap: 4px; align-items: center; }
+  .save-status-text { font-size: 10px; color: var(--text-tertiary); }
   .key-input.recording {
     border-color: var(--danger) !important;
     animation: pulse-border 1s infinite;

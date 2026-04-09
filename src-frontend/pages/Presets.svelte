@@ -147,13 +147,13 @@
       </div>
       <div class="setting-row">
         <div class="setting-info"><span class="setting-label">Output Folder</span><span class="setting-desc">Empty = default</span></div>
-        <div style="display:flex;gap:6px;align-items:center">
-          <input class="input" bind:value={editOutputFolder} placeholder="Default" style="max-width:180px" />
+        <div class="folder-row">
+          <input class="input folder-input" bind:value={editOutputFolder} placeholder="Default" />
           <button class="btn btn-xs btn-ghost" onclick={pickFolder}>Browse</button>
         </div>
       </div>
     </div>
-    <div class="card-footer" style="gap:6px">
+    <div class="card-footer">
       <button class="btn btn-xs btn-accent" onclick={saveEdit}>Save</button>
       <button class="btn btn-xs btn-ghost" onclick={cancelEdit}>Cancel</button>
     </div>
@@ -166,11 +166,11 @@
     <div class="card" class:active-card={activeId === id}>
       <div class="card-header">
         {p.name}
-        {#if activeId === id}<span class="card-tag" style="background:var(--accent-glow);color:var(--accent)">Active</span>{/if}
+        {#if activeId === id}<span class="card-tag card-tag-active">Active</span>{/if}
       </div>
       <div class="card-body">
         <p>{p.description}</p>
-        <div style="margin-top:6px">
+        <div class="tags-row">
           <span class="card-tag">{p.mic_enabled ? "🎤 Mic" : "🎤 Off"}</span>
           <span class="card-tag">{p.sys_enabled ? "💻 System" : "💻 Off"}</span>
           <span class="card-tag">{p.sample_rate / 1000}kHz</span>
@@ -189,3 +189,7 @@
     </div>
   {/each}
 </div>
+
+<style>
+  .folder-input { max-width: 180px; }
+</style>

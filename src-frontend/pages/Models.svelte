@@ -100,7 +100,7 @@
 <div class="page-header">
   <h2>Models</h2>
   <div class="header-actions">
-    {#if actionMsg}<span style="font-size:11px;color:var(--success)">{actionMsg}</span>{/if}
+    {#if actionMsg}<span class="action-msg">{actionMsg}</span>{/if}
   </div>
 </div>
 <p class="page-desc">
@@ -120,13 +120,13 @@
           <div class="model-name">
             ggml-{m.id}
             {#if activeModel === m.id}
-              <span class="card-tag" style="background:var(--accent-glow);color:var(--accent)">Active{#if activeProfileName} via {activeProfileName}{/if}</span>
+              <span class="card-tag card-tag-active">Active{#if activeProfileName} via {activeProfileName}{/if}</span>
             {/if}
           </div>
           <div class="model-desc">
             {m.description}
             {#if activeModel === m.id && activeProfileName}
-              <span style="color:var(--text-tertiary)"> — Set by profile <button class="btn-link" onclick={() => currentPage.set("profiles")}>{activeProfileName}</button></span>
+              <span class="model-profile-note"> — Set by profile <button class="btn-link" onclick={() => currentPage.set("profiles")}>{activeProfileName}</button></span>
             {/if}
           </div>
         </div>
@@ -148,13 +148,13 @@
 
         <div class="model-actions">
           {#if downloading[m.id]}
-            <span style="font-size:11px;color:var(--text-tertiary)">Downloading...</span>
+            <span class="model-status-muted">Downloading...</span>
           {:else if m.corrupted}
-            <span style="font-size:11px;color:var(--danger)">❌ Corrupted</span>
+            <span class="model-status-danger">❌ Corrupted</span>
             <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
             <button class="btn btn-xs btn-accent" onclick={() => { deleteModel(m.id).then(() => download(m.id)); }}>Re-download</button>
           {:else if m.downloaded}
-            <span style="font-size:11px;color:var(--success)">✓ Ready</span>
+            <span class="model-status-ok">✓ Ready</span>
             {#if activeModel !== m.id}
               <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
             {/if}
@@ -186,9 +186,9 @@
         </div>
         <div class="model-actions">
           {#if silero.downloaded}
-            <span style="font-size:11px;color:var(--success)">✓ Ready</span>
+            <span class="model-status-ok">✓ Ready</span>
           {:else}
-            <span style="font-size:11px;color:var(--text-tertiary)">Downloads on first use</span>
+            <span class="model-status-muted">Downloads on first use</span>
           {/if}
         </div>
       </div>
@@ -224,9 +224,9 @@
           </div>
           <div class="model-actions">
             {#if downloading[m.id]}
-              <span style="font-size:11px;color:var(--text-tertiary)">Downloading...</span>
+              <span class="model-status-muted">Downloading...</span>
             {:else if m.downloaded}
-              <span style="font-size:11px;color:var(--success)">✓ Ready</span>
+              <span class="model-status-ok">✓ Ready</span>
               <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
             {:else}
               <button class="btn btn-xs btn-accent" onclick={() => download(m.id)}>Download</button>
@@ -241,7 +241,7 @@
 <!-- Semantic Search / Embedding Models -->
 <div class="card">
   <div class="card-header">Semantic Search Models</div>
-  <p style="font-size:11px;color:var(--text-tertiary);padding:8px 16px 4px">
+  <p class="card-note">
     Used to generate vector embeddings for Ask Gravai and semantic search.
     After switching models, re-embed sessions via the Search tab.
     <strong>Bag-of-words</strong> is always available (no download needed).
@@ -253,7 +253,7 @@
         <div class="model-name">
           bag-of-words
           {#if activeEmbeddingModel === "bag-of-words"}
-            <span class="card-tag" style="background:var(--accent-glow);color:var(--accent)">Active</span>
+            <span class="card-tag card-tag-active">Active</span>
           {/if}
         </div>
         <div class="model-desc">Built-in hash-based embedder — no download, fast, lower quality</div>
@@ -261,7 +261,7 @@
       <div class="model-status"><span class="model-size">Built-in</span></div>
       <div class="model-actions">
         {#if activeEmbeddingModel === "bag-of-words"}
-          <span style="font-size:11px;color:var(--success)">✓ Active</span>
+          <span class="model-status-ok">✓ Active</span>
         {:else}
           <button class="btn btn-xs btn-accent" onclick={() => setActiveEmbedding("bag-of-words")}>Set Active</button>
         {/if}
@@ -274,7 +274,7 @@
           <div class="model-name">
             {m.id}
             {#if activeEmbeddingModel === m.id}
-              <span class="card-tag" style="background:var(--accent-glow);color:var(--accent)">Active</span>
+              <span class="card-tag card-tag-active">Active</span>
             {/if}
           </div>
           <div class="model-desc">
@@ -296,11 +296,11 @@
         </div>
         <div class="model-actions">
           {#if downloading[m.id]}
-            <span style="font-size:11px;color:var(--text-tertiary)">Downloading...</span>
+            <span class="model-status-muted">Downloading...</span>
           {:else if m.downloaded}
-            <span style="font-size:11px;color:var(--success)">✓ Ready</span>
+            <span class="model-status-ok">✓ Ready</span>
             {#if activeEmbeddingModel === m.id}
-              <span style="font-size:11px;color:var(--accent)">Active</span>
+              <span class="model-status-active">Active</span>
             {:else}
               <button class="btn btn-xs btn-accent" onclick={() => setActiveEmbedding(m.id)}>Set Active</button>
               <button class="btn btn-xs btn-ghost btn-danger" onclick={async () => {
@@ -317,7 +317,7 @@
   </div>
 </div>
 
-<p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Models stored in: {modelsDir}</p>
+<p class="models-dir-note">Models stored in: {modelsDir}</p>
 
 <style>
   .model-list { padding: 0; }
@@ -344,5 +344,12 @@
     transition: width 0.3s;
   }
   .model-progress-text { font-size: 10px; color: var(--text-tertiary); margin-left: 4px; }
-  .ai-model-note { color: var(--warning, #f59e0b); }
+  .ai-model-note { color: var(--warning); }
+  .model-status-ok { font-size: 11px; color: var(--success); }
+  .model-status-danger { font-size: 11px; color: var(--danger); }
+  .model-status-muted { font-size: 11px; color: var(--text-tertiary); }
+  .model-status-active { font-size: 11px; color: var(--accent); }
+  .model-profile-note { color: var(--text-tertiary); }
+  .card-note { font-size: 11px; color: var(--text-tertiary); padding: 8px 16px 4px; }
+  .models-dir-note { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
 </style>
