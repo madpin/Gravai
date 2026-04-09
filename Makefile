@@ -46,7 +46,7 @@ bundle-app: ## Build .app only (fast, no DMG) with stable cert-based signing
 sign: ## Sign the built .app with cert-based requirements so TCC permissions persist across updates
 	@APP=$$(find target/release/bundle/macos -name "*.app" -maxdepth 1 2>/dev/null | head -1); \
 	if [ -n "$$APP" ]; then \
-		codesign --force --deep \
+		codesign --force \
 			--sign "Gravai Developer Certificate" \
 			--requirements '= designated => identifier "com.gravai.app" and certificate leaf = H"FEC8D826B9873249819360FDEB415484D47B0283"' \
 			--entitlements src-tauri/Entitlements.plist "$$APP"; \

@@ -100,7 +100,7 @@ jobs:
           APP=$(find target/release/bundle/macos -name "*.app" -maxdepth 1 | head -1)
           if [ -n "$APP" ]; then
             SIGN_REQS='= designated => identifier "com.gravai.app" and certificate leaf = H"FEC8D826B9873249819360FDEB415484D47B0283"'
-            codesign --force --deep --sign "$SIGN_ID" \
+            codesign --force --sign "$SIGN_ID" \
               --requirements "$SIGN_REQS" \
               --entitlements src-tauri/Entitlements.plist "$APP"
             echo "Signed ($SIGN_ID): $APP"
