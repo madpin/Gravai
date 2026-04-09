@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "typecheck-quiet": "svelte-check --tsconfig ./tsconfig.json --output machine",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.conf.dev.json"
   },
