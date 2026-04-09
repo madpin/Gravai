@@ -306,6 +306,7 @@
               <span class="config-pill-icon">🎛️</span>
               <span class="config-pill-label">Preset:</span>
               <span class="config-pill-value">{activePreset.name}</span>
+              <button class="config-pill-edit" onclick={() => currentPage.set("presets")} title="Edit preset" aria-label="Edit preset">✎</button>
             </div>
             <div class="config-tooltip">
               <div class="config-tooltip-row">{activePreset.mic_enabled ? '🎤 Mic on' : '🎤 Mic off'} &middot; {activePreset.sys_enabled ? '💻 System on' : '💻 System off'}</div>
@@ -325,6 +326,7 @@
               <span class="config-pill-icon">👤</span>
               <span class="config-pill-label">Profile:</span>
               <span class="config-pill-value">{activeProfile.name}</span>
+              <button class="config-pill-edit" onclick={() => currentPage.set("profiles")} title="Edit profile" aria-label="Edit profile">✎</button>
             </div>
             <div class="config-tooltip">
               <div class="config-tooltip-row">🗣️ Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
