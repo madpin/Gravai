@@ -10,7 +10,8 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "types": ["vite/client"]
   },
   "include": ["src-frontend/**/*.ts", "src-frontend/**/*.svelte"]
 }

@@ -43,9 +43,7 @@ pub fn cpu_usage_pct() -> f64 {
         let result = if let Some((prev_time, prev_user, prev_sys)) = *guard {
             let wall = now.duration_since(prev_time).as_secs_f64();
             if wall > 0.05 {
-                ((user - prev_user + sys - prev_sys) / wall * 100.0)
-                    .max(0.0)
-                    .min(100.0)
+                ((user - prev_user + sys - prev_sys) / wall * 100.0).clamp(0.0, 100.0)
             } else {
                 0.0
             }

@@ -44,16 +44,22 @@ bundle-app: ## Build .app only (fast, no DMG)
 
 # ── Quality ──────────────────────────────────────────────────
 
-check: ## Pre-push checks: fmt, clippy, tests, typecheck
-	@echo "── fmt ──────────────────────────────────────────────"
-	cargo fmt --all -- --check
-	@echo "── clippy ───────────────────────────────────────────"
-	cargo clippy --workspace -- -D warnings
-	@echo "── tests ────────────────────────────────────────────"
-	cargo test --workspace --lib
-	@echo "── typecheck ────────────────────────────────────────"
-	pnpm typecheck
-	@echo "✅ All checks passed."
+check: ## Pre-push checks: fmt, clippy, tests, typecheck (runs all; fails if any failed)
+	@failed=0; \
+	echo "── fmt ──────────────────────────────────────────────"; \
+	cargo fmt --all -- --check || failed=1; \
+	echo "── clippy ───────────────────────────────────────────"; \
+	cargo clippy --workspace -- -D warnings || failed=1; \
+	echo "── tests ────────────────────────────────────────────"; \
+	cargo test --workspace --lib || failed=1; \
+	echo "── typecheck ────────────────────────────────────────"; \
+	pnpm typecheck || failed=1; \
+	if [ "$$failed" -eq 0 ]; then \
+		echo "✅ All checks passed."; \
+	else \
+		echo "❌ One or more checks failed."; \
+		exit 1; \
+	fi
 
 test: ## Run all tests
 	cargo test --workspace --lib

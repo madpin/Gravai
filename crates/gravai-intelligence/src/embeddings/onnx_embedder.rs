@@ -145,7 +145,7 @@ impl EmbeddingProvider for OnnxEmbeddingProvider {
         // Some models output `sentence_embedding` directly (already pooled).
         if let Some(embed_out) = outputs.get("sentence_embedding") {
             if let Ok((_shape, data)) = embed_out.try_extract_tensor::<f32>() {
-                let flat: Vec<f32> = data.iter().copied().collect();
+                let flat: Vec<f32> = data.to_vec();
                 let vec: Vec<f32> = flat.into_iter().take(self.dim).collect();
                 return Ok(l2_normalize(vec));
             }
@@ -164,14 +164,17 @@ impl EmbeddingProvider for OnnxEmbeddingProvider {
         // shape: [1, seq_len, hidden_dim]
         let seq_len = *shape.get(1).unwrap_or(&0) as usize;
         let hidden_dim = *shape.get(2).unwrap_or(&1) as usize;
-        let flat: Vec<f32> = data.iter().copied().collect();
+        let flat: Vec<f32> = data.to_vec();
 
         let mask_f: Vec<f32> = attention_mask.iter().map(|&m| m as f32).collect();
         let mask_sum: f32 = mask_f.iter().sum::<f32>().max(1e-9);
 
         let mut pooled = vec![0.0f32; hidden_dim];
-        for tok in 0..seq_len.min(len).min(mask_f.len()) {
-            let w = mask_f[tok];
+        for (tok, &w) in mask_f
+            .iter()
+            .enumerate()
+            .take(seq_len.min(len).min(mask_f.len()))
+        {
             let offset = tok * hidden_dim;
             for d in 0..hidden_dim {
                 pooled[d] += flat[offset + d] * w;
