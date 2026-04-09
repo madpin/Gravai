@@ -60,6 +60,7 @@ pub struct PipelineInput {
     pub vad: Box<dyn VadProvider>,
     pub transcriber: Option<Arc<dyn gravai_transcription::TranscriptionProvider>>,
     pub echo_suppressor: Arc<tokio::sync::Mutex<EchoSuppressor>>,
+    pub diarizer: Option<Arc<dyn gravai_intelligence::DiarizationProvider>>,
     pub config: PipelineConfig,
     pub on_utterance: OnUtterance,
     pub active: Arc<std::sync::atomic::AtomicBool>,
@@ -77,6 +78,7 @@ pub async fn run_pipeline(input: PipelineInput) {
         mut vad,
         transcriber,
         echo_suppressor,
+        diarizer,
         config: pipeline_config,
         on_utterance,
         active,
@@ -120,6 +122,7 @@ pub async fn run_pipeline(input: PipelineInput) {
                     &transcriber,
                     &echo_suppressor,
                     &last_text,
+                    &diarizer,
                 )
                 .await
                 {
@@ -143,6 +146,7 @@ pub async fn run_pipeline(input: PipelineInput) {
                         &transcriber,
                         &echo_suppressor,
                         &last_text,
+                        &diarizer,
                     )
                     .await
                     {
@@ -169,6 +173,7 @@ pub async fn run_pipeline(input: PipelineInput) {
             &transcriber,
             &echo_suppressor,
             &last_text,
+            &diarizer,
         )
         .await
         {
@@ -198,6 +203,7 @@ async fn finalize(
     transcriber: &Option<Arc<dyn gravai_transcription::TranscriptionProvider>>,
     echo_suppressor: &Arc<tokio::sync::Mutex<EchoSuppressor>>,
     last_text: &Option<String>,
+    diarizer: &Option<Arc<dyn gravai_intelligence::DiarizationProvider>>,
 ) -> Option<FinalizeResult> {
     let engine = transcriber.as_ref()?;
     let engine = Arc::clone(engine);
@@ -249,14 +255,51 @@ async fn finalize(
 
     // Speaker assignment:
     // - Microphone source is always "You" (the local user)
-    // - System audio is always "Remote" (the other participants)
-    // Note: true multi-speaker diarization within system audio requires
-    // a proper ONNX pyannote model, which is a future upgrade.
+    // - System audio: run diarization to identify distinct remote speakers
+    //   (Remote 1, Remote 2, …); falls back to "Remote" if diarization is
+    //   disabled or returns no segments.
     let speaker = if source == "microphone" || source == "mic" {
         Some("You".to_string())
     } else {
-        Some("Remote".to_string())
+        let label = if let Some(diarizer) = diarizer {
+            let audio_owned = audio.to_vec();
+            let diarizer = Arc::clone(diarizer);
+            let segments = tokio::task::spawn_blocking(move || diarizer.diarize(&audio_owned))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default();
+            dominant_speaker_label(&segments)
+        } else {
+            None
+        };
+        Some(label.unwrap_or_else(|| "Remote".to_string()))
     };
 
     Some(FinalizeResult { text, speaker })
+}
+
+/// Pick the speaker with the most total duration across diarization segments,
+/// then map "Speaker N" → "Remote N" for display.
+fn dominant_speaker_label(segments: &[gravai_intelligence::SpeakerSegment]) -> Option<String> {
+    if segments.is_empty() {
+        return None;
+    }
+    let mut durations: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    for seg in segments {
+        *durations.entry(&seg.speaker_id).or_insert(0) += seg.end_ms.saturating_sub(seg.start_ms);
+    }
+    durations
+        .into_iter()
+        .max_by_key(|(_, d)| *d)
+        .map(|(id, _)| speaker_id_to_remote_label(id))
+}
+
+/// Convert a diarizer speaker ID (e.g. "Speaker 2") to a display label ("Remote 2").
+fn speaker_id_to_remote_label(speaker_id: &str) -> String {
+    if let Some(n) = speaker_id.strip_prefix("Speaker ") {
+        format!("Remote {n}")
+    } else {
+        "Remote".to_string()
+    }
 }

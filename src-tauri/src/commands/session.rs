@@ -290,7 +290,41 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     )));
     let pipeline_active = Arc::new(AtomicBool::new(true));
 
-    // Speaker labels: mic = "You", system = "Remote" (always, no diarizer needed)
+    // Load diarizer for system-audio multi-speaker labeling (Remote 1 / Remote 2 / …).
+    // The energy fallback requires no model; pyannote needs ~/.gravai/models/diarization/segmentation.onnx.
+    let diarizer: Option<Arc<dyn gravai_intelligence::DiarizationProvider>> =
+        if config.features.diarization.enabled {
+            // Warn the user when pyannote is requested but the model file is absent so they
+            // know to download it — without this the silent energy fallback would be confusing.
+            if config.features.diarization.model == "pyannote" {
+                let model_path = gravai_config::models_dir()
+                    .join("diarization")
+                    .join("segmentation.onnx");
+                if !model_path.exists() {
+                    state.event_bus.publish(GravaiEvent::Error {
+                        message: "Diarization is set to 'pyannote' but the model is not \
+                                  downloaded — using energy-based fallback instead. \
+                                  Download 'pyannote-segmentation' from the Models page \
+                                  to enable accurate multi-speaker labels."
+                            .into(),
+                    });
+                    warn!(
+                        "Pyannote model missing at {}; falling back to energy diarizer",
+                        model_path.display()
+                    );
+                }
+            }
+
+            let diar_config = config.features.diarization.clone();
+            tokio::task::spawn_blocking(move || {
+                let d = gravai_intelligence::diarization::create_diarizer(&diar_config);
+                Arc::from(d) as Arc<dyn gravai_intelligence::DiarizationProvider>
+            })
+            .await
+            .ok()
+        } else {
+            None
+        };
 
     // Load sentiment engine (go-emotions ONNX) — only if model files are present
     let sentiment_engine: Option<Arc<dyn gravai_intelligence::SentimentEngine>> =
@@ -376,6 +410,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             vad,
             transcriber: transcriber.clone(),
             echo_suppressor: echo_suppressor.clone(),
+            diarizer: None, // mic is always "You"
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),
             active: pipeline_active.clone(),
@@ -392,6 +427,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             vad,
             transcriber: transcriber.clone(),
             echo_suppressor: echo_suppressor.clone(),
+            diarizer: diarizer.clone(),
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),
             active: pipeline_active.clone(),
