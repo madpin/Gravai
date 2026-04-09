@@ -156,14 +156,14 @@
       <li class="nav-section">
         <button class="nav-section-toggle"
           title={sidebarCollapsed ? "Settings" : undefined}
-          onclick={() => { if (sidebarCollapsed) { toggleSidebar(); settingsOpen = true; } else settingsOpen = !settingsOpen; }}>
+          onclick={() => settingsOpen = !settingsOpen}>
           <span class="nav-icon"><Icon name="settings" size={18} /></span>
           {#if !sidebarCollapsed}
             Settings
             <span class="nav-section-arrow" class:open={settingsOpen}><Icon name={settingsOpen ? "chevron-down" : "chevron-right"} size={14} /></span>
           {/if}
         </button>
-        {#if settingsOpen && !sidebarCollapsed}
+        {#if settingsOpen}
           <ul class="nav-sublist">
             {#each configPages as page}
               <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
@@ -172,11 +172,12 @@
                 class:active={$currentPage === page.id}
                 role="button"
                 tabindex="0"
+                title={sidebarCollapsed ? page.label : undefined}
                 onclick={() => setPage(page.id)}
                 onkeydown={(e) => { if (e.key === "Enter") setPage(page.id); }}
               >
                 <span class="nav-icon"><Icon name={page.icon} size={16} /></span>
-                {page.label}
+                {#if !sidebarCollapsed}{page.label}{/if}
               </li>
             {/each}
           </ul>

@@ -303,7 +303,7 @@
   }
 
   // Split-screen resize
-  let leftWidth = $state(380);
+  let leftWidth = $state(440);
 
   function startResize(e: PointerEvent) {
     const startX = e.clientX;
@@ -311,7 +311,7 @@
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
     function onMove(ev: PointerEvent) {
-      leftWidth = Math.max(280, Math.min(620, startWidth + (ev.clientX - startX)));
+      leftWidth = Math.max(340, Math.min(680, startWidth + (ev.clientX - startX)));
     }
     function onUp(ev: PointerEvent) {
       (e.target as HTMLElement).releasePointerCapture(ev.pointerId);
@@ -557,8 +557,9 @@
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 16px 8px 16px 20px;
-    min-width: 280px;
+    min-width: 340px;
     flex-shrink: 0;
   }
   .recording-resizer {
