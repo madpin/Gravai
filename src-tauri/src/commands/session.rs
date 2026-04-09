@@ -730,6 +730,35 @@ pub async fn search_utterances(query: String) -> Result<serde_json::Value, Strin
     serde_json::to_value(&results).map_err(|e| e.to_string())
 }
 
+/// Rename a speaker within a session — updates every utterance whose speaker
+/// exactly matches `old_speaker`.
+#[tauri::command]
+pub async fn rename_speaker_in_session(
+    session_id: String,
+    old_speaker: String,
+    new_speaker: String,
+) -> Result<serde_json::Value, String> {
+    let new_speaker = new_speaker.trim().to_string();
+    if new_speaker.is_empty() {
+        return Err("Speaker name cannot be empty".into());
+    }
+    let db_path = gravai_config::data_dir().join("gravai.db");
+    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let count = db
+        .rename_speaker_in_session(&session_id, &old_speaker, &new_speaker)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "updated": count }))
+}
+
+/// Return distinct speaker names from all sessions for autocomplete suggestions.
+#[tauri::command]
+pub async fn get_speaker_suggestions() -> Result<serde_json::Value, String> {
+    let db_path = gravai_config::data_dir().join("gravai.db");
+    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let speakers = db.get_distinct_speakers().map_err(|e| e.to_string())?;
+    serde_json::to_value(&speakers).map_err(|e| e.to_string())
+}
+
 /// List all past sessions.
 #[tauri::command]
 pub async fn list_sessions() -> Result<serde_json::Value, String> {

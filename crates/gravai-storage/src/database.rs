@@ -381,6 +381,32 @@ impl Database {
         rows.collect()
     }
 
+    /// Rename a speaker within a session — bulk-updates all matching utterances.
+    /// Returns the number of rows updated.
+    pub fn rename_speaker_in_session(
+        &self,
+        session_id: &str,
+        old_speaker: &str,
+        new_speaker: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let count = self.conn.execute(
+            "UPDATE utterances SET speaker = ?1 WHERE session_id = ?2 AND speaker = ?3",
+            params![new_speaker, session_id, old_speaker],
+        )?;
+        Ok(count)
+    }
+
+    /// Return all distinct non-null, non-empty speaker names across all sessions.
+    pub fn get_distinct_speakers(&self) -> Result<Vec<String>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT speaker FROM utterances \
+             WHERE speaker IS NOT NULL AND speaker != '' \
+             ORDER BY speaker ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
     // -- Embeddings --
 
     pub fn store_embedding(

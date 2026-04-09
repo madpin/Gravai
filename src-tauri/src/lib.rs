@@ -544,6 +544,8 @@ pub fn run() {
             commands::upsert_knowledge,
             commands::delete_knowledge,
             commands::get_correction_defaults,
+            commands::rename_speaker_in_session,
+            commands::get_speaker_suggestions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gravai");

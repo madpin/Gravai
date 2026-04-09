@@ -1,8 +1,8 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { sourceIcon } from "../lib/tauri";
+  import { invoke, sourceIcon } from "../lib/tauri";
 
-  let { utterances = [], autoScroll = true, showEmotions = true }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean } = $props();
+  let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null } = $props();
 
   const speakerColors = ["#7c6cff", "#34d399", "#fbbf24", "#f87171", "#60a5fa", "#a78bfa", "#fb923c", "#2dd4bf"];
   let speakerColorMap: Record<string, string> = {};
@@ -58,6 +58,92 @@
     if (next.has(id)) { next.delete(id); } else { next.add(id); }
     showingOriginal = next;
   }
+
+  // ── Speaker rename ─────────────────────────────────────────────────────────
+
+  // Optimistic local overrides: old speaker label → new display name.
+  // Cleared when the parent pushes fresh utterances with the updated speaker value.
+  let speakerOverrides = $state<Record<string, string>>({});
+
+  let editingUtteranceId = $state<number | null>(null);
+  let editingSpeakerOriginal = $state("");
+  let editValue = $state("");
+  let suggestions = $state<string[]>([]);
+  let selectedSuggestionIdx = $state(-1);
+  let renameError = $state<string | null>(null);
+
+  let filteredSuggestions = $derived(
+    editValue.trim() === ""
+      ? suggestions
+      : suggestions.filter(s => s.toLowerCase().includes(editValue.toLowerCase()))
+  );
+
+  function getDisplaySpeaker(speaker: string): string {
+    return speakerOverrides[speaker] ?? speaker;
+  }
+
+  async function startEdit(utteranceId: number, speaker: string) {
+    if (!sessionId) return;
+    editingUtteranceId = utteranceId;
+    editingSpeakerOriginal = speaker;
+    editValue = speaker;
+    selectedSuggestionIdx = -1;
+    renameError = null;
+    try {
+      const all: string[] = await invoke("get_speaker_suggestions");
+      suggestions = all.filter(s => s !== speaker);
+    } catch (_) {
+      suggestions = [];
+    }
+  }
+
+  function cancelEdit() {
+    editingUtteranceId = null;
+    editingSpeakerOriginal = "";
+    editValue = "";
+    suggestions = [];
+    selectedSuggestionIdx = -1;
+    renameError = null;
+  }
+
+  async function confirmRename(newName?: string) {
+    const name = (newName ?? editValue).trim();
+    if (!name || !sessionId || !editingSpeakerOriginal) { cancelEdit(); return; }
+    if (name === editingSpeakerOriginal) { cancelEdit(); return; }
+    try {
+      await invoke("rename_speaker_in_session", { sessionId, oldSpeaker: editingSpeakerOriginal, newSpeaker: name });
+      // Transfer color so the tag keeps its colour after rename
+      if (speakerColorMap[editingSpeakerOriginal] && !speakerColorMap[name]) {
+        speakerColorMap[name] = speakerColorMap[editingSpeakerOriginal];
+      }
+      speakerOverrides[editingSpeakerOriginal] = name;
+      cancelEdit();
+    } catch (e) {
+      renameError = String(e);
+    }
+  }
+
+  function handleEditKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const suggestion = filteredSuggestions[selectedSuggestionIdx];
+      confirmRename(suggestion ?? undefined);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectedSuggestionIdx = Math.min(selectedSuggestionIdx + 1, filteredSuggestions.length - 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      selectedSuggestionIdx = Math.max(selectedSuggestionIdx - 1, -1);
+    }
+  }
+
+  function autoFocus(node: HTMLElement) {
+    tick().then(() => { node.focus(); (node as HTMLInputElement).select?.(); });
+    return {};
+  }
 </script>
 
 <div class="transcript-panel" bind:this={el}>
@@ -69,7 +155,43 @@
         <span class="transcript-meta">
           {sourceIcon(u.source)} {fmtTime(u.timestamp)}
           {#if u.speaker}
-            <span class="speaker-tag" style="color: {getSpeakerColor(u.speaker)}">{u.speaker}</span>
+            {@const display = getDisplaySpeaker(u.speaker)}
+            {#if editingUtteranceId === u.id}
+              <span class="speaker-rename-wrapper">
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  type="text"
+                  class="speaker-rename-input"
+                  style="color: {getSpeakerColor(display)}"
+                  bind:value={editValue}
+                  onkeydown={handleEditKeydown}
+                  onblur={cancelEdit}
+                  use:autoFocus
+                  maxlength={80}
+                />
+                {#if filteredSuggestions.length > 0}
+                  <ul class="speaker-suggestions">
+                    {#each filteredSuggestions as s, i}
+                      <li
+                        class:selected={i === selectedSuggestionIdx}
+                        onmousedown={(e) => { e.preventDefault(); confirmRename(s); }}
+                      >{s}</li>
+                    {/each}
+                  </ul>
+                {/if}
+                {#if renameError}
+                  <span class="rename-error">{renameError}</span>
+                {/if}
+              </span>
+            {:else}
+              <span
+                class="speaker-tag"
+                class:renameable={!!sessionId}
+                style="color: {getSpeakerColor(display)}"
+                ondblclick={sessionId ? () => startEdit(u.id, display) : undefined}
+                title={sessionId ? "Double-click to rename speaker" : undefined}
+              >{display}</span>
+            {/if}
           {/if}
         </span>
         <span

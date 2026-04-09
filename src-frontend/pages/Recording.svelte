@@ -489,7 +489,7 @@
       </button>
     </div>
     <div class="transcript-panel-body">
-      <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} {showEmotions} />
+      <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} {showEmotions} sessionId={$currentSessionId ?? $lastSessionIdStore} />
     </div>
   </div>
 </div>

@@ -166,6 +166,6 @@
       </div>
     {/if}
 
-    <TranscriptView utterances={searchResults || utterances} />
+    <TranscriptView utterances={searchResults || utterances} sessionId={selectedId} />
   </div>
 </div>
