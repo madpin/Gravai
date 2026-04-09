@@ -9,6 +9,7 @@ description = "AI intelligence: summarization, diarization, embeddings, LLM clie
 [dependencies]
 gravai-core = { workspace = true }
 gravai-config = { workspace = true }
+gravai-storage = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

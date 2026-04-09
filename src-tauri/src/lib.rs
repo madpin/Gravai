@@ -422,6 +422,10 @@ pub fn run() {
                                     "gravai:error",
                                     serde_json::json!({ "message": message }),
                                 ),
+                                GravaiEvent::TranscriptCorrected { session_id, utterance_ids } => (
+                                    "gravai:transcript-corrected",
+                                    serde_json::json!({ "session_id": session_id, "utterance_ids": utterance_ids }),
+                                ),
                                 _ => ("gravai:event", serde_json::json!({})),
                             };
                             let _ = handle.emit(event_name, &payload);
@@ -535,6 +539,11 @@ pub fn run() {
             commands::get_app_version,
             commands::check_for_update,
             commands::install_update,
+            // Knowledge base
+            commands::list_knowledge,
+            commands::upsert_knowledge,
+            commands::delete_knowledge,
+            commands::get_correction_defaults,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gravai");

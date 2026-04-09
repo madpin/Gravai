@@ -391,6 +391,37 @@ impl Default for UpdatesConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Correction config
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CorrectionConfig {
+    /// Enable async LLM post-processing to correct ASR errors using the knowledge base.
+    pub enabled: bool,
+    /// Number of utterances to accumulate before triggering correction (batch trigger).
+    pub batch_size: usize,
+    /// Seconds to wait after the last utterance before triggering correction (debounce trigger).
+    pub debounce_seconds: u64,
+    /// Override LLM model for corrections (None = use llm.model).
+    pub model: Option<String>,
+    /// Custom system prompt for correction (None = use built-in default).
+    pub custom_prompt: Option<String>,
+}
+
+impl Default for CorrectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            batch_size: 4,
+            debounce_seconds: 8,
+            model: None,
+            custom_prompt: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Top-level AppConfig
 // ---------------------------------------------------------------------------
 
@@ -406,6 +437,7 @@ pub struct AppConfig {
     pub embedding: EmbeddingConfig,
     pub export: ExportConfig,
     pub updates: UpdatesConfig,
+    pub correction: CorrectionConfig,
 }
 
 impl Default for AppConfig {
@@ -420,6 +452,7 @@ impl Default for AppConfig {
             embedding: EmbeddingConfig::default(),
             export: ExportConfig::default(),
             updates: UpdatesConfig::default(),
+            correction: CorrectionConfig::default(),
         }
     }
 }

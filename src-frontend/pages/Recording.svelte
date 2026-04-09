@@ -227,6 +227,18 @@
     });
     unlisteners.push(ue);
 
+    // Handle LLM transcript corrections arriving after utterances are inserted
+    const uc = await listen("gravai:transcript-corrected", (e: any) => {
+      const d = e.payload;
+      const sid = get(currentSessionId);
+      if (!d?.utterance_ids?.length || !sid || d.session_id !== sid) return;
+      // Re-fetch the full transcript to pick up corrected_text values
+      invoke("get_transcript", { sessionId: sid })
+        .then((utts: any) => { if (Array.isArray(utts)) liveUtterances.set(utts); })
+        .catch(() => {});
+    });
+    unlisteners.push(uc);
+
     await loadDevices();
     // Load export config + active preset/profile for status display
     try {

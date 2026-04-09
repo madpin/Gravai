@@ -1,7 +1,7 @@
 //! Session lifecycle commands: start, pause, resume, stop.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gravai_audio::capture::{AudioCaptureManager, AudioChunk, VolumeCallback};
 use gravai_audio::echo::EchoSuppressor;
@@ -335,6 +335,24 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         .await
         .unwrap_or(None);
 
+    // Set up LLM correction state (debounced batch, enabled only if configured)
+    let correction_provider: Option<Arc<gravai_intelligence::TranscriptCorrectionProvider>> =
+        if config.correction.enabled {
+            Some(Arc::new(
+                gravai_intelligence::TranscriptCorrectionProvider::new(
+                    &config.llm,
+                    config.correction.model.as_deref(),
+                    config.correction.custom_prompt.as_deref(),
+                ),
+            ))
+        } else {
+            None
+        };
+    let pending_correction_ids: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
+    let correction_generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    let correction_batch_size = config.correction.batch_size;
+    let correction_debounce = config.correction.debounce_seconds;
+
     // Callback that writes utterances to DB and publishes events
     let event_bus = state.event_bus.clone();
     let sid = session_id.clone();
@@ -357,6 +375,10 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 sentiment_label: None,
                 sentiment_score: None,
                 emotions_json: None,
+                corrected_text: None,
+                correction_status: None,
+                correction_provider: None,
+                corrected_at: None,
             };
             match db.insert_utterance(&record) {
                 Ok(id) => {
@@ -394,6 +416,69 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                                 }
                             }
                         });
+                    }
+
+                    // Run LLM correction if enabled (async, debounced batch)
+                    if let Some(provider) = correction_provider.as_ref() {
+                        let gen = {
+                            let mut locked = pending_correction_ids.lock().unwrap();
+                            locked.push(id);
+                            correction_generation.fetch_add(1, Ordering::SeqCst) + 1
+                        };
+                        let should_trigger_now = {
+                            pending_correction_ids.lock().unwrap().len() >= correction_batch_size
+                        };
+
+                        if should_trigger_now {
+                            // Batch is full — trigger immediately
+                            let batch: Vec<i64> = {
+                                let mut locked = pending_correction_ids.lock().unwrap();
+                                locked.drain(..).collect()
+                            };
+                            let provider_clone = provider.clone();
+                            let db_path_clone = db_path.clone();
+                            let event_bus_clone = event_bus.clone();
+                            let sid_clone = sid.clone();
+                            tokio::spawn(async move {
+                                run_correction_task(
+                                    batch,
+                                    provider_clone,
+                                    db_path_clone,
+                                    event_bus_clone,
+                                    sid_clone,
+                                )
+                                .await;
+                            });
+                        } else {
+                            // Debounce: sleep, then fire if still the latest generation
+                            let debounce = correction_debounce;
+                            let pending_clone = pending_correction_ids.clone();
+                            let generation_clone = correction_generation.clone();
+                            let provider_clone = provider.clone();
+                            let db_path_clone = db_path.clone();
+                            let event_bus_clone = event_bus.clone();
+                            let sid_clone = sid.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(debounce)).await;
+                                // Only proceed if no newer utterance has arrived
+                                if generation_clone.load(Ordering::SeqCst) == gen {
+                                    let batch: Vec<i64> = {
+                                        let mut locked = pending_clone.lock().unwrap();
+                                        locked.drain(..).collect()
+                                    };
+                                    if !batch.is_empty() {
+                                        run_correction_task(
+                                            batch,
+                                            provider_clone,
+                                            db_path_clone,
+                                            event_bus_clone,
+                                            sid_clone,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
                 Err(e) => error!("Insert utterance: {e}"),
@@ -659,6 +744,88 @@ pub async fn list_sessions() -> Result<serde_json::Value, String> {
 pub async fn detect_meetings() -> Result<serde_json::Value, String> {
     let meetings = gravai_meeting::detector::detect_meeting_apps();
     serde_json::to_value(&meetings).map_err(|e| e.to_string())
+}
+
+/// Async task that corrects a batch of utterances via LLM and updates the DB.
+async fn run_correction_task(
+    utterance_ids: Vec<i64>,
+    provider: Arc<gravai_intelligence::TranscriptCorrectionProvider>,
+    db_path: std::path::PathBuf,
+    event_bus: gravai_core::EventBus,
+    session_id: String,
+) {
+    use tracing::{info, warn};
+
+    // Mark utterances as pending
+    if let Ok(db) = gravai_storage::Database::open(&db_path) {
+        let _ = db.mark_utterances_correction_pending(&utterance_ids);
+    } else {
+        return;
+    }
+
+    // Load knowledge entries and utterance records
+    let (knowledge, utterances) = match gravai_storage::Database::open(&db_path) {
+        Ok(db) => {
+            let knowledge = db.list_knowledge_entries(true).unwrap_or_default();
+            let utterances = db.get_utterances_by_ids(&utterance_ids).unwrap_or_default();
+            (knowledge, utterances)
+        }
+        Err(e) => {
+            warn!("Correction: failed to open DB: {e}");
+            return;
+        }
+    };
+
+    if utterances.is_empty() {
+        return;
+    }
+
+    info!(
+        "Running correction on {} utterances (session {})",
+        utterances.len(),
+        session_id
+    );
+
+    match provider.correct(&utterances, &knowledge).await {
+        Ok(corrections) => {
+            if corrections.is_empty() {
+                return;
+            }
+            let db = match gravai_storage::Database::open(&db_path) {
+                Ok(db) => db,
+                Err(e) => {
+                    warn!("Correction: failed to open DB for update: {e}");
+                    return;
+                }
+            };
+            let mut corrected_ids = Vec::new();
+            for (id, corrected_text) in &corrections {
+                let _ = db.update_utterance_correction(
+                    *id,
+                    corrected_text,
+                    &provider.provider_name,
+                    "done",
+                );
+                corrected_ids.push(*id);
+            }
+            if !corrected_ids.is_empty() {
+                event_bus.publish(gravai_core::GravaiEvent::TranscriptCorrected {
+                    session_id,
+                    utterance_ids: corrected_ids,
+                });
+            }
+        }
+        Err(e) => {
+            warn!("Correction task failed: {e}");
+            // Mark as error
+            if let Ok(db) = gravai_storage::Database::open(&db_path) {
+                for id in &utterance_ids {
+                    let _ =
+                        db.update_utterance_correction(*id, "", &provider.provider_name, "error");
+                }
+            }
+        }
+    }
 }
 
 /// Record audio chunks from a receiver to a named track file.

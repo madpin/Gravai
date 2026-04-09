@@ -1892,6 +1892,7 @@ dependencies = [
  "chrono",
  "gravai-config",
  "gravai-core",
+ "gravai-storage",
  "minijinja",
  "ort",
  "reqwest 0.12.28",

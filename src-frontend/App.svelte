@@ -16,6 +16,7 @@
   import Storage from "./pages/Storage.svelte";
   import Models from "./pages/Models.svelte";
   import Settings from "./pages/Settings.svelte";
+  import Knowledge from "./pages/Knowledge.svelte";
 
   const mainPages = [
     { id: "recording", label: "Recording", icon: "⏺" },
@@ -26,6 +27,7 @@
   const configPages = [
     { id: "presets", label: "Presets", icon: "🎛️" },
     { id: "profiles", label: "Profiles", icon: "👤" },
+    { id: "knowledge", label: "Knowledge", icon: "📚" },
     { id: "models", label: "Models", icon: "🧠" },
     { id: "shortcuts", label: "Shortcuts", icon: "⌨️" },
     { id: "automations", label: "Automations", icon: "⚡" },
@@ -164,6 +166,8 @@
       <Storage />
     {:else if $currentPage === "models"}
       <Models />
+    {:else if $currentPage === "knowledge"}
+      <Knowledge />
     {:else if $currentPage === "settings"}
       <Settings />
     {/if}

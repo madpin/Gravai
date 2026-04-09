@@ -49,6 +49,15 @@
       tick().then(() => { el.scrollTop = el.scrollHeight; });
     }
   });
+
+  // Track which utterances are showing original (pre-correction) text
+  let showingOriginal = $state(new Set<number>());
+
+  function toggleOriginal(id: number) {
+    const next = new Set(showingOriginal);
+    if (next.has(id)) { next.delete(id); } else { next.add(id); }
+    showingOriginal = next;
+  }
 </script>
 
 <div class="transcript-panel" bind:this={el}>
@@ -63,7 +72,16 @@
             <span class="speaker-tag" style="color: {getSpeakerColor(u.speaker)}">{u.speaker}</span>
           {/if}
         </span>
-        <span class="transcript-text" class:low-confidence={u.confidence != null && u.confidence < 0.5}>{u.text}</span>
+        <span
+          class="transcript-text"
+          class:low-confidence={u.confidence != null && u.confidence < 0.5}
+        >{#if u.corrected_text && showingOriginal.has(u.id)}<span class="original-text">{u.text}</span>{:else}{u.corrected_text ?? u.text}{/if}{#if u.corrected_text}<button
+            class="correction-mark"
+            class:showing-original={showingOriginal.has(u.id)}
+            data-tooltip={showingOriginal.has(u.id) ? "Showing original — click to restore correction" : `Original: ${u.text}`}
+            onclick={() => toggleOriginal(u.id)}
+            title=""
+          >{showingOriginal.has(u.id) ? "↩" : "✎"}</button>{/if}</span>
         {#if showEmotions && u.sentiment_label}
           <span
             class="emotion-badge"

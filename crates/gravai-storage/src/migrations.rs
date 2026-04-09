@@ -20,6 +20,16 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[
         "Chat conversations",
         include_str!("../sql/004_chat_conversations.sql"),
     ),
+    (
+        5,
+        "Knowledge base",
+        include_str!("../sql/005_knowledge_base.sql"),
+    ),
+    (
+        6,
+        "Utterance corrections",
+        include_str!("../sql/006_utterance_corrections.sql"),
+    ),
 ];
 
 /// Run all pending migrations. Creates the schema_version table if needed.

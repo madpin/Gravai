@@ -20,11 +20,21 @@
   let updateInfo = $state<any>(null);
   let unlistenUpdate: (() => void) | null = null;
 
+  // Transcript correction state
+  let corrEnabled = $state(false);
+  let corrModel = $state("");
+  let corrBatchSize = $state(4);
+  let corrDebounce = $state(8);
+  let corrPrompt = $state("");
+  let corrDefaultPrompt = $state("");
+  let corrSaveMsg = $state("");
+
   onMount(async () => {
     await loadHealth();
     await loadRawConfig();
     await loadPerf();
     await loadUpdatesConfig();
+    await loadCorrectionConfig();
     try { currentVersion = await invoke("get_app_version"); } catch (_) {}
     // Listen for auto-check result fired at startup
     const { listen } = await import("../lib/tauri");
@@ -85,6 +95,45 @@
 
   async function saveAutoCheck() {
     try { await invoke("update_config", { patch: { updates: { auto_check: autoCheck } } }); } catch (_) {}
+  }
+
+  async function loadCorrectionConfig() {
+    try {
+      const cfg: any = await invoke("get_config");
+      const c = cfg.correction ?? {};
+      corrEnabled = c.enabled ?? false;
+      corrModel = c.model ?? "";
+      corrBatchSize = c.batch_size ?? 4;
+      corrDebounce = c.debounce_seconds ?? 8;
+      corrPrompt = c.custom_prompt ?? "";
+    } catch (_) {}
+    try {
+      const d: any = await invoke("get_correction_defaults");
+      corrDefaultPrompt = d.default_system_prompt ?? "";
+    } catch (_) {}
+  }
+
+  async function saveCorrectionConfig() {
+    const patch = {
+      correction: {
+        enabled: corrEnabled,
+        model: corrModel.trim() || null,
+        batch_size: corrBatchSize,
+        debounce_seconds: corrDebounce,
+        custom_prompt: corrPrompt.trim() || null,
+      },
+    };
+    try {
+      await invoke("update_config", { patch });
+      corrSaveMsg = "Saved.";
+      setTimeout(() => (corrSaveMsg = ""), 1500);
+    } catch (e: any) {
+      corrSaveMsg = `Error: ${e}`;
+    }
+  }
+
+  function resetCorrectionPrompt() {
+    corrPrompt = corrDefaultPrompt;
   }
 
   async function checkUpdate() {
@@ -228,6 +277,94 @@
   {/if}
 </div>
 
+<!-- Transcript Correction -->
+<div class="card">
+  <div class="card-header">Transcript Correction</div>
+
+  <div class="settings-grid">
+    <div class="setting-row">
+      <label class="toggle-label" for="corr-enabled">
+        <input class="toggle" type="checkbox" id="corr-enabled" bind:checked={corrEnabled} />
+        <div class="setting-info">
+          <span class="setting-label">Enable correction</span>
+          <span class="setting-desc">
+            After each utterance is transcribed, Gravai sends a small batch to your LLM which
+            fixes names, project terms, and jargon using the entries in your Knowledge Base.
+            The original ASR text is always preserved — corrections are stored separately.
+          </span>
+        </div>
+      </label>
+    </div>
+
+    {#if corrEnabled}
+      <div class="setting-row corr-fields">
+        <label class="setting-field">
+          <span
+            class="setting-label"
+            data-tooltip="By default the correction pass uses the same LLM you configured for summarization. Set a different model here if you want a faster or cheaper model for corrections — e.g. a small local model like llama3.2:3b instead of a large one."
+          >Model override</span>
+          <span class="setting-desc">Leave empty to use the main LLM model</span>
+          <input
+            type="text"
+            class="setting-input"
+            bind:value={corrModel}
+            placeholder="e.g. llama3.2:3b  (empty = use main model)"
+          />
+        </label>
+        <label class="setting-field">
+          <span
+            class="setting-label"
+            data-tooltip="How many new utterances to collect before triggering a correction call. Larger batches give the LLM more context (better quality) but introduce more latency. Smaller batches are faster but may miss cross-sentence patterns. Recommended: 3–6."
+          >Batch size</span>
+          <span class="setting-desc">Utterances collected per correction call</span>
+          <input type="number" class="setting-input setting-input-sm" bind:value={corrBatchSize} min="1" max="20" />
+        </label>
+        <label class="setting-field">
+          <span
+            class="setting-label"
+            data-tooltip="After the last utterance arrives, wait this many seconds before sending the batch — so a quick burst of speech is grouped into one call instead of many. If the batch size is reached first, correction fires immediately regardless of this timer."
+          >Debounce (s)</span>
+          <span class="setting-desc">Seconds to wait after the last utterance</span>
+          <input type="number" class="setting-input setting-input-sm" bind:value={corrDebounce} min="1" max="60" />
+        </label>
+      </div>
+
+      <div class="setting-row corr-prompt-row">
+        <div class="setting-info">
+          <span class="setting-label">System prompt</span>
+          <span class="setting-desc">
+            Instructions the LLM receives before seeing each correction batch.
+            The user message is always the same structured format (knowledge base + utterances),
+            but you can adjust the system prompt to change tone, strictness, or focus areas.
+            Click <em>Reset to default</em> to restore the built-in prompt.
+          </span>
+        </div>
+        <button class="btn btn-xs btn-ghost corr-reset-btn" onclick={resetCorrectionPrompt} title="Restore the built-in system prompt">
+          Reset to default
+        </button>
+      </div>
+      <textarea
+        class="config-editor corr-prompt-editor"
+        rows="7"
+        spellcheck="false"
+        placeholder={corrDefaultPrompt}
+        bind:value={corrPrompt}
+      ></textarea>
+      <p class="corr-prompt-hint">
+        Leave empty to use the default. The user message (utterances + knowledge entries) is always appended automatically — only the system instructions are customisable here.
+      </p>
+    {/if}
+  </div>
+
+  <div class="card-footer">
+    <button class="btn btn-xs btn-accent" onclick={saveCorrectionConfig}>Save</button>
+    {#if corrEnabled}
+      <button class="btn btn-xs btn-ghost" onclick={() => goTo("knowledge")} title="Add names, projects, and jargon that guide corrections">Manage Knowledge Base →</button>
+    {/if}
+    {#if corrSaveMsg}<span class="corr-save-msg">{corrSaveMsg}</span>{/if}
+  </div>
+</div>
+
 <!-- Advanced JSON -->
 <details class="card collapsible">
   <summary class="card-header">Advanced: Raw Config JSON</summary>
@@ -263,4 +400,47 @@
   .update-dot-error { background: var(--danger); }
   .update-status-ok { color: var(--success); }
   .update-status-error { color: var(--danger); }
+
+  /* Transcript correction */
+  .corr-fields {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 12px;
+    align-items: start;
+  }
+  .setting-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .setting-input {
+    background: var(--input-bg, #2a2a2a);
+    border: 1px solid var(--border, #333);
+    border-radius: 4px;
+    padding: 5px 8px;
+    color: var(--text-primary, #eee);
+    font-size: 12px;
+    font-family: inherit;
+    margin-top: 4px;
+  }
+  .setting-input:focus {
+    outline: none;
+    border-color: var(--accent, #7c6cff);
+  }
+  .setting-input-sm { width: 80px; }
+  .corr-prompt-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0;
+  }
+  .corr-reset-btn { margin-top: 2px; flex-shrink: 0; }
+  .corr-prompt-editor { margin: 0 16px 4px; }
+  .corr-save-msg { font-size: 11px; color: var(--success); }
+  .corr-prompt-hint {
+    margin: 2px 16px 0;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    line-height: 1.5;
+  }
 </style>

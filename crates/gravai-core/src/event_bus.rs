@@ -55,6 +55,12 @@ pub enum GravaiEvent {
 
     /// Generic error notification
     Error { message: String },
+
+    /// Utterances have been corrected by the LLM post-processing pass
+    TranscriptCorrected {
+        session_id: String,
+        utterance_ids: Vec<i64>,
+    },
 }
 
 #[derive(Debug, Clone)]

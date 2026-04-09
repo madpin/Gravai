@@ -1,4 +1,4 @@
-//! Prompt templates for meeting summarization and analysis.
+//! Prompt templates for meeting summarization, analysis, and transcript correction.
 
 use minijinja::Environment;
 use tracing::warn;
@@ -16,6 +16,24 @@ pub const DEFAULT_SUMMARY_USER: &str = r#"Summarize this meeting transcript:
 {% for u in utterances %}
 [{{ u.timestamp }}] {{ u.source }}{% if u.speaker %} ({{ u.speaker }}){% endif %}: {{ u.text }}
 {% endfor %}"#;
+
+pub const CORRECTION_SYSTEM: &str = "You are a transcript correction assistant. \
+Fix transcription errors (spelling, proper nouns, punctuation) using the provided \
+knowledge base. Preserve the speaker's original meaning and phrasing. \
+Return ONLY the corrected lines, one per input, keeping the [id] prefix exactly as given.";
+
+pub const CORRECTION_USER: &str = r#"## Context
+{% for entry in knowledge %}
+### {{ entry.title }}
+{{ entry.text }}
+
+{% endfor %}
+## Transcript to correct
+{% for u in utterances %}
+[{{ u.id }}] {% if u.speaker %}{{ u.speaker }}: {% endif %}{{ u.text }}
+{% endfor %}
+
+Return one corrected line per input with the exact same [id] prefix. Do not add commentary."#;
 
 /// Render a Jinja2 template with the given context.
 pub fn render_prompt(template_str: &str, context: &serde_json::Value) -> Result<String, String> {

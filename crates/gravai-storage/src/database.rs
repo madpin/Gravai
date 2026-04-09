@@ -35,6 +35,28 @@ pub struct UtteranceRecord {
     pub sentiment_score: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emotions_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corrected_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correction_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correction_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corrected_at: Option<String>,
+}
+
+/// A knowledge base entry for transcript correction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEntry {
+    pub id: i64,
+    pub category: String,
+    pub name: String,
+    /// JSON array of likely ASR misspellings, e.g. `["joe pinto", "Joao Pinto"]`
+    pub aliases: Option<String>,
+    pub context: Option<String>,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// Main database handle.
@@ -167,7 +189,8 @@ impl Database {
     ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
-                    sentiment_label, sentiment_score, emotions_json
+                    sentiment_label, sentiment_score, emotions_json,
+                    corrected_text, correction_status, correction_provider, corrected_at
              FROM utterances WHERE session_id = ?1 ORDER BY id ASC",
         )?;
         let rows = stmt.query_map(params![session_id], |row| {
@@ -184,6 +207,10 @@ impl Database {
                 sentiment_label: row.get(9)?,
                 sentiment_score: row.get(10)?,
                 emotions_json: row.get(11)?,
+                corrected_text: row.get(12)?,
+                correction_status: row.get(13)?,
+                correction_provider: row.get(14)?,
+                corrected_at: row.get(15)?,
             })
         })?;
         rows.collect()
@@ -212,6 +239,92 @@ impl Database {
                 sentiment_label: None,
                 sentiment_score: None,
                 emotions_json: None,
+                corrected_text: None,
+                correction_status: None,
+                correction_provider: None,
+                corrected_at: None,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Update correction fields on an existing utterance (by row id).
+    pub fn update_utterance_correction(
+        &self,
+        id: i64,
+        corrected_text: &str,
+        provider: &str,
+        status: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE utterances SET corrected_text = ?1, correction_provider = ?2, \
+             correction_status = ?3, corrected_at = datetime('now') WHERE id = ?4",
+            params![corrected_text, provider, status, id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark utterances as pending correction.
+    pub fn mark_utterances_correction_pending(&self, ids: &[i64]) -> Result<(), rusqlite::Error> {
+        for id in ids {
+            self.conn.execute(
+                "UPDATE utterances SET correction_status = 'pending' WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Fetch specific utterances by their ids (for correction batching).
+    pub fn get_utterances_by_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders: String = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                if i == 0 {
+                    "?1".to_string()
+                } else {
+                    format!("?{}", i + 1)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
+                    sentiment_label, sentiment_score, emotions_json,
+                    corrected_text, correction_status, correction_provider, corrected_at
+             FROM utterances WHERE id IN ({}) ORDER BY id ASC",
+            placeholders
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(UtteranceRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                source: row.get(3)?,
+                speaker: row.get(4)?,
+                text: row.get(5)?,
+                confidence: row.get(6)?,
+                start_ms: row.get(7)?,
+                end_ms: row.get(8)?,
+                sentiment_label: row.get(9)?,
+                sentiment_score: row.get(10)?,
+                emotions_json: row.get(11)?,
+                corrected_text: row.get(12)?,
+                correction_status: row.get(13)?,
+                correction_provider: row.get(14)?,
+                corrected_at: row.get(15)?,
             })
         })?;
         rows.collect()
@@ -239,7 +352,8 @@ impl Database {
     ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
-                    sentiment_label, sentiment_score, emotions_json
+                    sentiment_label, sentiment_score, emotions_json,
+                    corrected_text, correction_status, correction_provider, corrected_at
              FROM utterances
              WHERE session_id = ?1 AND source = 'system' AND sentiment_label IS NOT NULL
              ORDER BY id ASC",
@@ -258,6 +372,10 @@ impl Database {
                 sentiment_label: row.get(9)?,
                 sentiment_score: row.get(10)?,
                 emotions_json: row.get(11)?,
+                corrected_text: row.get(12)?,
+                correction_status: row.get(13)?,
+                correction_provider: row.get(14)?,
+                corrected_at: row.get(15)?,
             })
         })?;
         rows.collect()
@@ -307,6 +425,10 @@ impl Database {
                     sentiment_label: None,
                     sentiment_score: None,
                     emotions_json: None,
+                    corrected_text: None,
+                    correction_status: None,
+                    correction_provider: None,
+                    corrected_at: None,
                 };
                 Ok((record, blob))
             })?
@@ -445,6 +567,73 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    // -- Knowledge entries --
+
+    pub fn insert_knowledge_entry(&self, entry: &KnowledgeEntry) -> Result<i64, rusqlite::Error> {
+        self.conn.execute(
+            "INSERT INTO knowledge_entries (category, name, aliases, context, active) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                entry.category,
+                entry.name,
+                entry.aliases,
+                entry.context,
+                entry.active as i64
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_knowledge_entry(&self, entry: &KnowledgeEntry) -> Result<bool, rusqlite::Error> {
+        let count = self.conn.execute(
+            "UPDATE knowledge_entries SET category = ?1, name = ?2, aliases = ?3, \
+             context = ?4, active = ?5, updated_at = datetime('now') WHERE id = ?6",
+            params![
+                entry.category,
+                entry.name,
+                entry.aliases,
+                entry.context,
+                entry.active as i64,
+                entry.id
+            ],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn list_knowledge_entries(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<KnowledgeEntry>, rusqlite::Error> {
+        let sql = if active_only {
+            "SELECT id, category, name, aliases, context, active, created_at, updated_at \
+             FROM knowledge_entries WHERE active = 1 ORDER BY category, name"
+        } else {
+            "SELECT id, category, name, aliases, context, active, created_at, updated_at \
+             FROM knowledge_entries ORDER BY category, name"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(KnowledgeEntry {
+                id: row.get(0)?,
+                category: row.get(1)?,
+                name: row.get(2)?,
+                aliases: row.get(3)?,
+                context: row.get(4)?,
+                active: row.get::<_, i64>(5)? != 0,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_knowledge_entry(&self, id: i64) -> Result<bool, rusqlite::Error> {
+        let count = self
+            .conn
+            .execute("DELETE FROM knowledge_entries WHERE id = ?1", params![id])?;
+        Ok(count > 0)
+    }
+
     pub fn get_chat_history(
         &self,
         conversation_id: Option<&str>,
@@ -563,6 +752,10 @@ mod tests {
                 sentiment_label: None,
                 sentiment_score: None,
                 emotions_json: None,
+                corrected_text: None,
+                correction_status: None,
+                correction_provider: None,
+                corrected_at: None,
             })
             .unwrap();
         assert!(id > 0);
@@ -604,6 +797,10 @@ mod tests {
             sentiment_label: None,
             sentiment_score: None,
             emotions_json: None,
+            corrected_text: None,
+            correction_status: None,
+            correction_provider: None,
+            corrected_at: None,
         })
         .unwrap();
 
