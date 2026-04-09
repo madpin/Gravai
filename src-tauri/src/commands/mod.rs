@@ -158,10 +158,15 @@ pub async fn check_for_update(app: tauri::AppHandle) -> Result<serde_json::Value
 
 /// Download and install the latest update, then restart the app.
 #[tauri::command]
-pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn install_update(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt;
     let updater = app.updater().map_err(|e| e.to_string())?;
     if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        // Stop any active recording before restarting
+        let _ = stop_session(state).await;
         update
             .download_and_install(|_, _| {}, || {})
             .await
