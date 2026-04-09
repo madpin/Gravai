@@ -14,3 +14,4 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 dirs = { workspace = true }
+uuid = { workspace = true }

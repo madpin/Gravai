@@ -375,36 +375,102 @@ impl Database {
         rows.collect()
     }
 
+    // -- Chat conversations --
+
+    pub fn create_conversation(
+        &self,
+        session_id: Option<&str>,
+        title: Option<&str>,
+    ) -> Result<String, rusqlite::Error> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO chat_conversations (id, title, session_id) VALUES (?1, ?2, ?3)",
+            params![id, title, session_id],
+        )?;
+        Ok(id)
+    }
+
+    pub fn list_conversations(&self) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, session_id, created_at, updated_at \
+             FROM chat_conversations ORDER BY updated_at DESC LIMIT 100",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "title": row.get::<_, Option<String>>(1)?,
+                "session_id": row.get::<_, Option<String>>(2)?,
+                "created_at": row.get::<_, String>(3)?,
+                "updated_at": row.get::<_, String>(4)?,
+            }))
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn delete_conversation(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM chat_conversations WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn rename_conversation(&self, id: &str, title: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_conversations SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![title, id],
+        )?;
+        Ok(())
+    }
+
     // -- Chat messages --
 
     pub fn save_chat_message(
         &self,
+        conversation_id: Option<&str>,
         session_id: Option<&str>,
         role: &str,
         content: &str,
         citations: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO chat_messages (session_id, role, content, citations) VALUES (?1, ?2, ?3, ?4)",
-            params![session_id, role, content, citations],
+            "INSERT INTO chat_messages (conversation_id, session_id, role, content, citations) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![conversation_id, session_id, role, content, citations],
         )?;
+        if let Some(cid) = conversation_id {
+            let _ = self.conn.execute(
+                "UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?1",
+                params![cid],
+            );
+        }
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn get_chat_history(
         &self,
+        conversation_id: Option<&str>,
         session_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
-        let (sql, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(sid) =
-            session_id
-        {
-            ("SELECT role, content, citations, created_at FROM chat_messages WHERE session_id = ?1 ORDER BY id DESC LIMIT ?2",
-             vec![Box::new(sid.to_string()), Box::new(limit as i64)])
-        } else {
-            ("SELECT role, content, citations, created_at FROM chat_messages WHERE session_id IS NULL ORDER BY id DESC LIMIT ?1",
-             vec![Box::new(limit as i64)])
-        };
+        let (sql, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            if let Some(cid) = conversation_id {
+                (
+                    "SELECT role, content, citations, created_at FROM chat_messages \
+                     WHERE conversation_id = ?1 ORDER BY id ASC LIMIT ?2",
+                    vec![Box::new(cid.to_string()), Box::new(limit as i64)],
+                )
+            } else if let Some(sid) = session_id {
+                (
+                    "SELECT role, content, citations, created_at FROM chat_messages \
+                     WHERE session_id = ?1 ORDER BY id ASC LIMIT ?2",
+                    vec![Box::new(sid.to_string()), Box::new(limit as i64)],
+                )
+            } else {
+                (
+                    "SELECT role, content, citations, created_at FROM chat_messages \
+                     WHERE session_id IS NULL AND conversation_id IS NULL ORDER BY id ASC LIMIT ?1",
+                    vec![Box::new(limit as i64)],
+                )
+            };
         let params: Vec<&dyn rusqlite::types::ToSql> = param.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params.as_slice(), |row| {
@@ -416,9 +482,7 @@ impl Database {
                 "created_at": row.get::<_, String>(3)?,
             }))
         })?;
-        let mut msgs: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
-        msgs.reverse();
-        Ok(msgs)
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 }
 

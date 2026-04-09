@@ -1,7 +1,14 @@
-//! Text embedding provider — generates vector representations for semantic search.
+//! Text embedding providers — generate vector representations for semantic search.
 //!
-//! Uses a simple TF-IDF-like bag-of-words approach as the default provider.
-//! Can be upgraded to all-MiniLM-L6-v2 via ORT when the model is available.
+//! Available providers:
+//!   - `BagOfWordsEmbedder`     — hash-based, no download, fast (default fallback)
+//!   - `OnnxEmbeddingProvider`  — neural ONNX models for high-quality semantic search
+//!
+//! Use `create_embedder_from_config` to select the provider based on user config.
+//! Use `create_embedder` for the built-in bag-of-words fallback.
+
+mod onnx_embedder;
+pub use onnx_embedder::OnnxEmbeddingProvider;
 
 /// Provider trait for generating text embeddings.
 pub trait EmbeddingProvider: Send + Sync {
@@ -79,7 +86,35 @@ fn simple_hash(s: &str) -> u64 {
     hash
 }
 
-/// Create the default embedding provider.
+/// Create an embedding provider based on user configuration.
+///
+/// Falls back to `BagOfWordsEmbedder` if the requested ONNX model files
+/// are not yet downloaded.
+pub fn create_embedder_from_config(
+    config: &gravai_config::EmbeddingConfig,
+) -> Box<dyn EmbeddingProvider> {
+    match config.model.as_str() {
+        "all-minilm" | "gemma-embed" | "bge-m3" => {
+            match OnnxEmbeddingProvider::try_load(&config.model) {
+                Some(p) => {
+                    tracing::info!("Using ONNX embedding model: {}", config.model);
+                    Box::new(p)
+                }
+                None => {
+                    tracing::warn!(
+                        "Embedding model '{}' not downloaded; falling back to bag-of-words. \
+                        Download it from the Models tab.",
+                        config.model
+                    );
+                    Box::new(BagOfWordsEmbedder::new())
+                }
+            }
+        }
+        _ => Box::new(BagOfWordsEmbedder::new()),
+    }
+}
+
+/// Create the built-in bag-of-words embedding provider (no download required).
 pub fn create_embedder() -> Box<dyn EmbeddingProvider> {
     Box::new(BagOfWordsEmbedder::new())
 }

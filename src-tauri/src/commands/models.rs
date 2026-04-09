@@ -66,10 +66,14 @@ pub async fn get_models_status() -> Result<serde_json::Value, String> {
     // AI models: sentiment and diarization
     let ai_models = ai_models_status(&models_dir);
 
+    // Embedding models for semantic search
+    let embedding_models = embedding_models_status(&models_dir);
+
     Ok(serde_json::json!({
         "whisper_models": models,
         "silero_vad": silero,
         "ai_models": ai_models,
+        "embedding_models": embedding_models,
         "models_dir": models_dir.display().to_string(),
     }))
 }
@@ -348,6 +352,63 @@ struct AiModelInfo {
 
 fn ai_model_info(model_id: &str) -> Option<AiModelInfo> {
     match model_id {
+        // ── Semantic search / embedding models ────────────────────────────────
+        "all-minilm" => Some(AiModelInfo {
+            subdir: "embeddings/all-minilm",
+            files: &[
+                (
+                    "model.onnx",
+                    "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx",
+                    None,
+                ),
+                (
+                    "tokenizer.json",
+                    "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json",
+                    None,
+                ),
+            ],
+            description: "all-MiniLM-L6-v2 — fast English semantic search, 384-dim (22 MB)",
+            approx_size: 23_000_000,
+            note: None,
+        }),
+        "gemma-embed" => Some(AiModelInfo {
+            subdir: "embeddings/gemma-embed",
+            files: &[
+                (
+                    "model.onnx",
+                    "https://huggingface.co/Xenova/nomic-embed-text-v1.5/resolve/main/onnx/model.onnx",
+                    // Fallback to v1 if v1.5 not available
+                    Some("https://huggingface.co/Xenova/nomic-embed-text-v1/resolve/main/onnx/model.onnx"),
+                ),
+                (
+                    "tokenizer.json",
+                    "https://huggingface.co/Xenova/nomic-embed-text-v1.5/resolve/main/tokenizer.json",
+                    Some("https://huggingface.co/Xenova/nomic-embed-text-v1/resolve/main/tokenizer.json"),
+                ),
+            ],
+            description: "EmbeddingGemma (nomic-embed-text-v1.5) — balanced multilingual, 768-dim (274 MB)",
+            approx_size: 274_000_000,
+            note: None,
+        }),
+        "bge-m3" => Some(AiModelInfo {
+            subdir: "embeddings/bge-m3",
+            files: &[
+                (
+                    "model.onnx",
+                    "https://huggingface.co/onnx-community/bge-m3/resolve/main/onnx/model.onnx",
+                    None,
+                ),
+                (
+                    "tokenizer.json",
+                    "https://huggingface.co/onnx-community/bge-m3/resolve/main/tokenizer.json",
+                    None,
+                ),
+            ],
+            description: "BGE-M3 — best multilingual quality, 1024-dim (572 MB)",
+            approx_size: 572_000_000,
+            note: None,
+        }),
+        // ── Sentiment and diarization ──────────────────────────────────────────
         "go-emotions" => Some(AiModelInfo {
             subdir: "sentiment/go-emotions",
             files: &[
@@ -382,6 +443,40 @@ fn ai_model_info(model_id: &str) -> Option<AiModelInfo> {
         }),
         _ => None,
     }
+}
+
+fn embedding_models_status(models_dir: &std::path::Path) -> Vec<serde_json::Value> {
+    ["all-minilm", "gemma-embed", "bge-m3"]
+        .iter()
+        .filter_map(|&id| {
+            let info = ai_model_info(id)?;
+            let dir = models_dir.join(info.subdir);
+            let downloaded = info
+                .files
+                .iter()
+                .all(|(fname, _, _)| dir.join(fname).exists());
+            let actual_size: u64 = info
+                .files
+                .iter()
+                .filter_map(|(fname, _, _)| {
+                    let p = dir.join(fname);
+                    if p.exists() {
+                        std::fs::metadata(&p).map(|m| m.len()).ok()
+                    } else {
+                        None
+                    }
+                })
+                .sum();
+            Some(serde_json::json!({
+                "id": id,
+                "description": info.description,
+                "approx_size": info.approx_size,
+                "downloaded": downloaded,
+                "actual_size": actual_size,
+                "note": info.note,
+            }))
+        })
+        .collect()
 }
 
 fn ai_models_status(models_dir: &std::path::Path) -> Vec<serde_json::Value> {

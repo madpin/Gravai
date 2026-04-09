@@ -21,12 +21,7 @@ impl LlmClient {
             .build()
             .unwrap_or_default();
 
-        let api_key = if config.provider == "ollama" {
-            None
-        } else {
-            // For BYOK providers, the API key would come from config or keychain
-            None
-        };
+        let api_key = config.api_key.clone().filter(|k| !k.is_empty());
 
         Self {
             base_url: config.base_url.clone(),

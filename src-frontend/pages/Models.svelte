@@ -5,6 +5,8 @@
   let models = $state<any[]>([]);
   let silero = $state<any>(null);
   let aiModels = $state<any[]>([]);
+  let embeddingModels = $state<any[]>([]);
+  let activeEmbeddingModel = $state("bag-of-words");
   let modelsDir = $state("");
   let downloading = $state<Record<string, { progress: number; status: string }>>({});
   let actionMsg = $state("");
@@ -34,6 +36,7 @@
       models = info.whisper_models || [];
       silero = info.silero_vad;
       aiModels = info.ai_models || [];
+      embeddingModels = info.embedding_models || [];
       modelsDir = info.models_dir || "";
     } catch (_) {}
   }
@@ -46,6 +49,15 @@
     } catch (e) {
       actionMsg = `Error: ${e}`; setTimeout(() => actionMsg = "", 5000);
     }
+  }
+
+  async function setActiveEmbedding(modelId: string) {
+    try {
+      await invoke("update_config", { patch: { embedding: { model: modelId } } });
+      activeEmbeddingModel = modelId;
+      actionMsg = `Embedding model set to "${modelId}". Re-embed sessions from the Search tab.`;
+      setTimeout(() => actionMsg = "", 5000);
+    } catch (e) { actionMsg = `Error: ${e}`; }
   }
 
   async function deleteModel(id: string) {
@@ -71,6 +83,7 @@
     try {
       const cfg: any = await invoke("get_config");
       activeModel = cfg.transcription?.model || "medium";
+      activeEmbeddingModel = cfg.embedding?.model || "bag-of-words";
     } catch (_) {}
     // Also get active profile name
     try {
@@ -227,6 +240,85 @@
     </div>
   </div>
 {/if}
+
+<!-- Semantic Search / Embedding Models -->
+<div class="card">
+  <div class="card-header">Semantic Search Models</div>
+  <p style="font-size:11px;color:var(--text-tertiary);padding:8px 16px 4px">
+    Used to generate vector embeddings for Ask Gravai and semantic search.
+    After switching models, re-embed sessions via the Search tab.
+    <strong>Bag-of-words</strong> is always available (no download needed).
+  </p>
+  <div class="model-list">
+    <!-- Built-in bag-of-words (no download) -->
+    <div class="model-row" class:active-model={activeEmbeddingModel === "bag-of-words"}>
+      <div class="model-info">
+        <div class="model-name">
+          bag-of-words
+          {#if activeEmbeddingModel === "bag-of-words"}
+            <span class="card-tag" style="background:var(--accent-glow);color:var(--accent)">Active</span>
+          {/if}
+        </div>
+        <div class="model-desc">Built-in hash-based embedder — no download, fast, lower quality</div>
+      </div>
+      <div class="model-status"><span class="model-size">Built-in</span></div>
+      <div class="model-actions">
+        {#if activeEmbeddingModel === "bag-of-words"}
+          <span style="font-size:11px;color:var(--success)">✓ Active</span>
+        {:else}
+          <button class="btn btn-xs btn-accent" onclick={() => setActiveEmbedding("bag-of-words")}>Set Active</button>
+        {/if}
+      </div>
+    </div>
+
+    {#each embeddingModels as m}
+      <div class="model-row" class:active-model={activeEmbeddingModel === m.id}>
+        <div class="model-info">
+          <div class="model-name">
+            {m.id}
+            {#if activeEmbeddingModel === m.id}
+              <span class="card-tag" style="background:var(--accent-glow);color:var(--accent)">Active</span>
+            {/if}
+          </div>
+          <div class="model-desc">
+            {m.description}
+            {#if m.note}<span class="ai-model-note"> — ⚠️ {m.note}</span>{/if}
+          </div>
+        </div>
+        <div class="model-status">
+          {#if downloading[m.id]}
+            <div class="model-progress">
+              <div class="model-progress-bar" style="width: {downloading[m.id].progress}%"></div>
+            </div>
+            <span class="model-progress-text">{downloading[m.id].progress}%</span>
+          {:else if m.downloaded}
+            <span class="model-size">{fmtBytes(m.actual_size)}</span>
+          {:else}
+            <span class="model-size muted">~{fmtBytes(m.approx_size)}</span>
+          {/if}
+        </div>
+        <div class="model-actions">
+          {#if downloading[m.id]}
+            <span style="font-size:11px;color:var(--text-tertiary)">Downloading...</span>
+          {:else if m.downloaded}
+            <span style="font-size:11px;color:var(--success)">✓ Ready</span>
+            {#if activeEmbeddingModel === m.id}
+              <span style="font-size:11px;color:var(--accent)">Active</span>
+            {:else}
+              <button class="btn btn-xs btn-accent" onclick={() => setActiveEmbedding(m.id)}>Set Active</button>
+              <button class="btn btn-xs btn-ghost btn-danger" onclick={async () => {
+                if (!confirm(`Delete embedding model ${m.id}?`)) return;
+                try { await invoke("delete_model", { modelId: m.id }); await load(); } catch(e) { actionMsg = `Error: ${e}`; }
+              }}>Delete</button>
+            {/if}
+          {:else}
+            <button class="btn btn-xs btn-accent" onclick={() => download(m.id)}>Download</button>
+          {/if}
+        </div>
+      </div>
+    {/each}
+  </div>
+</div>
 
 <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Models stored in: {modelsDir}</p>
 

@@ -250,6 +250,10 @@ pub struct LlmConfig {
     pub provider: String,
     pub base_url: String,
     pub model: String,
+    /// API key for BYOK providers (OpenAI, Anthropic, etc.). Not used for Ollama.
+    pub api_key: Option<String>,
+    /// Maximum tokens to generate. Defaults to 2048.
+    pub max_tokens: u32,
 }
 
 impl Default for LlmConfig {
@@ -258,6 +262,8 @@ impl Default for LlmConfig {
             provider: "ollama".into(),
             base_url: "http://localhost:11434/v1".into(),
             model: "gemma3:4b".into(),
+            api_key: None,
+            max_tokens: 2048,
         }
     }
 }
@@ -345,6 +351,29 @@ impl Default for ExportConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Embedding config
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EmbeddingConfig {
+    /// Embedding model for semantic search.
+    /// Options: "bag-of-words" (built-in, no download),
+    ///          "all-minilm"   (all-MiniLM-L6-v2, ~22 MB, fast English),
+    ///          "gemma-embed"  (nomic-embed-text-v1.5, ~274 MB, balanced multilingual),
+    ///          "bge-m3"       (BGE-M3, ~572 MB, best multilingual quality)
+    pub model: String,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            model: "bag-of-words".into(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Updates config
 // ---------------------------------------------------------------------------
 
@@ -374,6 +403,7 @@ pub struct AppConfig {
     pub vad: VadConfig,
     pub features: FeaturesConfig,
     pub llm: LlmConfig,
+    pub embedding: EmbeddingConfig,
     pub export: ExportConfig,
     pub updates: UpdatesConfig,
 }
@@ -387,6 +417,7 @@ impl Default for AppConfig {
             vad: VadConfig::default(),
             features: FeaturesConfig::default(),
             llm: LlmConfig::default(),
+            embedding: EmbeddingConfig::default(),
             export: ExportConfig::default(),
             updates: UpdatesConfig::default(),
         }

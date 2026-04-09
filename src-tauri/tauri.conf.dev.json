@@ -1,4 +1,17 @@
 {
   "productName": "Gravai Dev",
-  "identifier": "com.gravai.app.dev"
+  "identifier": "com.gravai.app.dev",
+  "app": {
+    "windows": [
+      {
+        "title": "Gravai Dev",
+        "width": 1100,
+        "height": 750,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
+  }
 }
