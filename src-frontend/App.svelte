@@ -48,6 +48,31 @@
     try {
       const report: any = await invoke("get_health_report");
       healthStatus.set(report.overall);
+      for (const check of report.checks ?? []) {
+        if (check.name === "microphone_permission" && check.status === "error") {
+          addAlert({
+            level: "error",
+            message: "Microphone access denied — Gravai cannot record audio.",
+            actions: [{ label: "Open Settings", handler: () => invoke("open_privacy_settings", { permission: "microphone" }) }],
+            dismissable: true,
+          });
+        }
+        if (check.name === "screen_recording_permission" && check.status === "error") {
+          addAlert({
+            level: "error",
+            message: "Screen Recording access denied — system audio capture unavailable.",
+            actions: [{ label: "Open Settings", handler: () => invoke("open_privacy_settings", { permission: "screen_recording" }) }],
+            dismissable: true,
+          });
+        } else if (check.name === "screen_recording_permission" && check.status === "warn") {
+          addAlert({
+            level: "warning",
+            message: "Screen Recording not granted — enable it to capture system audio.",
+            actions: [{ label: "Open Settings", handler: () => invoke("open_privacy_settings", { permission: "screen_recording" }) }],
+            dismissable: true,
+          });
+        }
+      }
     } catch (_) {}
     unlistenNavigate = await listen("gravai:navigate", (e: any) => {
       if (e.payload) currentPage.set(e.payload);

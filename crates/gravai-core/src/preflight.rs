@@ -23,6 +23,8 @@ pub fn run_preflight_checks(config: &gravai_config::AppConfig) -> HealthReport {
     let checks = vec![
         check_platform(),
         check_storage(),
+        check_microphone_permission(),
+        check_screen_recording_permission(),
         check_audio_devices(),
         check_transcription_model(config),
         check_diarization_model(config),
@@ -98,6 +100,81 @@ fn check_storage() -> HealthCheck {
             status: "error".into(),
             message: format!("Cannot create {}: {e}", dir.display()),
         },
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn check_microphone_permission() -> HealthCheck {
+    use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+
+    // Non-prompting status query — safe to call on any thread at startup.
+    let media_type = unsafe { AVMediaTypeAudio }.expect("AVMediaTypeAudio is always set");
+    let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
+
+    match status {
+        AVAuthorizationStatus::Authorized => HealthCheck {
+            name: "microphone_permission".into(),
+            status: "ok".into(),
+            message: "Microphone permission granted".into(),
+        },
+        AVAuthorizationStatus::Denied | AVAuthorizationStatus::Restricted => HealthCheck {
+            name: "microphone_permission".into(),
+            status: "error".into(),
+            message: "Microphone access denied — open System Settings › Privacy & Security › Microphone and re-enable Gravai".into(),
+        },
+        AVAuthorizationStatus::NotDetermined => HealthCheck {
+            name: "microphone_permission".into(),
+            status: "warn".into(),
+            message: "Microphone permission not yet requested — it will be asked when recording starts".into(),
+        },
+        _ => HealthCheck {
+            name: "microphone_permission".into(),
+            status: "warn".into(),
+            message: "Microphone permission status unknown".into(),
+        },
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_microphone_permission() -> HealthCheck {
+    HealthCheck {
+        name: "microphone_permission".into(),
+        status: "ok".into(),
+        message: "N/A (non-macOS)".into(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn check_screen_recording_permission() -> HealthCheck {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+    }
+
+    // Non-prompting check — returns false if permission is not yet granted.
+    let allowed = unsafe { CGPreflightScreenCaptureAccess() };
+
+    if allowed {
+        HealthCheck {
+            name: "screen_recording_permission".into(),
+            status: "ok".into(),
+            message: "Screen Recording permission granted".into(),
+        }
+    } else {
+        HealthCheck {
+            name: "screen_recording_permission".into(),
+            status: "warn".into(),
+            message: "Screen Recording permission not granted — required for system audio capture. Open System Settings › Privacy & Security › Screen & System Audio Recording".into(),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_screen_recording_permission() -> HealthCheck {
+    HealthCheck {
+        name: "screen_recording_permission".into(),
+        status: "ok".into(),
+        message: "N/A (non-macOS)".into(),
     }
 }
 

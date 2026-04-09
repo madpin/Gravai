@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.20"
+version = "1.0.21"
 edition = "2021"
 authors = ["Thiago Madeira Pinto"]
 license = "MIT"
@@ -87,6 +87,9 @@ uuid = { version = "1", features = ["v4"] }
 
 # Native OS APIs (sandbox-safe alternative to spawning ps/sysctl subprocesses)
 libc = "0.2"
+
+# macOS permission checks (compatible with objc2 0.6.x already pulled in by screencapturekit)
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
 
 # File I/O for downloads
 futures-util = "0.3"

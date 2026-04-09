@@ -112,6 +112,27 @@ pub async fn get_health_report(
     serde_json::to_value(&report).map_err(|e| e.to_string())
 }
 
+/// Open System Settings to the specified privacy pane.
+/// `permission` is one of: "microphone", "screen_recording", "calendar".
+#[tauri::command]
+pub async fn open_privacy_settings(permission: String) -> Result<(), String> {
+    let url = match permission.as_str() {
+        "microphone" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        "screen_recording" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+        "calendar" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
+        _ => "x-apple.systempreferences:com.apple.preference.security",
+    };
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Return the current app version from Cargo.toml (compiled in).
 #[tauri::command]
 pub async fn get_app_version() -> String {

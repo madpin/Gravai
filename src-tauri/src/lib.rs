@@ -535,6 +535,8 @@ pub fn run() {
             commands::delete_session_audio,
             commands::delete_full_session,
             commands::save_realtime_transcript,
+            // Permissions
+            commands::open_privacy_settings,
             // Updates
             commands::get_app_version,
             commands::check_for_update,
