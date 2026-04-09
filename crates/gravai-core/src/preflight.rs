@@ -25,6 +25,7 @@ pub fn run_preflight_checks(config: &gravai_config::AppConfig) -> HealthReport {
         check_storage(),
         check_audio_devices(),
         check_transcription_model(config),
+        check_diarization_model(config),
     ];
 
     let overall = if checks.iter().any(|c| c.status == "error") {
@@ -141,6 +142,53 @@ fn check_transcription_model(config: &gravai_config::AppConfig) -> HealthCheck {
             status: "warn".into(),
             message: format!(
                 "Whisper {model_name} not found at {}; will download on first use",
+                model_path.display()
+            ),
+        }
+    }
+}
+
+fn check_diarization_model(config: &gravai_config::AppConfig) -> HealthCheck {
+    if !config.features.diarization.enabled {
+        return HealthCheck {
+            name: "diarization_model".into(),
+            status: "ok".into(),
+            message: "Diarization disabled (enable in config to get multi-speaker labels)".into(),
+        };
+    }
+    if config.features.diarization.model != "pyannote" {
+        return HealthCheck {
+            name: "diarization_model".into(),
+            status: "ok".into(),
+            message: format!(
+                "Diarization: {} (no model file required)",
+                config.features.diarization.model
+            ),
+        };
+    }
+    let model_path = gravai_config::models_dir()
+        .join("diarization")
+        .join("segmentation.onnx");
+    if model_path.exists() {
+        let size = std::fs::metadata(&model_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        HealthCheck {
+            name: "diarization_model".into(),
+            status: "ok".into(),
+            message: format!(
+                "Pyannote segmentation model present ({:.0} MB)",
+                size as f64 / 1_048_576.0
+            ),
+        }
+    } else {
+        HealthCheck {
+            name: "diarization_model".into(),
+            status: "warn".into(),
+            message: format!(
+                "Diarization is set to 'pyannote' but segmentation.onnx was not found at {}. \
+                 Download 'pyannote-segmentation' from the Models page, or set model to 'energy' \
+                 for a no-download fallback.",
                 model_path.display()
             ),
         }
