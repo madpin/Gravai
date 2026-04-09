@@ -181,27 +181,50 @@
     App Updates
     {#if currentVersion}<span class="update-version-badge">v{currentVersion}</span>{/if}
   </div>
-  <div class="updates-row">
-    <label class="update-toggle-label">
-      <input type="checkbox" bind:checked={autoCheck} onchange={saveAutoCheck} />
-      Auto-check for updates on launch
-    </label>
-    <button class="btn btn-xs btn-accent" onclick={checkUpdate} disabled={checking}>
-      {checking ? "Checking…" : "Check Now"}
-    </button>
-  </div>
-  {#if updateInfo?.available}
-    <div class="update-banner">
-      <span class="update-banner-title">🎉 v{updateInfo.version} available</span>
-      {#if updateInfo.body}<p class="update-notes">{updateInfo.body}</p>{/if}
-      <button class="btn btn-xs btn-accent" onclick={doInstall} disabled={installing}>
-        {installing ? "Installing…" : "Download & Install"}
+
+  <div class="settings-grid">
+    <div class="setting-row">
+      <label class="toggle-label update-toggle-label" for="auto-check-update">
+        <input class="toggle" type="checkbox" id="auto-check-update" bind:checked={autoCheck} onchange={saveAutoCheck} />
+        <div class="setting-info">
+          <span class="setting-label">Auto-check on launch</span>
+          <span class="setting-desc">Automatically check for updates when the app starts</span>
+        </div>
+      </label>
+      <button class="btn btn-xs btn-ghost" onclick={checkUpdate} disabled={checking}>
+        {checking ? "Checking…" : "Check Now"}
       </button>
     </div>
-  {:else if updateInfo && !updateInfo.available}
-    <p class="update-ok">✓ You're up to date</p>
+  </div>
+
+  {#if updateInfo?.available}
+    <div class="update-status-area">
+      <div class="banner banner-accent">
+        <div class="banner-text">
+          <strong class="update-banner-title">v{updateInfo.version} available</strong>
+          {#if updateInfo.body}<p class="update-notes">{updateInfo.body}</p>{/if}
+        </div>
+        <div class="banner-actions">
+          <button class="btn btn-xs btn-accent" onclick={doInstall} disabled={installing}>
+            {installing ? "Installing…" : "Download & Install"}
+          </button>
+        </div>
+      </div>
+    </div>
   {:else if updateInfo?.error}
-    <p class="update-error">⚠ {updateInfo.error}</p>
+    <div class="update-status-area">
+      <div class="update-status-line update-status-error">
+        <span class="update-dot update-dot-error"></span>
+        Check failed — {updateInfo.error}
+      </div>
+    </div>
+  {:else if updateInfo}
+    <div class="update-status-area">
+      <div class="update-status-line update-status-ok">
+        <span class="update-dot update-dot-ok"></span>
+        You're up to date
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -230,11 +253,14 @@
 
   /* Updates card */
   .update-version-badge { font-size: 11px; font-weight: 400; color: var(--text-tertiary); margin-left: 8px; }
-  .updates-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0 4px; gap: 12px; }
-  .update-toggle-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
-  .update-banner { margin-top: 10px; padding: 12px 14px; background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary)); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
-  .update-banner-title { font-weight: 600; font-size: 13px; color: var(--text-primary); }
-  .update-notes { font-size: 12px; color: var(--text-secondary); margin: 0; white-space: pre-wrap; max-height: 80px; overflow-y: auto; }
-  .update-ok { margin: 8px 0 0; font-size: 12px; color: var(--success); }
-  .update-error { margin: 8px 0 0; font-size: 12px; color: var(--danger); }
+  .update-toggle-label { flex: 1; }
+  .update-status-area { padding: 0 16px 12px; }
+  .update-banner-title { font-size: 13px; color: var(--text-primary); display: block; }
+  .update-notes { font-size: 12px; color: var(--text-secondary); margin: 4px 0 0; white-space: pre-wrap; max-height: 80px; overflow-y: auto; line-height: 1.5; }
+  .update-status-line { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .update-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .update-dot-ok { background: var(--success); }
+  .update-dot-error { background: var(--danger); }
+  .update-status-ok { color: var(--success); }
+  .update-status-error { color: var(--danger); }
 </style>
