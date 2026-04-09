@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { sourceIcon } from "../lib/tauri";
 
   let { utterances = [], autoScroll = true, showEmotions = true }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean } = $props();
@@ -43,10 +44,9 @@
 
   let el: HTMLElement;
   $effect(() => {
-    // Re-run when utterances change
-    utterances;
+    void utterances.length; // Explicitly track length so effect re-runs when items are added
     if (autoScroll && el) {
-      requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+      tick().then(() => { el.scrollTop = el.scrollHeight; });
     }
   });
 </script>

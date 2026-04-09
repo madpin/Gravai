@@ -298,6 +298,10 @@ body {
 .transcript-panel-body .transcript-panel {
   max-height: none; height: 100%; overflow-y: auto;
 }
+/* In the archive detail pane the transcript grows to fill remaining vertical space */
+.archive-detail .transcript-panel {
+  max-height: none; flex: 1; min-height: 0; overflow-y: auto;
+}
 .transcript-line {
   padding: 5px 16px; display: flex; gap: 10px;
   align-items: baseline; transition: background 0.1s;

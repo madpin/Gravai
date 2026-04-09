@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen } from "../lib/tauri";
+  import { modelDownloading } from "../lib/store";
 
   let models = $state<any[]>([]);
   let silero = $state<any>(null);
@@ -8,7 +9,7 @@
   let embeddingModels = $state<any[]>([]);
   let activeEmbeddingModel = $state("bag-of-words");
   let modelsDir = $state("");
-  let downloading = $state<Record<string, { progress: number; status: string }>>({});
+  let downloading = $derived($modelDownloading);
   let actionMsg = $state("");
   let unlistenDownload: (() => void) | null = null;
 
@@ -17,13 +18,8 @@
     unlistenDownload = await listen("gravai:model-download", (e: any) => {
       const d = e.payload?.data || e.payload;
       if (!d?.model_id) return;
-      downloading = { ...downloading, [d.model_id]: { progress: d.progress || 0, status: d.status || "" } };
       if (d.status === "complete" || d.status === "error") {
-        setTimeout(() => {
-          const { [d.model_id]: _, ...rest } = downloading;
-          downloading = rest;
-          load();
-        }, 1500);
+        setTimeout(() => load(), 1500);
       }
     });
   });
@@ -42,11 +38,12 @@
   }
 
   async function download(id: string) {
-    downloading = { ...downloading, [id]: { progress: 0, status: "starting" } };
+    modelDownloading.update(cur => ({ ...cur, [id]: { progress: 0, status: "starting" } }));
     try {
       const msg: string = await invoke("download_model", { modelId: id });
       actionMsg = msg; setTimeout(() => actionMsg = "", 3000);
     } catch (e) {
+      modelDownloading.update(cur => { const { [id]: _, ...rest } = cur; return rest; });
       actionMsg = `Error: ${e}`; setTimeout(() => actionMsg = "", 5000);
     }
   }

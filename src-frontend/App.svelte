@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { currentPage, healthStatus, addAlert } from "./lib/store";
+  import { currentPage, healthStatus, addAlert, modelDownloading } from "./lib/store";
   import { invoke, listen } from "./lib/tauri";
   import { onMount, onDestroy } from "svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -37,6 +37,7 @@
   let settingsOpen = $state(false);
   let unlistenNavigate: (() => void) | null = null;
   let unlistenUpdate: (() => void) | null = null;
+  let unlistenDownload: (() => void) | null = null;
 
   onMount(async () => {
     if (!localStorage.getItem("gravai_onboarded")) {
@@ -58,9 +59,19 @@
         dismissable: true,
       });
     });
+    unlistenDownload = await listen("gravai:model-download", (e: any) => {
+      const d = e.payload?.data || e.payload;
+      if (!d?.model_id) return;
+      modelDownloading.update(cur => ({ ...cur, [d.model_id]: { progress: d.progress || 0, status: d.status || "" } }));
+      if (d.status === "complete" || d.status === "error") {
+        setTimeout(() => {
+          modelDownloading.update(cur => { const { [d.model_id]: _, ...rest } = cur; return rest; });
+        }, 1500);
+      }
+    });
   });
 
-  onDestroy(() => { unlistenNavigate?.(); unlistenUpdate?.(); });
+  onDestroy(() => { unlistenNavigate?.(); unlistenUpdate?.(); unlistenDownload?.(); });
 
   function setPage(id: string) {
     currentPage.set(id);

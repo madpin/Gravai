@@ -53,3 +53,6 @@ export function dismissAlertsByLevel(level: string) {
 export function clearAlerts() {
   alerts.set([]);
 }
+
+// Model download state — persists across tab navigation
+export const modelDownloading = writable<Record<string, { progress: number; status: string }>>({});
