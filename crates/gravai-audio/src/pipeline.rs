@@ -281,16 +281,13 @@ async fn finalize(
 
 /// Pick the speaker with the most total duration across diarization segments,
 /// then map "Speaker N" → "Remote N" for display.
-fn dominant_speaker_label(
-    segments: &[gravai_intelligence::SpeakerSegment],
-) -> Option<String> {
+fn dominant_speaker_label(segments: &[gravai_intelligence::SpeakerSegment]) -> Option<String> {
     if segments.is_empty() {
         return None;
     }
     let mut durations: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
     for seg in segments {
-        *durations.entry(&seg.speaker_id).or_insert(0) +=
-            seg.end_ms.saturating_sub(seg.start_ms);
+        *durations.entry(&seg.speaker_id).or_insert(0) += seg.end_ms.saturating_sub(seg.start_ms);
     }
     durations
         .into_iter()

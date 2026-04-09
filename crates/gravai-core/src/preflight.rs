@@ -170,9 +170,7 @@ fn check_diarization_model(config: &gravai_config::AppConfig) -> HealthCheck {
         .join("diarization")
         .join("segmentation.onnx");
     if model_path.exists() {
-        let size = std::fs::metadata(&model_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let size = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
         HealthCheck {
             name: "diarization_model".into(),
             status: "ok".into(),

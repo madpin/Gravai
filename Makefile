@@ -1,7 +1,7 @@
 # Gravai — Audio Capture & AI Meeting Intelligence
 # ================================================
 
-.PHONY: help dev build run release clean check test lint fmt typecheck install setup reset version
+.PHONY: help dev build run release clean check check-verbose test lint fmt typecheck install setup reset version
 
 # Default target
 help: ## Show this help
@@ -44,22 +44,40 @@ bundle-app: ## Build .app only (fast, no DMG)
 
 # ── Quality ──────────────────────────────────────────────────
 
-check: ## Pre-push checks: fmt, clippy, tests, typecheck (runs all; fails if any failed)
+# Set CHECK_VERBOSE=1 for section banners and full Cargo progress (e.g. make check CHECK_VERBOSE=1)
+check: ## Pre-push: fmt, clippy, tests, typecheck (silent if ok; CHECK_VERBOSE=1 or make check-verbose for live output)
 	@failed=0; \
-	echo "── fmt ──────────────────────────────────────────────"; \
-	cargo fmt --all -- --check || failed=1; \
-	echo "── clippy ───────────────────────────────────────────"; \
-	cargo clippy --workspace -- -D warnings || failed=1; \
-	echo "── tests ────────────────────────────────────────────"; \
-	cargo test --workspace --lib || failed=1; \
-	echo "── typecheck ────────────────────────────────────────"; \
-	pnpm typecheck || failed=1; \
+	if [ -n "$(CHECK_VERBOSE)" ]; then \
+		echo "── fmt ──────────────────────────────────────────────"; \
+		cargo fmt --all -- --check || failed=1; \
+		echo "── clippy ───────────────────────────────────────────"; \
+		cargo clippy --workspace -- -D warnings || failed=1; \
+		echo "── tests ────────────────────────────────────────────"; \
+		cargo test --workspace --lib || failed=1; \
+		echo "── typecheck ────────────────────────────────────────"; \
+		pnpm typecheck || failed=1; \
+	else \
+		quiet_run() { \
+			out=$$(mktemp); \
+			ec=0; \
+			"$$@" >"$$out" 2>&1 || ec=$$?; \
+			if [ $$ec -ne 0 ]; then cat "$$out"; failed=1; fi; \
+			rm -f "$$out"; \
+		}; \
+		quiet_run cargo fmt --all -- --check; \
+		quiet_run cargo clippy --workspace --quiet -- -D warnings; \
+		quiet_run cargo test --workspace --lib --quiet; \
+		quiet_run pnpm exec svelte-check --tsconfig ./tsconfig.json --output machine; \
+	fi; \
 	if [ "$$failed" -eq 0 ]; then \
-		echo "✅ All checks passed."; \
+		if [ -n "$(CHECK_VERBOSE)" ]; then echo "✅ All checks passed."; fi; \
 	else \
 		echo "❌ One or more checks failed."; \
 		exit 1; \
 	fi
+
+check-verbose: ## Same as check with section banners and non-quiet Cargo output
+	@$(MAKE) check CHECK_VERBOSE=1
 
 test: ## Run all tests
 	cargo test --workspace --lib
