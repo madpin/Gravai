@@ -1,5 +1,6 @@
 <script lang="ts">
   import { alerts, dismissAlert } from "../lib/store";
+  import Icon from "./Icon.svelte";
 </script>
 
 {#if $alerts.length > 0}
@@ -7,7 +8,10 @@
     {#each $alerts as alert (alert.id)}
       <div class="alert-item {alert.level}">
         <span class="alert-icon">
-          {alert.level === "error" ? "❌" : alert.level === "warning" ? "⚠️" : alert.level === "meeting" ? "📞" : "ℹ️"}
+          {#if alert.level === "error"}<Icon name="x-circle" size={16}/>
+          {:else if alert.level === "warning"}<Icon name="alert-triangle" size={16}/>
+          {:else if alert.level === "meeting"}<Icon name="phone" size={16}/>
+          {:else}<Icon name="info" size={16}/>{/if}
         </span>
         <span class="alert-message">{alert.message}</span>
         <div class="alert-actions-row">
@@ -17,7 +21,7 @@
             {/each}
           {/if}
           {#if alert.dismissable}
-            <button class="alert-dismiss" onclick={() => dismissAlert(alert.id)}>✕</button>
+            <button class="alert-dismiss" onclick={() => dismissAlert(alert.id)}><Icon name="x" size={14}/></button>
           {/if}
         </div>
       </div>

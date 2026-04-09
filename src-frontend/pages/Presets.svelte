@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "../lib/tauri";
+  import Icon from "../components/Icon.svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
   let presets = $state<Record<string, any>>({});
@@ -171,8 +172,8 @@
       <div class="card-body">
         <p>{p.description}</p>
         <div class="tags-row">
-          <span class="card-tag">{p.mic_enabled ? "🎤 Mic" : "🎤 Off"}</span>
-          <span class="card-tag">{p.sys_enabled ? "💻 System" : "💻 Off"}</span>
+          <span class="card-tag"><Icon name="microphone" size={11}/> {p.mic_enabled ? "Mic" : "Off"}</span>
+          <span class="card-tag"><Icon name="monitor" size={11}/> {p.sys_enabled ? "System" : "Off"}</span>
           <span class="card-tag">{p.sample_rate / 1000}kHz</span>
           <span class="card-tag">{p.bit_depth}-bit</span>
           <span class="card-tag">{p.channels === 1 ? "Mono" : "Stereo"}</span>

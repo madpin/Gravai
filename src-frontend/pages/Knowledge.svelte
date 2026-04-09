@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "../lib/tauri";
+  import Icon from "../components/Icon.svelte";
 
   interface KnowledgeEntry {
     id: number;
@@ -126,8 +127,8 @@
         <div class="kb-card-header">
           <span class="kb-card-title">{entry.name}</span>
           <div class="kb-card-actions">
-            <button class="btn btn-xs btn-ghost" onclick={() => startEdit(entry)} title="Edit">✎</button>
-            <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteEntry(entry.id, entry.name)} title="Delete">✕</button>
+            <button class="btn btn-xs btn-ghost" onclick={() => startEdit(entry)} title="Edit"><Icon name="pencil" size={12}/></button>
+            <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteEntry(entry.id, entry.name)} title="Delete"><Icon name="x" size={12}/></button>
           </div>
         </div>
         {#if entry.context}

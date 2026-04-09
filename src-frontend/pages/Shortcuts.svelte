@@ -95,7 +95,7 @@
               id="shortcut-{actionId}"
               class="key-input"
               class:recording={recordingAction === actionId}
-              value={recordingAction === actionId ? "⏺ Press keys..." : b.key_sequence}
+              value={recordingAction === actionId ? "● Press keys..." : b.key_sequence}
               onkeydown={(e) => { e.preventDefault(); handleKeyCapture(e, actionId); }}
               onfocus={() => startRecording(actionId)}
               onblur={() => { if (recordingAction === actionId) recordingAction = null; }}

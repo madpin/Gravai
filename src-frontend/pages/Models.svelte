@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen } from "../lib/tauri";
   import { modelDownloading } from "../lib/store";
+  import Icon from "../components/Icon.svelte";
 
   let models = $state<any[]>([]);
   let silero = $state<any>(null);
@@ -138,7 +139,7 @@
             </div>
             <span class="model-progress-text">{downloading[m.id].progress}%</span>
           {:else if m.corrupted}
-            <span class="model-size" style="color:var(--danger)">{fmtBytes(m.actual_size)} ⚠️ corrupted</span>
+            <span class="model-size" style="color:var(--danger)">{fmtBytes(m.actual_size)} <Icon name="alert-triangle" size={12}/> corrupted</span>
           {:else if m.downloaded}
             <span class="model-size">{fmtBytes(m.actual_size)}</span>
           {:else}
@@ -150,11 +151,11 @@
           {#if downloading[m.id]}
             <span class="model-status-muted">Downloading...</span>
           {:else if m.corrupted}
-            <span class="model-status-danger">❌ Corrupted</span>
+            <span class="model-status-danger"><Icon name="x-circle" size={13}/> Corrupted</span>
             <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
             <button class="btn btn-xs btn-accent" onclick={() => { deleteModel(m.id).then(() => download(m.id)); }}>Re-download</button>
           {:else if m.downloaded}
-            <span class="model-status-ok">✓ Ready</span>
+            <span class="model-status-ok"><Icon name="check" size={13}/> Ready</span>
             {#if activeModel !== m.id}
               <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
             {/if}
@@ -186,7 +187,7 @@
         </div>
         <div class="model-actions">
           {#if silero.downloaded}
-            <span class="model-status-ok">✓ Ready</span>
+            <span class="model-status-ok"><Icon name="check" size={13}/> Ready</span>
           {:else}
             <span class="model-status-muted">Downloads on first use</span>
           {/if}
@@ -207,7 +208,7 @@
             <div class="model-name">{m.id}</div>
             <div class="model-desc">
               {m.description}
-              {#if m.note}<span class="ai-model-note"> — ⚠️ {m.note}</span>{/if}
+              {#if m.note}<span class="ai-model-note"> — <Icon name="alert-triangle" size={11}/> {m.note}</span>{/if}
             </div>
           </div>
           <div class="model-status">
@@ -226,7 +227,7 @@
             {#if downloading[m.id]}
               <span class="model-status-muted">Downloading...</span>
             {:else if m.downloaded}
-              <span class="model-status-ok">✓ Ready</span>
+              <span class="model-status-ok"><Icon name="check" size={13}/> Ready</span>
               <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteModel(m.id)}>Delete</button>
             {:else}
               <button class="btn btn-xs btn-accent" onclick={() => download(m.id)}>Download</button>
@@ -261,7 +262,7 @@
       <div class="model-status"><span class="model-size">Built-in</span></div>
       <div class="model-actions">
         {#if activeEmbeddingModel === "bag-of-words"}
-          <span class="model-status-ok">✓ Active</span>
+          <span class="model-status-ok"><Icon name="check" size={13}/> Active</span>
         {:else}
           <button class="btn btn-xs btn-accent" onclick={() => setActiveEmbedding("bag-of-words")}>Set Active</button>
         {/if}
@@ -279,7 +280,7 @@
           </div>
           <div class="model-desc">
             {m.description}
-            {#if m.note}<span class="ai-model-note"> — ⚠️ {m.note}</span>{/if}
+            {#if m.note}<span class="ai-model-note"> — <Icon name="alert-triangle" size={11}/> {m.note}</span>{/if}
           </div>
         </div>
         <div class="model-status">
@@ -298,7 +299,7 @@
           {#if downloading[m.id]}
             <span class="model-status-muted">Downloading...</span>
           {:else if m.downloaded}
-            <span class="model-status-ok">✓ Ready</span>
+            <span class="model-status-ok"><Icon name="check" size={13}/> Ready</span>
             {#if activeEmbeddingModel === m.id}
               <span class="model-status-active">Active</span>
             {:else}

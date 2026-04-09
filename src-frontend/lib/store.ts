@@ -56,3 +56,6 @@ export function clearAlerts() {
 
 // Model download state — persists across tab navigation
 export const modelDownloading = writable<Record<string, { progress: number; status: string }>>({});
+
+// Cross-page navigation: clicking a citation in Chat navigates to Archive with this session pre-selected
+export const pendingArchiveSessionId = writable<string | null>(null);

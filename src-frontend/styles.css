@@ -3,6 +3,30 @@
    Professional dark theme with accent purple, macOS-native feel
    =================================================================== */
 
+/* ── SVG Icon System ──────────────────────────────────────────────── */
+svg.icon {
+  display: inline-block;
+  vertical-align: -0.125em; /* optical baseline alignment */
+  flex-shrink: 0;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.icon-spin {
+  animation: spin 0.8s linear infinite;
+  transform-origin: center;
+}
+.nav-icon svg.icon {
+  display: block;
+}
+.onboarding-step-icon {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+  opacity: 0.9;
+}
+
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
@@ -564,14 +588,15 @@ body {
 .config-pill-edit:hover { opacity: 1; }
 .config-pill-wrap:hover .config-pill-edit { display: flex; }
 .config-tooltip {
-  display: none; position: absolute; top: calc(100% + 6px); left: 0;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  position: absolute; top: calc(100% + 6px); left: 0;
   background: var(--bg-primary); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 14px;
   min-width: 220px; z-index: 50;
   box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-  animation: tooltipIn 0.15s var(--ease);
+  transition: opacity 0.15s var(--ease), visibility 0.15s var(--ease);
 }
-.config-pill-wrap:hover .config-tooltip { display: block; }
+.config-pill-wrap:hover .config-tooltip { opacity: 1; visibility: visible; pointer-events: auto; }
 .config-tooltip-row {
   font-size: 11px; color: var(--text-secondary);
   padding: 2px 0; line-height: 1.4;

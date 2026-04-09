@@ -5,6 +5,7 @@
   import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, currentPage } from "../lib/store";
   import TranscriptView from "../components/TranscriptView.svelte";
   import AppPicker from "../components/AppPicker.svelte";
+  import Icon from "../components/Icon.svelte";
 
   let timer = $state("");
   let micEnabled = $state(true);
@@ -315,19 +316,19 @@
         {#if activePreset}
           <div class="config-pill-wrap">
             <div class="config-pill">
-              <span class="config-pill-icon">🎛️</span>
+              <span class="config-pill-icon"><Icon name="sliders" size={14}/></span>
               <span class="config-pill-label">Preset:</span>
               <span class="config-pill-value">{activePreset.name}</span>
-              <button class="config-pill-edit" onclick={() => currentPage.set("presets")} title="Edit preset" aria-label="Edit preset">✎</button>
+              <button class="config-pill-edit" onclick={() => currentPage.set("presets")} title="Edit preset" aria-label="Edit preset"><Icon name="pencil" size={12}/></button>
             </div>
             <div class="config-tooltip">
-              <div class="config-tooltip-row">{activePreset.mic_enabled ? '🎤 Mic on' : '🎤 Mic off'} &middot; {activePreset.sys_enabled ? '💻 System on' : '💻 System off'}</div>
+              <div class="config-tooltip-row">{activePreset.mic_enabled ? '' : ''}<Icon name="microphone" size={11}/>{activePreset.mic_enabled ? ' Mic on' : ' Mic off'} &middot; <Icon name="monitor" size={11}/>{activePreset.sys_enabled ? ' System on' : ' System off'}</div>
               <div class="config-tooltip-row">{activePreset.sample_rate/1000}kHz &middot; {activePreset.bit_depth}-bit &middot; {activePreset.channels === 1 ? 'Mono' : 'Stereo'}</div>
               <div class="config-tooltip-row">Format: {activePreset.export_format}</div>
-              {#if activePreset.output_folder}<div class="config-tooltip-row">📁 {activePreset.output_folder}</div>{/if}
+              {#if activePreset.output_folder}<div class="config-tooltip-row"><Icon name="folder" size={11}/> {activePreset.output_folder}</div>{/if}
               {#if activeProfile}
                 <div class="config-tooltip-divider"></div>
-                <div class="config-tooltip-row">🗣️ Model: Whisper {activeProfile.transcription_model || 'medium'}</div>
+                <div class="config-tooltip-row"><Icon name="message-circle" size={11}/> Model: Whisper {activeProfile.transcription_model || 'medium'}</div>
               {/if}
             </div>
           </div>
@@ -335,17 +336,17 @@
         {#if activeProfile}
           <div class="config-pill-wrap">
             <div class="config-pill">
-              <span class="config-pill-icon">👤</span>
+              <span class="config-pill-icon"><Icon name="user" size={14}/></span>
               <span class="config-pill-label">Profile:</span>
               <span class="config-pill-value">{activeProfile.name}</span>
-              <button class="config-pill-edit" onclick={() => currentPage.set("profiles")} title="Edit profile" aria-label="Edit profile">✎</button>
+              <button class="config-pill-edit" onclick={() => currentPage.set("profiles")} title="Edit profile" aria-label="Edit profile"><Icon name="pencil" size={12}/></button>
             </div>
             <div class="config-tooltip">
-              <div class="config-tooltip-row">🗣️ Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
-              <div class="config-tooltip-row">🤖 {activeProfile.llm_provider || 'ollama'} ({activeProfile.llm_model || 'gemma3:4b'})</div>
-              <div class="config-tooltip-row">👥 Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
-              {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row">📝 Auto-export transcript</div>{/if}
-              {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row">💾 Real-time save</div>{/if}
+              <div class="config-tooltip-row"><Icon name="message-circle" size={11}/> Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
+              <div class="config-tooltip-row"><Icon name="bot" size={11}/> {activeProfile.llm_provider || 'ollama'} ({activeProfile.llm_model || 'gemma3:4b'})</div>
+              <div class="config-tooltip-row"><Icon name="users" size={11}/> Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
+              {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row"><Icon name="file-text" size={11}/> Auto-export transcript</div>{/if}
+              {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row"><Icon name="save" size={11}/> Real-time save</div>{/if}
             </div>
           </div>
         {/if}
@@ -354,9 +355,9 @@
 
     <!-- Transport -->
     <div class="transport">
-      <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record">{starting ? "⏳" : "⏺"}</button>
-      <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}>{$isPaused ? "▶" : "⏸"}</button>
-      <button class="transport-btn stop" disabled={!$isRecording && !starting} onclick={stop} title="Stop">⏹</button>
+      <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record"><Icon name={starting ? "spinner" : "record"} size={22}/></button>
+      <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}><Icon name={$isPaused ? "play" : "pause"} size={20}/></button>
+      <button class="transport-btn stop" disabled={!$isRecording && !starting} onclick={stop} title="Stop"><Icon name="stop" size={20}/></button>
       <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording && !starting} class:starting={starting}>
         {starting ? "Starting..." : $isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
       </span>
@@ -365,9 +366,9 @@
     <!-- Export status indicator -->
     {#if exportAutoTranscript || exportAutoAudio || exportRealtimeSave}
       <div class="export-indicator">
-        {#if exportRealtimeSave}<span class="export-tag save">💾 Auto-save</span>{/if}
-        {#if exportAutoTranscript}<span class="export-tag transcript">📝 Auto-export transcript</span>{/if}
-        {#if exportAutoAudio}<span class="export-tag audio">🔊 Auto-export audio</span>{/if}
+        {#if exportRealtimeSave}<span class="export-tag save"><Icon name="save" size={11}/> Auto-save</span>{/if}
+        {#if exportAutoTranscript}<span class="export-tag transcript"><Icon name="file-text" size={11}/> Auto-export transcript</span>{/if}
+        {#if exportAutoAudio}<span class="export-tag audio"><Icon name="speaker" size={11}/> Auto-export audio</span>{/if}
       </div>
     {/if}
 
@@ -378,7 +379,7 @@
         <!-- Mic row -->
         <div class="source-row">
           <div class="source-row-top">
-            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={micEnabled} /> 🎤 Microphone</label>
+            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={micEnabled} /> <Icon name="microphone" size={13}/> Microphone</label>
             <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div></div>
           </div>
           <div class="source-row-bottom">
@@ -399,7 +400,7 @@
         <!-- System audio row -->
         <div class="source-row">
           <div class="source-row-top">
-            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={sysEnabled} /> 💻 System Audio</label>
+            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={sysEnabled} /> <Icon name="monitor" size={13}/> System Audio</label>
             <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div></div>
           </div>
           <div class="source-row-bottom">
@@ -425,7 +426,7 @@
         <summary class="card-header">
           Summary
           <button class="btn btn-xs btn-accent" onclick={(e) => { e.stopPropagation(); generateSummary(); }} disabled={summaryLoading}>
-            {summaryLoading ? "⏳ Generating..." : "Generate Summary"}
+            {#if summaryLoading}<Icon name="spinner" size={12}/> Generating...{:else}Generate Summary{/if}
           </button>
         </summary>
         {#if $liveSummary}
@@ -485,7 +486,7 @@
     <div class="transcript-panel-header">
       <span class="transcript-panel-title">Live Transcript</span>
       <button type="button" class="header-toggle-btn" onclick={() => autoScrollEnabled.set(!$autoScrollEnabled)}>
-        {$autoScrollEnabled ? "☑" : "☐"} Auto-scroll
+        <Icon name={$autoScrollEnabled ? "checkbox-checked" : "checkbox-empty"} size={13}/> Auto-scroll
       </button>
     </div>
     <div class="transcript-panel-body">

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "../lib/tauri";
+  import Icon from "./Icon.svelte";
 
   let snap = $state<any>(null);
   let interval: number | null = null;
@@ -31,11 +32,11 @@
 
 {#if snap}
   <div class="perf-bar" class:warn>
-    <span title="CPU usage">⚙️ {snap.cpu_pct.toFixed(1)}%</span>
+    <span title="CPU usage"><Icon name="settings" size={10}/> {snap.cpu_pct.toFixed(1)}%</span>
     <span class="sep">|</span>
-    <span title="Memory: {snap.rss_mb.toFixed(0)}MB of {(snap.total_memory_gb * 1024).toFixed(0)}MB">🧠 {snap.rss_mb.toFixed(0)}MB</span>
+    <span title="Memory: {snap.rss_mb.toFixed(0)}MB of {(snap.total_memory_gb * 1024).toFixed(0)}MB"><Icon name="cpu" size={10}/> {snap.rss_mb.toFixed(0)}MB</span>
     <span class="sep">|</span>
-    <span title="Uptime">⏱ {fmtUptime(snap.uptime_seconds)}</span>
+    <span title="Uptime"><Icon name="clock" size={10}/> {fmtUptime(snap.uptime_seconds)}</span>
   </div>
 {/if}
 

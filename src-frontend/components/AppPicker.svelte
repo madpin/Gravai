@@ -4,6 +4,8 @@
    * Handles 100+ items gracefully with fuzzy search and grouped display.
    */
 
+  import Icon from "./Icon.svelte";
+
   let {
     apps = [],
     selected = "",
@@ -130,7 +132,7 @@
   {#if open}
     <div class="app-picker-dropdown">
       <div class="app-picker-item all-apps" role="option" tabindex="-1" aria-selected={!selected} onclick={() => select("", "")} onkeydown={(e) => { if (e.key === "Enter") select("", ""); }}>
-        🔊 All system audio
+        <Icon name="speaker" size={14}/> All system audio
       </div>
 
       {#each filteredApps() as app}
@@ -144,7 +146,7 @@
           onclick={() => select(app.id, app.name)}
           onkeydown={(e) => { if (e.key === "Enter") select(app.id, app.name); }}
         >
-          {#if app.priority >= 9}🌟{:else if app.priority >= 6}📱{:else}📄{/if}
+          {#if app.priority >= 9}<Icon name="star" size={13}/>{:else if app.priority >= 6}<Icon name="smartphone" size={13}/>{:else}<Icon name="file" size={13}/>{/if}
           {app.name}
         </div>
       {/each}

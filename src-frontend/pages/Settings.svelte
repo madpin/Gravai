@@ -3,6 +3,7 @@
   import { invoke } from "../lib/tauri";
   import { healthStatus, currentPage } from "../lib/store";
   import Onboarding from "../components/Onboarding.svelte";
+  import Icon from "../components/Icon.svelte";
 
   let healthChecks = $state<any[]>([]);
   let rawJson = $state("");
@@ -159,14 +160,14 @@
     {#if saveMsg}<span class="action-msg">{saveMsg}</span>{/if}
     <button class="btn btn-xs btn-ghost" onclick={importConfig}>Import</button>
     <button class="btn btn-xs btn-ghost" onclick={exportConfig}>Export</button>
-    <button class="btn btn-xs btn-ghost" onclick={runWizard}>🧙 Setup Wizard</button>
+    <button class="btn btn-xs btn-ghost" onclick={runWizard}><Icon name="wand" size={13}/> Setup Wizard</button>
   </div>
 </div>
 
 <!-- Quick links to configuration pages -->
 <div class="settings-links">
   <button class="settings-link-card" onclick={() => goTo("presets")}>
-    <span class="settings-link-icon">🎛️</span>
+    <span class="settings-link-icon"><Icon name="sliders" size={24}/></span>
     <div class="settings-link-info">
       <strong>Capture Presets</strong>
       <span>Audio sources, recording quality, format, output folder</span>
@@ -174,7 +175,7 @@
     <span class="settings-link-arrow">→</span>
   </button>
   <button class="settings-link-card" onclick={() => goTo("profiles")}>
-    <span class="settings-link-icon">👤</span>
+    <span class="settings-link-icon"><Icon name="user" size={24}/></span>
     <div class="settings-link-info">
       <strong>Profiles</strong>
       <span>Transcription, VAD, features, AI/LLM, export settings</span>
@@ -182,7 +183,7 @@
     <span class="settings-link-arrow">→</span>
   </button>
   <button class="settings-link-card" onclick={() => goTo("shortcuts")}>
-    <span class="settings-link-icon">⌨️</span>
+    <span class="settings-link-icon"><Icon name="keyboard" size={24}/></span>
     <div class="settings-link-info">
       <strong>Keyboard Shortcuts</strong>
       <span>Global and local key bindings</span>
@@ -190,7 +191,7 @@
     <span class="settings-link-arrow">→</span>
   </button>
   <button class="settings-link-card" onclick={() => goTo("storage")}>
-    <span class="settings-link-icon">💿</span>
+    <span class="settings-link-icon"><Icon name="database" size={24}/></span>
     <div class="settings-link-info">
       <strong>Storage</strong>
       <span>Manage sessions, audio files, disk usage</span>

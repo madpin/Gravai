@@ -2,6 +2,9 @@
   import { onMount } from "svelte";
   import { invoke, fmtDuration } from "../lib/tauri";
   import TranscriptView from "../components/TranscriptView.svelte";
+  import Icon from "../components/Icon.svelte";
+  import { pendingArchiveSessionId } from "../lib/store";
+  import { get } from "svelte/store";
 
   let sessions = $state<any[]>([]);
   let selectedId = $state<string | null>(null);
@@ -20,7 +23,15 @@
   let filterDateFrom = $state("");
   let filterDateTo = $state("");
 
-  onMount(() => { load(); loadFormats(); });
+  onMount(async () => {
+    await load();
+    loadFormats();
+    const pending = get(pendingArchiveSessionId);
+    if (pending) {
+      pendingArchiveSessionId.set(null);
+      await select(pending);
+    }
+  });
 
   async function load() {
     try {
@@ -153,13 +164,13 @@
     {#if selectedId}
       <div class="archive-actions">
         <button class="btn btn-xs btn-accent" onclick={summarize} disabled={summaryLoading}>
-          {summaryLoading ? "Summarizing..." : "📝 Summarize"}
+          {#if summaryLoading}Summarizing...{:else}<Icon name="file-text" size={13}/> Summarize{/if}
         </button>
-        <button class="btn btn-xs btn-ghost" onclick={exportMd}>📄 Markdown</button>
+        <button class="btn btn-xs btn-ghost" onclick={exportMd}><Icon name="file" size={13}/> Markdown</button>
         <select class="select select-compact" bind:value={exportFormat}>
           {#each exportFormats as f}<option value={f.id}>{f.label}</option>{/each}
         </select>
-        <button class="btn btn-xs btn-ghost" onclick={exportAudio}>🔊 Export Audio</button>
+        <button class="btn btn-xs btn-ghost" onclick={exportAudio}><Icon name="speaker" size={13}/> Export Audio</button>
         {#if exportMsg}<span class="action-msg">{exportMsg}</span>{/if}
       </div>
     {/if}

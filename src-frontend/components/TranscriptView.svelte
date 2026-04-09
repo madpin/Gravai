@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { invoke, sourceIcon } from "../lib/tauri";
+  import { invoke, sourceIconName } from "../lib/tauri";
+  import Icon from "./Icon.svelte";
 
   let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null } = $props();
 
@@ -153,7 +154,7 @@
     {#each utterances as u}
       <div class="transcript-line">
         <span class="transcript-meta">
-          {sourceIcon(u.source)} {fmtTime(u.timestamp)}
+          <Icon name={sourceIconName(u.source)} size={12}/> {fmtTime(u.timestamp)}
           {#if u.speaker}
             {@const display = getDisplaySpeaker(u.speaker)}
             {#if editingUtteranceId === u.id}
@@ -203,7 +204,7 @@
             data-tooltip={showingOriginal.has(u.id) ? "Showing original — click to restore correction" : `Original: ${u.text}`}
             onclick={() => toggleOriginal(u.id)}
             title=""
-          >{showingOriginal.has(u.id) ? "↩" : "✎"}</button>{/if}</span>
+          ><Icon name={showingOriginal.has(u.id) ? "corner-up-left" : "pencil"} size={13}/></button>{/if}</span>
         {#if showEmotions && u.sentiment_label}
           <span
             class="emotion-badge"

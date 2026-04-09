@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fmtDuration } from "../lib/tauri";
+  import Icon from "./Icon.svelte";
 
   let {
     sessions = [],
@@ -80,7 +81,7 @@
         onclick={() => select(null, "")}
         onkeydown={(e) => { if (e.key === "Enter") select(null, ""); }}
       >
-        <span class="item-icon">📋</span>
+        <span class="item-icon"><Icon name="clipboard" size={13}/></span>
         <span class="item-title">All meetings</span>
       </div>
 
@@ -94,7 +95,7 @@
           onclick={() => select(s.id, s.title || s.id.slice(0, 8))}
           onkeydown={(e) => { if (e.key === "Enter") select(s.id, s.title || s.id.slice(0, 8)); }}
         >
-          <span class="item-icon">🗓️</span>
+          <span class="item-icon"><Icon name="calendar" size={13}/></span>
           <span class="item-main">
             <span class="item-title">{s.title || s.id.slice(0, 12)}</span>
             <span class="item-meta">

@@ -10,10 +10,10 @@ export async function listen(event: string, handler: (e: any) => void): Promise<
   return tauriEvent.listen(event, handler);
 }
 
-export function sourceIcon(source: string): string {
-  if (source === "microphone" || source === "mic") return "\u{1F3A4}";
-  if (source === "system_audio" || source === "system" || source === "sys") return "\u{1F4BB}";
-  return "\u{1F50A}";
+export function sourceIconName(source: string): string {
+  if (source === "microphone" || source === "mic") return "microphone";
+  if (source === "system_audio" || source === "system" || source === "sys") return "monitor";
+  return "speaker";
 }
 
 export function fmtDuration(s: number): string {

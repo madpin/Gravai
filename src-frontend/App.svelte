@@ -5,6 +5,7 @@
   import Onboarding from "./components/Onboarding.svelte";
   import AlertBar from "./components/AlertBar.svelte";
   import StatusBar from "./components/StatusBar.svelte";
+  import Icon from "./components/Icon.svelte";
 
   import Recording from "./pages/Recording.svelte";
   import Archive from "./pages/Archive.svelte";
@@ -19,20 +20,20 @@
   import Knowledge from "./pages/Knowledge.svelte";
 
   const mainPages = [
-    { id: "recording", label: "Recording", icon: "⏺" },
-    { id: "archive", label: "Archive", icon: "📦" },
-    { id: "chat", label: "Ask Gravai", icon: "💬" },
+    { id: "recording", label: "Recording", icon: "record" },
+    { id: "archive", label: "Archive", icon: "archive" },
+    { id: "chat", label: "Ask Gravai", icon: "chat" },
   ];
 
   const configPages = [
-    { id: "presets", label: "Presets", icon: "🎛️" },
-    { id: "profiles", label: "Profiles", icon: "👤" },
-    { id: "knowledge", label: "Knowledge", icon: "📚" },
-    { id: "models", label: "Models", icon: "🧠" },
-    { id: "shortcuts", label: "Shortcuts", icon: "⌨️" },
-    { id: "automations", label: "Automations", icon: "⚡" },
-    { id: "storage", label: "Storage", icon: "💿" },
-    { id: "settings", label: "System", icon: "⚙️" },
+    { id: "presets", label: "Presets", icon: "sliders" },
+    { id: "profiles", label: "Profiles", icon: "user" },
+    { id: "knowledge", label: "Knowledge", icon: "books" },
+    { id: "models", label: "Models", icon: "cpu" },
+    { id: "shortcuts", label: "Shortcuts", icon: "keyboard" },
+    { id: "automations", label: "Automations", icon: "zap" },
+    { id: "storage", label: "Storage", icon: "database" },
+    { id: "settings", label: "System", icon: "settings" },
   ];
 
   let showOnboarding = $state(false);
@@ -137,7 +138,7 @@
           onclick={() => setPage(page.id)}
           onkeydown={(e) => { if (e.key === "Enter") setPage(page.id); }}
         >
-          <span class="nav-icon">{page.icon}</span>
+          <span class="nav-icon"><Icon name={page.icon} size={18} /></span>
           {page.label}
         </li>
       {/each}
@@ -145,9 +146,9 @@
       <!-- Settings group -->
       <li class="nav-section">
         <button class="nav-section-toggle" onclick={() => settingsOpen = !settingsOpen}>
-          <span class="nav-icon">⚙️</span>
+          <span class="nav-icon"><Icon name="settings" size={18} /></span>
           Settings
-          <span class="nav-section-arrow" class:open={settingsOpen}>{settingsOpen ? "▾" : "▸"}</span>
+          <span class="nav-section-arrow" class:open={settingsOpen}><Icon name={settingsOpen ? "chevron-down" : "chevron-right"} size={14} /></span>
         </button>
         {#if settingsOpen}
           <ul class="nav-sublist">
@@ -161,7 +162,7 @@
                 onclick={() => setPage(page.id)}
                 onkeydown={(e) => { if (e.key === "Enter") setPage(page.id); }}
               >
-                <span class="nav-icon">{page.icon}</span>
+                <span class="nav-icon"><Icon name={page.icon} size={16} /></span>
                 {page.label}
               </li>
             {/each}

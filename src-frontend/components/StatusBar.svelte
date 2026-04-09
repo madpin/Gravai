@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen } from "../lib/tauri";
+  import Icon from "./Icon.svelte";
   import {
     isRecording, isPaused, activityLogs, healthStatus, currentPage,
     currentSessionId, sessionStartTime, lastSessionId as lastSessionIdStore,
@@ -77,16 +78,16 @@
       <span class="rec-pulse"></span>
       <span class="sb-state">{$isPaused ? "Paused" : "Recording"}</span>
       <button class="sb-btn" onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}>
-        {$isPaused ? "▶" : "⏸"}
+        <Icon name={$isPaused ? "play" : "pause"} size={11}/>
       </button>
-      <button class="sb-btn" onclick={stop} title="Stop recording">⏹</button>
+      <button class="sb-btn" onclick={stop} title="Stop recording"><Icon name="stop" size={11}/></button>
     {:else}
       <span class="sb-idle-dot"></span>
       <button
         class="sb-btn sb-btn-muted"
         onclick={() => currentPage.set("recording")}
         title="Go to Recording tab"
-      >⏺</button>
+      ><Icon name="record" size={11}/></button>
       <span class="sb-state muted">Idle</span>
     {/if}
   </div>

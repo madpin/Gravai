@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "../lib/tauri";
   import { onMount } from "svelte";
+  import Icon from "./Icon.svelte";
 
   let { onComplete }: { onComplete: () => void } = $props();
 
@@ -14,27 +15,27 @@
     {
       title: "Welcome to Gravai",
       desc: "Audio Capture & AI Meeting Intelligence.\nEverything runs locally on your Mac — your data never leaves your machine.",
-      icon: "🎤"
+      icon: "microphone"
     },
     {
       title: "How It Works",
       desc: "1. Select your audio sources (microphone, system audio)\n2. Click Record to start capturing\n3. Gravai transcribes in real-time using on-device AI\n4. Get summaries, action items, and searchable archives",
-      icon: "📋"
+      icon: "clipboard"
     },
     {
       title: "Permissions",
       desc: "• Microphone — required for voice recording\n• Screen Recording — only requested when you record system audio\n• Calendar — optional, for auto-naming sessions from events\n\nNo permission is requested until you use the feature.",
-      icon: "🔒"
+      icon: "lock"
     },
     {
       title: "System Check",
       desc: "Checking your system configuration...",
-      icon: "⚙️"
+      icon: "settings"
     },
     {
       title: "You're All Set!",
       desc: "Start recording your first meeting.\nTip: Check Settings to customize transcription language, AI model, and export preferences.",
-      icon: "🚀"
+      icon: "rocket"
     },
   ];
 
@@ -78,7 +79,7 @@
       {/each}
     </div>
 
-    <div style="font-size:40px;margin-bottom:8px">{steps[step].icon}</div>
+    <div class="onboarding-step-icon"><Icon name={steps[step].icon} size={48}/></div>
     <h2>{steps[step].title}</h2>
     <p style="white-space:pre-line">{steps[step].desc}</p>
 
@@ -90,7 +91,7 @@
           {#each healthChecks as check}
             <div class="onboarding-check-row">
               <span class="onboarding-check-icon">
-                {check.status === 'ok' ? '✅' : check.status === 'warn' ? '⚠️' : '❌'}
+                {#if check.status === 'ok'}<Icon name="check-circle" size={16}/>{:else if check.status === 'warn'}<Icon name="alert-triangle" size={16}/>{:else}<Icon name="x-circle" size={16}/>{/if}
               </span>
               <div class="onboarding-check-info">
                 <span class="onboarding-check-name">{check.name}</span>
@@ -100,7 +101,7 @@
           {/each}
           {#if perfInfo}
             <div class="onboarding-check-row">
-              <span class="onboarding-check-icon">💾</span>
+              <span class="onboarding-check-icon"><Icon name="save" size={16}/></span>
               <div class="onboarding-check-info">
                 <span class="onboarding-check-name">Memory</span>
                 <span class="onboarding-check-msg">{perfInfo.rss_mb.toFixed(0)} MB used / {perfInfo.total_memory_gb.toFixed(0)} GB total</span>
@@ -109,7 +110,7 @@
           {/if}
           {#if deviceCount > 0}
             <div class="onboarding-check-row">
-              <span class="onboarding-check-icon">🎧</span>
+              <span class="onboarding-check-icon"><Icon name="headphones" size={16}/></span>
               <div class="onboarding-check-info">
                 <span class="onboarding-check-name">Audio Devices</span>
                 <span class="onboarding-check-msg">{deviceCount} input device(s) detected</span>
