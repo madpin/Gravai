@@ -2,9 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- App Sandbox (required for App Store) -->
+    <!-- App Sandbox disabled: enabling this breaks the Tauri in-app updater on macOS —
+         the sandbox prevents the updater from moving the new .app bundle into place,
+         causing an immediate "Failed to move the new app into place" error. Since this
+         app is distributed via GitHub releases (not the App Store) and is unsigned,
+         sandboxing provides no benefit and actively breaks self-update.
+         Re-enable only if targeting the Mac App Store, and switch to a privileged
+         helper or external update mechanism instead.
     <key>com.apple.security.app-sandbox</key>
-    <true/>
+    <true/> -->
 
     <!-- Microphone access for audio recording -->
     <key>com.apple.security.device.audio-input</key>
