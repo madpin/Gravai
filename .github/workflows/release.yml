@@ -83,11 +83,12 @@ jobs:
           echo "tag=v${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "name=Gravai v${VERSION} (${SHORT_SHA})" >> $GITHUB_OUTPUT
 
-      - name: Ad-hoc sign and collect artifacts
+      - name: Sign and collect artifacts
         id: artifacts
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.version }}"
