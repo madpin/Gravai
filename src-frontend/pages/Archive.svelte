@@ -107,6 +107,24 @@
   let selectedSession = $derived(sessions.find(s => s.id === selectedId) ?? null);
   let editingSessionTitle = $state(false);
   let sessionTitleEdit = $state("");
+  let showDeleteConfirm = $state(false);
+  let deleteLoading = $state(false);
+
+  async function deleteSession() {
+    if (!selectedId) return;
+    deleteLoading = true;
+    try {
+      await invoke("delete_full_session", { sessionId: selectedId });
+      showDeleteConfirm = false;
+      selectedId = null;
+      utterances = [];
+      summary = null;
+      await load();
+    } catch (e) {
+      exportMsg = `Delete failed: ${e}`;
+    }
+    deleteLoading = false;
+  }
 
   function startSessionTitleEdit() {
     sessionTitleEdit = selectedSession?.title ?? "";
@@ -155,6 +173,26 @@
     display: flex; align-items: center; flex-shrink: 0;
   }
   .title-edit-btn:hover { color: var(--text-secondary); background: var(--bg-secondary); }
+  .delete-btn:hover { color: var(--danger) !important; }
+  .delete-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .delete-dialog {
+    background: var(--bg-primary); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); padding: 20px; max-width: 380px; width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  }
+  .delete-dialog h4 { margin: 0 0 10px; font-size: 15px; color: var(--text-primary); }
+  .delete-dialog p { margin: 0 0 8px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+  .delete-warning { color: var(--danger) !important; font-weight: 500; }
+  .delete-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .btn-delete-confirm {
+    background: var(--danger); color: white; border: none; cursor: pointer;
+    border-radius: var(--radius-sm); padding: 4px 12px; font-weight: 500; font-size: 12px;
+  }
+  .btn-delete-confirm:hover { opacity: 0.9; }
+  .btn-delete-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 
 <div class="page-header"><h2>Archive</h2></div>
@@ -219,8 +257,29 @@
           <button class="title-edit-btn" onclick={startSessionTitleEdit} title="Rename session" aria-label="Rename session">
             <Icon name="pencil" size={13}/>
           </button>
+          <button class="title-edit-btn delete-btn" onclick={() => showDeleteConfirm = true} title="Delete session" aria-label="Delete session">
+            <Icon name="trash" size={13}/>
+          </button>
         {/if}
       </div>
+
+      {#if showDeleteConfirm}
+        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+        <div class="delete-overlay" onclick={() => showDeleteConfirm = false}>
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+          <div class="delete-dialog" onclick={(e) => e.stopPropagation()}>
+            <h4>Delete Session</h4>
+            <p>This will permanently delete <strong>{selectedSession?.title || selectedId}</strong>, including all audio files, transcripts, and database records.</p>
+            <p class="delete-warning">This action cannot be undone.</p>
+            <div class="delete-dialog-actions">
+              <button class="btn btn-xs btn-ghost" onclick={() => showDeleteConfirm = false} disabled={deleteLoading}>Cancel</button>
+              <button class="btn-delete-confirm" onclick={deleteSession} disabled={deleteLoading}>
+                {#if deleteLoading}Deleting...{:else}Delete{/if}
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
       <div class="archive-actions">
         <button class="btn btn-xs btn-accent" onclick={summarize} disabled={summaryLoading}>
           {#if summaryLoading}Summarizing...{:else}<Icon name="file-text" size={13}/> Summarize{/if}
