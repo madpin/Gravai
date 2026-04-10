@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen, fmtTimer, fmtDuration } from "../lib/tauri";
   import { get } from "svelte/store";
-  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, currentPage } from "../lib/store";
+  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, bookmarkCount, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, currentPage } from "../lib/store";
   import TranscriptView from "../components/TranscriptView.svelte";
   import AppPicker from "../components/AppPicker.svelte";
   import Icon from "../components/Icon.svelte";
@@ -58,6 +58,7 @@
       dismissAlertsByLevel("meeting");
       liveUtterances.set([]);
       liveSummary.set(null);
+      bookmarkCount.set(0);
 
       // Update config before starting — must await so start_session reads the correct settings
       await invoke("update_config", {
@@ -73,12 +74,28 @@
       isRecording.set(true); isPaused.set(false);
       currentSessionId.set(result.id); sessionStartTime.set(Date.now());
       lastSessionIdStore.set(result.id);
-      sessionTitle = result.title ?? "";
+      // Only set title from start_session if it returned one AND we don't
+      // already have one (calendar EventKit may have set it via progress event
+      // before start_session returned)
+      if (result.title) sessionTitle = result.title;
+      else if (!sessionTitle) sessionTitle = "";
       startTimer();
       startTranscriptPoll();
       log(`Recording started: ${result.id}${result.title ? " — " + result.title : ""}`);
     } catch (e) { log(`Error: ${e}`); }
     starting = false;
+  }
+
+  async function addBookmark() {
+    if (!$isRecording) return;
+    try {
+      const result: any = await invoke("add_bookmark", { note: null });
+      // Don't increment here — the gravai:bookmark event listener handles the count
+      const secs = Math.floor(result.offset_ms / 1000);
+      const m = String(Math.floor(secs / 60)).padStart(2, "0");
+      const s = String(secs % 60).padStart(2, "0");
+      log(`Bookmark added at ${m}:${s}`);
+    } catch (e) { log(`Bookmark error: ${e}`); }
   }
 
   async function togglePause() {
@@ -245,6 +262,33 @@
     });
     unlisteners.push(uc);
 
+    const ub = await listen("gravai:bookmark", (_e: any) => {
+      bookmarkCount.update(n => n + 1);
+    });
+    unlisteners.push(ub);
+
+    const usp = await listen("gravai:start-progress", (e: any) => {
+      const msg = e.payload?.message as string;
+      if (msg) {
+        log(msg);
+        // Update session title when calendar detects a meeting
+        if (msg.startsWith("Meeting detected: ")) {
+          sessionTitle = msg.replace("Meeting detected: ", "");
+        }
+      }
+    });
+    unlisteners.push(usp);
+
+    // Keyboard shortcut for bookmark: Cmd+Shift+B
+    function handleBookmarkShortcut(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        addBookmark();
+      }
+    }
+    window.addEventListener("keydown", handleBookmarkShortcut);
+    unlisteners.push(() => window.removeEventListener("keydown", handleBookmarkShortcut));
+
     await loadDevices();
     // Load export config + active preset/profile for status display
     try {
@@ -400,6 +444,9 @@
       <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record"><Icon name={starting ? "spinner" : "record"} size={22}/></button>
       <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}><Icon name={$isPaused ? "play" : "pause"} size={20}/></button>
       <button class="transport-btn stop" disabled={!$isRecording && !starting} onclick={stop} title="Stop"><Icon name="stop" size={20}/></button>
+      <button class="transport-btn bookmark" disabled={!$isRecording} onclick={addBookmark} title="Add Bookmark (Cmd+Shift+B)">
+        <Icon name="bookmark" size={18}/>{#if $bookmarkCount > 0}<span class="bookmark-badge">{$bookmarkCount}</span>{/if}
+      </button>
       <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording && !starting} class:starting={starting}>
         {starting ? "Starting..." : $isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
       </span>
@@ -532,7 +579,7 @@
       </button>
     </div>
     <div class="transcript-panel-body">
-      <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} {showEmotions} sessionId={$currentSessionId ?? $lastSessionIdStore} />
+      <TranscriptView utterances={$liveUtterances} autoScroll={$autoScrollEnabled} {showEmotions} sessionId={$currentSessionId ?? $lastSessionIdStore} sessionStartedAt={$sessionStartTime ? new Date($sessionStartTime).toISOString() : ""} />
     </div>
   </div>
 </div>
@@ -632,4 +679,13 @@
     display: flex; align-items: center;
   }
   .title-edit-btn:hover { color: var(--text-secondary); background: var(--bg-secondary); }
+  .transport-btn.bookmark { position: relative; }
+  .bookmark-badge {
+    position: absolute; top: -4px; right: -4px;
+    background: var(--accent); color: var(--bg-primary);
+    font-size: 9px; font-weight: 700; line-height: 1;
+    min-width: 16px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; padding: 0 4px;
+  }
 </style>

@@ -17,7 +17,14 @@ pub struct ExportData {
     pub duration_seconds: Option<f64>,
     pub meeting_app: Option<String>,
     pub utterances: Vec<ExportUtterance>,
+    pub bookmarks: Vec<ExportBookmark>,
     pub summary: Option<ExportSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportBookmark {
+    pub offset_ms: i64,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

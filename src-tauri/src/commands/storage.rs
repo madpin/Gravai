@@ -149,6 +149,7 @@ pub async fn save_realtime_transcript(session_id: String) -> Result<String, Stri
 
     let _ = std::fs::create_dir_all(&export_dir);
 
+    let bookmarks = db.list_bookmarks(&session_id).unwrap_or_default();
     let data = gravai_export::ExportData {
         session_id: session_id.clone(),
         title: None,
@@ -166,6 +167,13 @@ pub async fn save_realtime_transcript(session_id: String) -> Result<String, Stri
                 source: u.source.clone(),
                 speaker: u.speaker.clone(),
                 text: u.text.clone(),
+            })
+            .collect(),
+        bookmarks: bookmarks
+            .iter()
+            .map(|b| gravai_export::ExportBookmark {
+                offset_ms: b.offset_ms,
+                note: b.note.clone(),
             })
             .collect(),
         summary: None,

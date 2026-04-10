@@ -15,6 +15,7 @@ export const liveUtterances = writable<any[]>([]);
 export const lastSessionId = writable<string | null>(null);
 export const activityLogs = writable<string[]>([]);
 export const liveSummary = writable<any>(null);
+export const bookmarkCount = writable(0);
 
 // Meeting banner dismiss state (persists across tab switches)
 export const dismissedMeetingApps = writable<Set<string>>(new Set());

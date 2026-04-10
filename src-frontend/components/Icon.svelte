@@ -123,6 +123,8 @@
     'refresh':
       '<polyline points="1,4 1,10 7,10"/>' +
       '<path d="M3.51 15a9 9 0 1 0 .49-3.69"/>',
+    'bookmark':
+      '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
     'pencil':
       '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
     'corner-up-left':

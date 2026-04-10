@@ -30,6 +30,11 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[
         "Utterance corrections",
         include_str!("../sql/006_utterance_corrections.sql"),
     ),
+    (
+        7,
+        "Session bookmarks",
+        include_str!("../sql/007_session_bookmarks.sql"),
+    ),
 ];
 
 /// Run all pending migrations. Creates the schema_version table if needed.

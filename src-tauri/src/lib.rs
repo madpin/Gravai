@@ -422,6 +422,14 @@ pub fn run() {
                                     "gravai:error",
                                     serde_json::json!({ "message": message }),
                                 ),
+                                GravaiEvent::SessionStartProgress { message } => (
+                                    "gravai:start-progress",
+                                    serde_json::json!({ "message": message }),
+                                ),
+                                GravaiEvent::BookmarkCreated { session_id, bookmark_id, offset_ms, note } => (
+                                    "gravai:bookmark",
+                                    serde_json::json!({ "session_id": session_id, "bookmark_id": bookmark_id, "offset_ms": offset_ms, "note": note }),
+                                ),
                                 GravaiEvent::TranscriptCorrected { session_id, utterance_ids } => (
                                     "gravai:transcript-corrected",
                                     serde_json::json!({ "session_id": session_id, "utterance_ids": utterance_ids }),
@@ -478,6 +486,7 @@ pub fn run() {
             commands::list_running_apps,
             commands::list_capturable_apps,
             commands::set_source_gain,
+            commands::get_session_audio_path,
             commands::start_session,
             commands::pause_session,
             commands::resume_session,
@@ -549,6 +558,10 @@ pub fn run() {
             commands::rename_session,
             commands::rename_speaker_in_session,
             commands::get_speaker_suggestions,
+            // Bookmarks
+            commands::add_bookmark,
+            commands::list_bookmarks,
+            commands::delete_bookmark,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gravai");

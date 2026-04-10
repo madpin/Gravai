@@ -38,6 +38,73 @@ impl ExportFormat {
     }
 }
 
+/// Convert a 32-bit float WAV to 16-bit PCM WAV for browser compatibility.
+/// If the source is already 16-bit PCM, copies it as-is.
+/// Returns Ok(true) if conversion happened, Ok(false) if already compatible.
+pub fn ensure_pcm16_wav(source: &Path, output: &Path) -> Result<(), String> {
+    let reader =
+        hound::WavReader::open(source).map_err(|e| format!("Open {}: {e}", source.display()))?;
+    let spec = reader.spec();
+
+    // Already 16-bit int? Just copy.
+    if spec.sample_format == hound::SampleFormat::Int && spec.bits_per_sample == 16 {
+        if source != output {
+            std::fs::copy(source, output).map_err(|e| format!("Copy: {e}"))?;
+        }
+        return Ok(());
+    }
+
+    let out_spec = hound::WavSpec {
+        channels: spec.channels,
+        sample_rate: spec.sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer =
+        hound::WavWriter::create(output, out_spec).map_err(|e| format!("Create: {e}"))?;
+
+    match spec.sample_format {
+        hound::SampleFormat::Float => {
+            for sample in reader.into_samples::<f32>() {
+                let s = sample.map_err(|e| format!("Read sample: {e}"))?;
+                let clamped = s.clamp(-1.0, 1.0);
+                let pcm = (clamped * 32767.0) as i16;
+                writer
+                    .write_sample(pcm)
+                    .map_err(|e| format!("Write: {e}"))?;
+            }
+        }
+        hound::SampleFormat::Int => {
+            let max_val = (1i64 << (spec.bits_per_sample - 1)) as f64;
+            for sample in reader.into_samples::<i32>() {
+                let s = sample.map_err(|e| format!("Read sample: {e}"))?;
+                let normalized = s as f64 / max_val;
+                let pcm = (normalized * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                writer
+                    .write_sample(pcm)
+                    .map_err(|e| format!("Write: {e}"))?;
+            }
+        }
+    }
+
+    writer.finalize().map_err(|e| format!("Finalize: {e}"))?;
+    info!(
+        "Converted {}→{} ({}Hz {}ch, {}bit {} → 16bit PCM)",
+        source.display(),
+        output.display(),
+        spec.sample_rate,
+        spec.channels,
+        spec.bits_per_sample,
+        if spec.sample_format == hound::SampleFormat::Float {
+            "float"
+        } else {
+            "int"
+        }
+    );
+    Ok(())
+}
+
 /// Export a WAV file to a different format.
 pub fn export_audio(
     source_wav: &Path,
@@ -151,19 +218,30 @@ pub fn merge_and_export(
     format: ExportFormat,
     aac_bitrate_kbps: u32,
 ) -> Result<(), String> {
-    // Find all WAV files in the session directory
+    // Find source WAV files in the session directory (exclude temp, export, and trimmed files)
     let wav_files: Vec<std::path::PathBuf> = std::fs::read_dir(session_dir)
         .map_err(|e| format!("Read dir: {e}"))?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| {
-            p.extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
-                && !p
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .contains("trimmed")
+            let ext_ok = p
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"));
+            if !ext_ok {
+                return false;
+            }
+            let name = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+            // Exclude temp files, exports, trimmed files, master, and playback (derived files)
+            !name.contains("trimmed")
+                && !name.starts_with("_mixed")
+                && !name.starts_with("_playback")
+                && !name.starts_with("export")
+                && !name.starts_with("playback")
+                && name != "master.wav"
         })
         .collect();
 
@@ -175,6 +253,10 @@ pub fn merge_and_export(
     if wav_files.len() == 1 {
         return export_audio(&wav_files[0], output_path, format, aac_bitrate_kbps);
     }
+
+    // Clean up any leftover temp files from previous interrupted merges
+    let temp_file = session_dir.join("_mixed_temp.wav");
+    let _ = std::fs::remove_file(&temp_file);
 
     info!(
         "Merging {} tracks from {}",
@@ -188,8 +270,13 @@ pub fn merge_and_export(
     let mut max_channels: u16 = 0;
 
     for path in &wav_files {
-        let reader =
-            hound::WavReader::open(path).map_err(|e| format!("Open {}: {e}", path.display()))?;
+        let reader = match hound::WavReader::open(path) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Skipping unreadable WAV {}: {e}", path.display());
+                continue;
+            }
+        };
         let spec = reader.spec();
         let samples: Vec<f32> = match spec.sample_format {
             hound::SampleFormat::Float => reader
@@ -205,20 +292,30 @@ pub fn merge_and_export(
                     .collect()
             }
         };
+        if samples.is_empty() {
+            tracing::warn!("Skipping empty WAV {}", path.display());
+            continue;
+        }
         max_rate = max_rate.max(spec.sample_rate);
         max_channels = max_channels.max(spec.channels);
         tracks.push((samples, spec.sample_rate, spec.channels));
     }
 
-    // Determine output length (longest track at max_rate)
-    let output_len = tracks
+    if tracks.is_empty() {
+        return Err("No readable WAV tracks found to merge".into());
+    }
+
+    // Determine output length in frames (longest track at max_rate), then convert to samples
+    let out_ch = max_channels as usize;
+    let output_frames = tracks
         .iter()
         .map(|(samples, rate, channels)| {
             let duration_secs = samples.len() as f64 / (*rate as f64 * *channels as f64);
-            (duration_secs * max_rate as f64 * max_channels as f64) as usize
+            (duration_secs * max_rate as f64).ceil() as usize
         })
         .max()
         .unwrap_or(0);
+    let output_len = output_frames * out_ch;
 
     // Mix all tracks into the output buffer
     let mut mixed = vec![0.0f32; output_len];
@@ -226,7 +323,6 @@ pub fn merge_and_export(
     for (samples, rate, channels) in &tracks {
         let rate_ratio = *rate as f64 / max_rate as f64;
         let ch = *channels as usize;
-        let out_ch = max_channels as usize;
 
         for (out_i, out_sample) in mixed.iter_mut().enumerate() {
             let out_frame = out_i / out_ch;
@@ -253,20 +349,21 @@ pub fn merge_and_export(
         info!("Normalized mix (peak was {:.2})", peak);
     }
 
-    // Write mixed WAV to a temp file
+    // Write mixed WAV to a temp file (16-bit PCM for browser compatibility)
     let mixed_wav = session_dir.join("_mixed_temp.wav");
     {
         let spec = hound::WavSpec {
             channels: max_channels,
             sample_rate: max_rate,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
         };
         let mut writer =
             hound::WavWriter::create(&mixed_wav, spec).map_err(|e| format!("Create mix: {e}"))?;
         for &s in &mixed {
+            let pcm = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
             writer
-                .write_sample(s)
+                .write_sample(pcm)
                 .map_err(|e| format!("Write mix: {e}"))?;
         }
         writer

@@ -3,7 +3,81 @@
   import { invoke, sourceIconName } from "../lib/tauri";
   import Icon from "./Icon.svelte";
 
-  let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null } = $props();
+  let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null, bookmarks = [], sessionStartedAt = "", currentTimeMs = -1, onUtteranceClick }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null; bookmarks?: any[]; sessionStartedAt?: string; currentTimeMs?: number; onUtteranceClick?: (startMs: number) => void } = $props();
+
+  // Playhead: compute the active utterance based on audio current time
+  let activeUtteranceId = $derived.by(() => {
+    if (currentTimeMs < 0) return -1;
+    // Find the last utterance whose start_ms <= currentTimeMs
+    let activeId = -1;
+    for (const u of utterances) {
+      if (u.start_ms != null && u.start_ms <= currentTimeMs) {
+        activeId = u.id;
+      }
+    }
+    return activeId;
+  });
+
+  // Auto-scroll to active utterance during playback (unless user is manually scrolling)
+  let userScrolled = $state(false);
+  let scrollTimeout: number | null = null;
+
+  function handleScroll() {
+    userScrolled = true;
+    if (scrollTimeout) clearTimeout(scrollTimeout);
+    scrollTimeout = window.setTimeout(() => { userScrolled = false; }, 3000);
+  }
+
+  $effect(() => {
+    if (activeUtteranceId > 0 && !userScrolled && el) {
+      const activeEl = el.querySelector(`[data-utterance-id="${activeUtteranceId}"]`);
+      if (activeEl) {
+        activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  });
+
+  function fmtOffsetMs(ms: number): string {
+    const secs = Math.floor(ms / 1000);
+    const m = String(Math.floor(secs / 60)).padStart(2, "0");
+    const s = String(secs % 60).padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
+  // Compute each utterance's offset from session start (ms).
+  // Uses start_ms if available, otherwise derives from timestamp vs first utterance.
+  function getUtteranceOffsetMs(u: any, baseTime: number): number {
+    if (u.start_ms != null) return u.start_ms;
+    const ts = new Date(u.timestamp).getTime();
+    return ts - baseTime;
+  }
+
+  // Base time = session start (for aligning bookmark offsets with utterance timestamps)
+  let baseTimeMs = $derived(
+    sessionStartedAt ? new Date(sessionStartedAt).getTime()
+    : utterances.length > 0 ? new Date(utterances[0].timestamp).getTime()
+    : 0
+  );
+
+  // Assign each bookmark to the utterance it should appear before.
+  // Each bookmark is assigned to exactly one slot (no duplicates).
+  let bookmarkSlots = $derived.by(() => {
+    if (bookmarks.length === 0 || utterances.length === 0) return { before: new Map<number, any[]>(), trailing: bookmarks };
+    const before = new Map<number, any[]>();
+    const placed = new Set<number>();
+
+    for (let i = 0; i < utterances.length; i++) {
+      const uOffset = getUtteranceOffsetMs(utterances[i], baseTimeMs);
+      const matching = bookmarks.filter(b => !placed.has(b.id) && b.offset_ms <= uOffset);
+      if (matching.length > 0) {
+        before.set(i, matching);
+        for (const b of matching) placed.add(b.id);
+      }
+    }
+
+    const trailing = bookmarks.filter(b => !placed.has(b.id));
+    return { before, trailing };
+  });
 
   const speakerColors = ["#7c6cff", "#34d399", "#fbbf24", "#f87171", "#60a5fa", "#a78bfa", "#fb923c", "#2dd4bf"];
   let speakerColorMap: Record<string, string> = {};
@@ -147,12 +221,26 @@
   }
 </script>
 
-<div class="transcript-panel" bind:this={el}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="transcript-panel" bind:this={el} onscroll={currentTimeMs >= 0 ? handleScroll : undefined}>
   {#if utterances.length === 0}
     <div class="empty-state">No transcript yet.</div>
   {:else}
-    {#each utterances as u}
-      <div class="transcript-line">
+    {#each utterances as u, i}
+      {#each bookmarkSlots.before.get(i) ?? [] as bm (bm.id)}
+        <div class="transcript-bookmark-marker">
+          <Icon name="bookmark" size={11}/> <span class="bookmark-marker-time">[{fmtOffsetMs(bm.offset_ms)}]</span>
+          {#if bm.note}<span class="bookmark-marker-note">{bm.note}</span>{/if}
+        </div>
+      {/each}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="transcript-line"
+        class:active-utterance={u.id === activeUtteranceId}
+        class:clickable={!!onUtteranceClick}
+        data-utterance-id={u.id}
+        ondblclick={onUtteranceClick && u.start_ms != null ? () => onUtteranceClick(u.start_ms) : undefined}
+      >
         <span class="transcript-meta">
           <Icon name={sourceIconName(u.source)} size={12}/> {fmtTime(u.timestamp)}
           {#if u.speaker}
@@ -174,6 +262,8 @@
                   <ul class="speaker-suggestions">
                     {#each filteredSuggestions as s, i}
                       <li
+                        role="option"
+                        aria-selected={i === selectedSuggestionIdx}
                         class:selected={i === selectedSuggestionIdx}
                         onmousedown={(e) => { e.preventDefault(); confirmRename(s); }}
                       >{s}</li>
@@ -212,6 +302,12 @@
             title={u.sentiment_score != null ? `${u.sentiment_label} (${(u.sentiment_score * 100).toFixed(0)}%)` : u.sentiment_label}
           >{u.sentiment_label}</span>
         {/if}
+      </div>
+    {/each}
+    {#each bookmarkSlots.trailing as bm (bm.id)}
+      <div class="transcript-bookmark-marker">
+        <Icon name="bookmark" size={11}/> <span class="bookmark-marker-time">[{fmtOffsetMs(bm.offset_ms)}]</span>
+        {#if bm.note}<span class="bookmark-marker-note">{bm.note}</span>{/if}
       </div>
     {/each}
   {/if}

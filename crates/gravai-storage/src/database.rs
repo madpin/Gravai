@@ -59,6 +59,16 @@ pub struct KnowledgeEntry {
     pub updated_at: String,
 }
 
+/// A bookmark record anchored to a session timeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookmarkRecord {
+    pub id: i64,
+    pub session_id: String,
+    pub offset_ms: i64,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
 /// Main database handle.
 pub struct Database {
     conn: Connection,
@@ -170,6 +180,45 @@ impl Database {
             params![title, session_id],
         )?;
         Ok(())
+    }
+
+    // -- Bookmarks --
+
+    pub fn insert_bookmark(
+        &self,
+        session_id: &str,
+        offset_ms: i64,
+        note: Option<&str>,
+    ) -> Result<i64, rusqlite::Error> {
+        self.conn.execute(
+            "INSERT INTO session_bookmarks (session_id, offset_ms, note) VALUES (?1, ?2, ?3)",
+            params![session_id, offset_ms, note],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_bookmarks(&self, session_id: &str) -> Result<Vec<BookmarkRecord>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, offset_ms, note, created_at
+             FROM session_bookmarks WHERE session_id = ?1 ORDER BY offset_ms ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(BookmarkRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                offset_ms: row.get(2)?,
+                note: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_bookmark(&self, id: i64) -> Result<bool, rusqlite::Error> {
+        let count = self
+            .conn
+            .execute("DELETE FROM session_bookmarks WHERE id = ?1", params![id])?;
+        Ok(count > 0)
     }
 
     // -- Utterances --
@@ -842,5 +891,57 @@ mod tests {
         assert!(db.delete_session("s2").unwrap());
         assert!(db.get_session("s2").unwrap().is_none());
         assert!(db.get_utterances("s2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn bookmark_crud() {
+        let db = Database::open_in_memory().unwrap();
+
+        db.create_session(&SessionRecord {
+            id: "s3".into(),
+            started_at: "2026-04-06T12:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            title: None,
+            meeting_app: None,
+            state: "recording".into(),
+        })
+        .unwrap();
+
+        let id1 = db.insert_bookmark("s3", 5000, Some("decision")).unwrap();
+        let id2 = db.insert_bookmark("s3", 12000, None).unwrap();
+        assert!(id1 > 0);
+        assert!(id2 > id1);
+
+        let bookmarks = db.list_bookmarks("s3").unwrap();
+        assert_eq!(bookmarks.len(), 2);
+        assert_eq!(bookmarks[0].offset_ms, 5000);
+        assert_eq!(bookmarks[0].note.as_deref(), Some("decision"));
+        assert_eq!(bookmarks[1].offset_ms, 12000);
+        assert!(bookmarks[1].note.is_none());
+
+        assert!(db.delete_bookmark(id1).unwrap());
+        assert!(!db.delete_bookmark(id1).unwrap()); // already deleted
+        assert_eq!(db.list_bookmarks("s3").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bookmark_cascade_on_session_delete() {
+        let db = Database::open_in_memory().unwrap();
+
+        db.create_session(&SessionRecord {
+            id: "s4".into(),
+            started_at: "2026-04-06T12:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            title: None,
+            meeting_app: None,
+            state: "recording".into(),
+        })
+        .unwrap();
+
+        db.insert_bookmark("s4", 1000, Some("test")).unwrap();
+        assert!(db.delete_session("s4").unwrap());
+        assert!(db.list_bookmarks("s4").unwrap().is_empty());
     }
 }

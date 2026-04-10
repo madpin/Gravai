@@ -357,6 +357,20 @@ body {
   align-items: baseline; transition: background 0.1s;
 }
 .transcript-line:hover { background: var(--bg-elevated); }
+.transcript-line.clickable { cursor: pointer; }
+.transcript-line.clickable:hover { background: rgba(124,108,255,0.08); }
+.transcript-line.active-utterance {
+  background: rgba(124,108,255,0.1);
+  border-left: 3px solid var(--accent);
+  padding-left: 13px;
+}
+.transcript-bookmark-marker {
+  padding: 3px 16px; display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--accent); font-weight: 600;
+  background: rgba(124,108,255,0.06); border-left: 3px solid var(--accent);
+}
+.bookmark-marker-time { font-family: "SF Mono", monospace; font-size: 10px; }
+.bookmark-marker-note { font-weight: 400; color: var(--text-secondary); }
 .transcript-meta {
   font-family: "SF Mono", monospace; font-size: 10px;
   color: var(--text-tertiary); white-space: nowrap; min-width: 120px;

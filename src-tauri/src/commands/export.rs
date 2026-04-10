@@ -12,6 +12,7 @@ fn load_export_data(session_id: &str) -> Result<gravai_export::ExportData, Strin
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
 
     let utterances = db.get_utterances(session_id).map_err(|e| e.to_string())?;
+    let bookmarks = db.list_bookmarks(session_id).map_err(|e| e.to_string())?;
 
     Ok(gravai_export::ExportData {
         session_id: session.id,
@@ -27,6 +28,13 @@ fn load_export_data(session_id: &str) -> Result<gravai_export::ExportData, Strin
                 source: u.source.clone(),
                 speaker: u.speaker.clone(),
                 text: u.text.clone(),
+            })
+            .collect(),
+        bookmarks: bookmarks
+            .iter()
+            .map(|b| gravai_export::ExportBookmark {
+                offset_ms: b.offset_ms,
+                note: b.note.clone(),
             })
             .collect(),
         summary: None, // Could load from DB if we stored summaries

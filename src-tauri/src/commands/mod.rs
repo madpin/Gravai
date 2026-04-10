@@ -1,6 +1,7 @@
 //! Tauri command handlers — bridge between frontend and core crates.
 
 mod audio;
+mod bookmarks;
 mod config_extras;
 mod export;
 mod intelligence;
@@ -12,6 +13,7 @@ mod storage;
 mod tools;
 
 pub use audio::*;
+pub use bookmarks::*;
 pub use config_extras::*;
 pub use export::*;
 pub use intelligence::*;

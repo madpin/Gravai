@@ -56,6 +56,17 @@ pub enum GravaiEvent {
     /// Generic error notification
     Error { message: String },
 
+    /// Session startup progress message (shown in frontend activity log)
+    SessionStartProgress { message: String },
+
+    /// A bookmark was created during recording
+    BookmarkCreated {
+        session_id: String,
+        bookmark_id: i64,
+        offset_ms: i64,
+        note: Option<String>,
+    },
+
     /// Utterances have been corrected by the LLM post-processing pass
     TranscriptCorrected {
         session_id: String,

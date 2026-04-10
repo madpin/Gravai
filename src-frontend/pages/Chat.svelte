@@ -239,7 +239,8 @@
         </div>
 
         {#if contextOpen}
-          <div class="context-dropdown" onmouseleave={handleContextBlur}>
+          <div class="context-dropdown" role="listbox" onmouseleave={handleContextBlur}>
+            <!-- svelte-ignore a11y_autofocus -->
             <input
               class="context-search"
               type="text"

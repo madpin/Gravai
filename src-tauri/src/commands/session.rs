@@ -111,30 +111,24 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         }
     }
 
+    // Helper to publish startup progress so the frontend activity log stays updated
+    let progress_bus = state.event_bus.clone();
+    let emit_progress = move |msg: &str| {
+        info!("{msg}");
+        progress_bus.publish(GravaiEvent::SessionStartProgress {
+            message: msg.to_string(),
+        });
+    };
+
+    emit_progress("Creating session...");
     let session_id = gravai_core::session::generate_session_id();
     let session = Arc::new(Session::new(session_id.clone(), config.clone()));
     session.set_state(SessionState::Recording);
 
-    // Auto-name session from calendar events (before DB write)
-    let calendar_title = gravai_meeting::calendar::find_meeting_title(
-        config.features.meeting_detection.lead_time_seconds,
-    );
-
-    // Check for running meeting apps
+    // Check for running meeting apps (fast — just process list scan)
     let meeting_app = {
         let meetings = gravai_meeting::detector::detect_meeting_apps();
         meetings.first().map(|m| m.app_name.clone())
-    };
-
-    // Calendar title is the primary source (Zoom doesn't expose meeting topic in window title).
-    // get_zoom_window_title() is retained as a last-resort fallback but will rarely return
-    // a useful topic since Zoom windows are titled "Zoom Meetings" generically.
-    let session_title = if calendar_title.is_some() {
-        calendar_title.clone()
-    } else if meeting_app.as_deref() == Some("Zoom") {
-        gravai_meeting::detector::get_zoom_window_title()
-    } else {
-        None
     };
 
     // Store session in DB early — pipelines may insert utterances before this block was reached
@@ -146,7 +140,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 started_at: session.started_at.to_rfc3339(),
                 ended_at: None,
                 duration_seconds: None,
-                title: session_title.clone(),
+                title: None,
                 meeting_app: meeting_app.clone(),
                 state: "recording".into(),
             };
@@ -158,6 +152,57 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         let mut session_lock = state.session.write().await;
         *session_lock = Some(session.clone());
     }
+
+    // Auto-name session from calendar in background (can take 10-15s with large calendars).
+    // Updates the DB and emits an event when done — does not block recording start.
+    {
+        let cal_sid = session_id.clone();
+        let cal_lead = config.features.meeting_detection.lead_time_seconds;
+        let cal_meeting_app = meeting_app.clone();
+        let cal_bus = state.event_bus.clone();
+        tokio::task::spawn_blocking(move || {
+            let start = std::time::Instant::now();
+            info!("Calendar lookup starting (background)...");
+            let title = gravai_meeting::calendar::find_meeting_title(cal_lead).or_else(|| {
+                if cal_meeting_app.as_deref() == Some("Zoom") {
+                    gravai_meeting::detector::get_zoom_window_title()
+                } else {
+                    None
+                }
+            });
+            let elapsed = start.elapsed();
+            match &title {
+                Some(t) => {
+                    info!("Calendar found: \"{t}\" ({:.1}s)", elapsed.as_secs_f64());
+                    let db_path = gravai_config::data_dir().join("gravai.db");
+                    if let Ok(db) = gravai_storage::Database::open(&db_path) {
+                        let _ = db.rename_session(&cal_sid, t);
+                    }
+                    cal_bus.publish(GravaiEvent::SessionStartProgress {
+                        message: format!("Meeting detected: {t}"),
+                    });
+                    // Re-emit session state so the frontend picks up the new title
+                    cal_bus.publish(GravaiEvent::SessionStateChanged {
+                        state: "recording".into(),
+                        session_id: Some(cal_sid),
+                    });
+                }
+                None => {
+                    let msg = if elapsed.as_secs() >= 55 {
+                        format!(
+                            "Calendar lookup timed out ({:.0}s) — session unnamed",
+                            elapsed.as_secs_f64()
+                        )
+                    } else {
+                        format!("No calendar event found ({:.1}s)", elapsed.as_secs_f64())
+                    };
+                    info!("{msg}");
+                    cal_bus.publish(GravaiEvent::SessionStartProgress { message: msg });
+                }
+            }
+        });
+    }
+    let session_title: Option<String> = None;
 
     // Determine output directory (custom folder or default)
     let output_dir = config
@@ -190,6 +235,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         None
     };
 
+    emit_progress("Starting audio capture...");
     // Audio capture runs on a dedicated OS thread (cpal::Stream is not Send).
     let (mic_hq_tx, mic_hq_rx) = std::sync::mpsc::channel::<Option<mpsc::Receiver<AudioChunk>>>();
     let (sys_hq_tx, sys_hq_rx) = std::sync::mpsc::channel::<Option<mpsc::Receiver<AudioChunk>>>();
@@ -267,15 +313,62 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         session.add_task(handle).await;
     }
 
-    // Load transcription provider on a blocking thread (model loading is slow for large models)
+    emit_progress("Loading AI models (transcription, diarization, sentiment)...");
+    // Load all AI models in parallel (transcription, diarization, sentiment).
+    // These are the main startup bottleneck — loading them concurrently instead
+    // of sequentially cuts startup time significantly.
     let trans_config = config.transcription.clone();
+    let diar_enabled = config.features.diarization.enabled;
+    let diar_config = config.features.diarization.clone();
+
+    // Warn about missing pyannote model before we start loading
+    if diar_enabled && diar_config.model == "pyannote" {
+        let model_path = gravai_config::models_dir()
+            .join("diarization")
+            .join("segmentation.onnx");
+        if !model_path.exists() {
+            state.event_bus.publish(GravaiEvent::Error {
+                message: "Diarization is set to 'pyannote' but the model is not \
+                          downloaded — using energy-based fallback instead. \
+                          Download 'pyannote-segmentation' from the Models page \
+                          to enable accurate multi-speaker labels."
+                    .into(),
+            });
+            warn!(
+                "Pyannote model missing at {}; falling back to energy diarizer",
+                model_path.display()
+            );
+        }
+    }
+
+    let trans_future =
+        tokio::task::spawn_blocking(move || gravai_transcription::create_provider(&trans_config));
+
+    let diar_future = tokio::task::spawn_blocking(move || {
+        if diar_enabled {
+            Some(Arc::from(gravai_intelligence::diarization::create_diarizer(
+                &diar_config,
+            ))
+                as Arc<dyn gravai_intelligence::DiarizationProvider>)
+        } else {
+            None
+        }
+    });
+
+    let sentiment_future = tokio::task::spawn_blocking(|| {
+        gravai_intelligence::OnnxSentimentEngine::try_load()
+            .map(|e| Arc::new(e) as Arc<dyn gravai_intelligence::SentimentEngine>)
+    });
+
+    // Await all three in parallel
+    let (trans_result, diar_result, sentiment_result) =
+        tokio::join!(trans_future, diar_future, sentiment_future);
+
+    emit_progress("AI models loaded, configuring pipelines...");
+
     let trans_bus = state.event_bus.clone();
     let transcriber: Option<Arc<dyn gravai_transcription::TranscriptionProvider>> =
-        match tokio::task::spawn_blocking(move || {
-            gravai_transcription::create_provider(&trans_config)
-        })
-        .await
-        {
+        match trans_result {
             Ok(Ok(provider)) => {
                 info!("Transcription ready ({})", config.transcription.model);
                 Some(Arc::from(provider))
@@ -301,50 +394,11 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     )));
     let pipeline_active = Arc::new(AtomicBool::new(true));
 
-    // Load diarizer for system-audio multi-speaker labeling (Remote 1 / Remote 2 / …).
-    // The energy fallback requires no model; pyannote needs ~/.gravai/models/diarization/segmentation.onnx.
     let diarizer: Option<Arc<dyn gravai_intelligence::DiarizationProvider>> =
-        if config.features.diarization.enabled {
-            // Warn the user when pyannote is requested but the model file is absent so they
-            // know to download it — without this the silent energy fallback would be confusing.
-            if config.features.diarization.model == "pyannote" {
-                let model_path = gravai_config::models_dir()
-                    .join("diarization")
-                    .join("segmentation.onnx");
-                if !model_path.exists() {
-                    state.event_bus.publish(GravaiEvent::Error {
-                        message: "Diarization is set to 'pyannote' but the model is not \
-                                  downloaded — using energy-based fallback instead. \
-                                  Download 'pyannote-segmentation' from the Models page \
-                                  to enable accurate multi-speaker labels."
-                            .into(),
-                    });
-                    warn!(
-                        "Pyannote model missing at {}; falling back to energy diarizer",
-                        model_path.display()
-                    );
-                }
-            }
+        diar_result.ok().flatten();
 
-            let diar_config = config.features.diarization.clone();
-            tokio::task::spawn_blocking(move || {
-                let d = gravai_intelligence::diarization::create_diarizer(&diar_config);
-                Arc::from(d) as Arc<dyn gravai_intelligence::DiarizationProvider>
-            })
-            .await
-            .ok()
-        } else {
-            None
-        };
-
-    // Load sentiment engine (go-emotions ONNX) — only if model files are present
     let sentiment_engine: Option<Arc<dyn gravai_intelligence::SentimentEngine>> =
-        tokio::task::spawn_blocking(|| {
-            gravai_intelligence::OnnxSentimentEngine::try_load()
-                .map(|e| Arc::new(e) as Arc<dyn gravai_intelligence::SentimentEngine>)
-        })
-        .await
-        .unwrap_or(None);
+        sentiment_result.ok().flatten();
 
     // Set up LLM correction state (debounced batch, enabled only if configured)
     let correction_provider: Option<Arc<gravai_intelligence::TranscriptCorrectionProvider>> =
@@ -497,6 +551,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         }
     });
 
+    emit_progress("Starting transcription pipelines...");
     // Spawn transcription pipelines for each LQ source
     if let Some(rx) = mic_lq {
         let vad = gravai_audio::vad::create_vad(&config.vad).map_err(|e| format!("VAD: {e}"))?;
@@ -555,6 +610,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 if let Ok(db) = gravai_storage::Database::open(&db_path) {
                     if let Ok(utterances) = db.get_utterances(&save_sid) {
                         if !utterances.is_empty() {
+                            let bookmarks = db.list_bookmarks(&save_sid).unwrap_or_default();
                             let data = gravai_export::ExportData {
                                 session_id: save_sid.clone(),
                                 title: None,
@@ -569,6 +625,13 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                                         source: u.source.clone(),
                                         speaker: u.speaker.clone(),
                                         text: u.text.clone(),
+                                    })
+                                    .collect(),
+                                bookmarks: bookmarks
+                                    .iter()
+                                    .map(|b| gravai_export::ExportBookmark {
+                                        offset_ms: b.offset_ms,
+                                        note: b.note.clone(),
                                     })
                                     .collect(),
                                 summary: None,

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke, fmtDuration } from "../lib/tauri";
   import TranscriptView from "../components/TranscriptView.svelte";
+  import AudioPlayer from "../components/AudioPlayer.svelte";
   import Icon from "../components/Icon.svelte";
   import { pendingArchiveSessionId } from "../lib/store";
   import { get } from "svelte/store";
@@ -17,6 +18,14 @@
   let exportFormats = $state<any[]>([]);
   let exportFormat = $state("m4a-aac");
   let exportMsg = $state("");
+  let bookmarks = $state<any[]>([]);
+
+  // Audio player state
+  let audioPath = $state<string | null>(null);
+  let audioLoading = $state(false);
+  let audioError = $state<string | null>(null);
+  let currentTimeMs = $state(-1);
+  let seekRequest = $state<{ ms: number } | null>(null);
 
   // Filters
   let filterApp = $state("");
@@ -51,9 +60,37 @@
     selectedId = id;
     summary = null;
     searchResults = null;
+    bookmarks = [];
+    audioPath = null;
+    audioError = null;
+    currentTimeMs = -1;
+    seekRequest = null;
     try { utterances = await invoke("get_transcript", { sessionId: id }); } catch (_) {}
+    try { bookmarks = await invoke("list_bookmarks", { sessionId: id }); } catch (_) {}
+    // Load audio (may trigger a merge of multiple tracks — show loading state)
+    audioLoading = true;
+    try {
+      audioPath = await invoke("get_session_audio_path", { sessionId: id });
+    } catch (e: any) {
+      audioError = typeof e === "string" ? e : e?.message ?? "Audio not available";
+    }
+    audioLoading = false;
     // Auto-generate embeddings in background
     invoke("generate_embeddings", { sessionId: id }).catch(() => {});
+  }
+
+  function fmtOffsetMs(ms: number): string {
+    const secs = Math.floor(ms / 1000);
+    const m = String(Math.floor(secs / 60)).padStart(2, "0");
+    const s = String(secs % 60).padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
+  async function deleteBookmark(id: number) {
+    try {
+      await invoke("delete_bookmark", { bookmarkId: id });
+      bookmarks = bookmarks.filter(b => b.id !== id);
+    } catch (e) { exportMsg = `Error: ${e}`; }
   }
 
   async function search() {
@@ -193,6 +230,32 @@
   }
   .btn-delete-confirm:hover { opacity: 0.9; }
   .btn-delete-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+  .bookmarks-list { padding: 4px 0; display: flex; flex-direction: column; }
+  .bookmark-row {
+    display: flex; align-items: center; gap: 8px; font-size: 12px;
+    padding: 5px 14px; transition: background 0.1s;
+  }
+  .bookmark-row:hover { background: var(--bg-elevated); }
+  .bookmark-seekable { cursor: pointer; }
+  .bookmark-seekable:hover { background: rgba(124,108,255,0.08); }
+  .bookmark-time {
+    font-family: "SF Mono", monospace; font-size: 11px; font-weight: 600;
+    color: var(--accent); white-space: nowrap; min-width: 42px;
+  }
+  .bookmark-note { color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn-bookmark-delete {
+    background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+    padding: 2px; border-radius: 4px; display: flex; align-items: center; opacity: 0;
+    transition: opacity 0.15s; flex-shrink: 0;
+  }
+  .bookmark-row:hover .btn-bookmark-delete { opacity: 1; }
+  .btn-bookmark-delete:hover { color: var(--danger); }
+  .audio-status {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 16px; font-size: 11px; color: var(--text-tertiary);
+    background: var(--bg-elevated); border-bottom: 1px solid var(--border-subtle);
+  }
+  .audio-status-warn { color: var(--warning); }
 </style>
 
 <div class="page-header"><h2>Archive</h2></div>
@@ -264,10 +327,14 @@
       </div>
 
       {#if showDeleteConfirm}
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-        <div class="delete-overlay" onclick={() => showDeleteConfirm = false}>
-          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-          <div class="delete-dialog" onclick={(e) => e.stopPropagation()}>
+        <div
+          class="delete-overlay"
+          role="button"
+          tabindex="0"
+          onclick={() => showDeleteConfirm = false}
+          onkeydown={(e) => e.key === 'Escape' && (showDeleteConfirm = false)}
+        >
+          <div class="delete-dialog" role="dialog" aria-modal="true" aria-label="Delete Session" onclick={(e) => e.stopPropagation()}>
             <h4>Delete Session</h4>
             <p>This will permanently delete <strong>{selectedSession?.title || selectedId}</strong>, including all audio files, transcripts, and database records.</p>
             <p class="delete-warning">This action cannot be undone.</p>
@@ -293,6 +360,30 @@
       </div>
     {/if}
 
+    {#if bookmarks.length > 0}
+      <div class="card">
+        <div class="card-header">
+          <Icon name="bookmark" size={13}/> Bookmarks ({bookmarks.length})
+        </div>
+        <div class="bookmarks-list">
+          {#each bookmarks as b}
+            <div
+              class="bookmark-row"
+              class:bookmark-seekable={!!audioPath}
+              role={audioPath ? "button" : undefined}
+              tabindex={audioPath ? 0 : undefined}
+              onclick={audioPath ? () => { seekRequest = { ms: b.offset_ms }; } : undefined}
+              onkeydown={audioPath ? (e) => { if (e.key === 'Enter' || e.key === ' ') seekRequest = { ms: b.offset_ms }; } : undefined}
+            >
+              <span class="bookmark-time">[{fmtOffsetMs(b.offset_ms)}]</span>
+              <span class="bookmark-note">{b.note || "—"}</span>
+              <button class="btn-bookmark-delete" onclick={(e) => { e.stopPropagation(); deleteBookmark(b.id); }} title="Delete bookmark" aria-label="Delete bookmark"><Icon name="trash" size={11}/></button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     {#if summary}
       <div class="card">
         <div class="card-header">Summary</div>
@@ -305,6 +396,25 @@
       </div>
     {/if}
 
-    <TranscriptView utterances={searchResults || utterances} sessionId={selectedId} />
+    {#if audioLoading}
+      <div class="audio-status"><Icon name="spinner" size={14}/> Preparing audio (merging tracks)...</div>
+    {:else if audioError}
+      <div class="audio-status audio-status-warn"><Icon name="speaker" size={14}/> {audioError}</div>
+    {/if}
+    <AudioPlayer
+      {audioPath}
+      {bookmarks}
+      onTimeUpdate={(ms) => currentTimeMs = ms}
+      onSeekRequest={seekRequest}
+    />
+
+    <TranscriptView
+      utterances={searchResults || utterances}
+      sessionId={selectedId}
+      sessionStartedAt={selectedSession?.started_at ?? ""}
+      {bookmarks}
+      {currentTimeMs}
+      onUtteranceClick={(ms) => { seekRequest = { ms }; }}
+    />
   </div>
 </div>

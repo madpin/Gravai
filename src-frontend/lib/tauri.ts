@@ -10,6 +10,18 @@ export async function listen(event: string, handler: (e: any) => void): Promise<
   return tauriEvent.listen(event, handler);
 }
 
+export function convertFileSrc(path: string): string {
+  // Tauri v2: use __TAURI_INTERNALS__ (canonical) or __TAURI__.core (global alias)
+  const internals = (window as any).__TAURI_INTERNALS__;
+  if (internals?.convertFileSrc) {
+    return internals.convertFileSrc(path, "asset");
+  }
+  if (tauriCore?.convertFileSrc) {
+    return tauriCore.convertFileSrc(path);
+  }
+  return path;
+}
+
 export function sourceIconName(source: string): string {
   if (source === "microphone" || source === "mic") return "microphone";
   if (source === "system_audio" || source === "system" || source === "sys") return "monitor";

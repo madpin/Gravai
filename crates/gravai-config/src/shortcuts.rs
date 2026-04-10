@@ -51,6 +51,12 @@ pub fn default_shortcuts() -> Vec<ShortcutBinding> {
             description: "Switch profile".into(),
             is_global: true,
         },
+        ShortcutBinding {
+            action_id: "recording.bookmark".into(),
+            key_sequence: "CmdOrCtrl+Shift+B".into(),
+            description: "Add bookmark".into(),
+            is_global: true,
+        },
     ]
 }
 
