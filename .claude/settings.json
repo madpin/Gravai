@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(.claude/commands/)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "agent",
+            "model": "claude-haiku-4-5-20251001",
+            "async": true,
+            "timeout": 120,
+            "statusMessage": "Checking skill docs...",
+            "prompt": "A file was just edited. Tool input: $ARGUMENTS\n\nYour job: keep Gravai skill docs in sync with code changes.\n\n## Step 1 — Filter\nExtract `file_path` from the JSON. Stop immediately if:\n- file_path is missing or empty\n- file_path contains `/.claude/`\n- file_path does NOT end in `.rs`, `.svelte`, or `.ts`\n- file_path matches `*/tests/*` or `*_test.rs`\n\n## Step 2 — Map to skill file\nMap the relative path (after `/Users/tpinto/madpin/gravai/`) to a skill:\n```\ncrates/gravai-core/**         → .claude/commands/gravai-core.md\ncrates/gravai-audio/**        → .claude/commands/gravai-audio.md\ncrates/gravai-transcription/** OR crates/gravai-models/**  → .claude/commands/gravai-models.md\ncrates/gravai-intelligence/** → .claude/commands/gravai-intelligence.md\ncrates/gravai-config/**       → .claude/commands/gravai-config.md\ncrates/gravai-storage/**      → .claude/commands/gravai-storage.md\nsrc-tauri/src/commands/session.rs OR src-tauri/src/commands/audio.rs → .claude/commands/gravai-session.md\nsrc-tauri/src/lib.rs          → .claude/commands/gravai-events.md\nsrc-frontend/src/**           → .claude/commands/gravai-frontend.md\n```\nIf no match, stop.\n\n## Step 3 — Compare and update\nRead the edited source file and the mapped skill file.\n\nIf there are **meaningful structural changes** — new or removed public types, struct fields, function signatures, trait implementations, modules, or significant behavioral changes — update the skill file. Keep the exact same format, headings, and structure; only update the facts that changed.\n\nIf the change is minor (comments, docstrings, internal implementation, formatting), do nothing."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -45,21 +45,25 @@ pub struct PipelineConfig {
     pub max_utterance_seconds: f32,   // force split long utterances (default 30s)
     pub sample_rate: u32,             // 16000
 }
+// PipelineConfig::from_app_config(config: &AppConfig) factory available
+
+pub type OnUtterance = Arc<dyn Fn(Utterance) + Send + Sync>;
 
 pub struct PipelineInput {
-    pub audio_rx: mpsc::Receiver<AudioChunk>,
-    pub source_name: String,          // "mic" or "system"
+    pub rx: mpsc::Receiver<Vec<f32>>,        // 16kHz mono samples
+    pub source: String,                       // "mic" or "system"
+    pub config: PipelineConfig,
     pub vad: Box<dyn VadProvider>,
-    pub transcriber: Box<dyn TranscriptionProvider>,
-    pub echo_suppressor: Option<EchoSuppressor>,
-    pub diarizer: Option<Box<dyn DiarizationProvider>>,
-    pub on_utterance: Arc<dyn Fn(Utterance) + Send + Sync>,
+    pub transcriber: Option<Arc<dyn TranscriptionProvider>>,
+    pub echo_suppressor: Arc<tokio::sync::Mutex<EchoSuppressor>>,
+    pub diarizer: Option<Arc<dyn DiarizationProvider>>,
+    pub on_utterance: OnUtterance,
     pub active: Arc<AtomicBool>,
 }
 ```
 - `run_pipeline()` async: receive 16kHz mono chunks → VAD decision → accumulate speech → transcribe on pause
 - Handles force-split for `>max_utterance_seconds` and minimum silence (`0.5s` default)
-- `Utterance { text, source, speaker, timestamp, confidence, start_ms, end_ms }`
+- `Utterance { text, source, speaker, timestamp }`
 
 ### `recorder.rs` — Multi-Track WAV
 - `TrackWriter`: WAV file writer (float32 PCM), lazy header init, gain control
