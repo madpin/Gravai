@@ -1,7 +1,10 @@
 # Gravai — Audio Capture & AI Meeting Intelligence
 # ================================================
 
-.PHONY: help dev build run release clean check check-verbose test lint fmt typecheck install setup reset version
+.PHONY: help dev build run release clean check check-verbose test lint fmt typecheck install setup reset version --force force
+
+# Skip pre-flight `make check` when: FORCE=1, or extra goal `force` / `--force` (GNU Make: `make version --force`; Apple make: `make version force`)
+VERSION_SKIP_CHECK := $(if $(FORCE),1,$(filter --force force,$(MAKECMDGOALS)))
 
 # Default target
 help: ## Show this help
@@ -148,10 +151,16 @@ clean-data: ## Remove Gravai user data (~/.gravai/ and ~/.gravai-dev/)
 reset: clean clean-data ## Full reset (build artifacts + user data)
 	@echo "✅ Reset complete."
 
+force: ## With version: skip `make check` — `make version force V=x.y.z` (Apple make). Or `FORCE=1`, or GNU make: `make version --force`
+	@:
+
+--force:
+	@:
+
 # ── Versioning ───────────────────────────────────────────────
 
-version: ## Bump version: make version V=1.2.3  (omit V to auto-increment patch; runs make check first)
-	@if [ -z "$(SKIP_VERSION_CHECK)" ]; then \
+version: ## Bump version: make version V=1.2.3  (omit V → patch+1; skip check: FORCE=1 or `make version force` / GNU `make version --force`)
+	@if [ -z "$(SKIP_VERSION_CHECK)" ] && [ -z "$(VERSION_SKIP_CHECK)" ]; then \
 		$(MAKE) check || exit 1; \
 	fi; \
 	if [ -z "$(V)" ]; then \
