@@ -2,6 +2,18 @@
   "productName": "Gravai Dev",
   "identifier": "com.gravai.app.dev",
   "app": {
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "$HOME/.gravai-dev/sessions/**/*",
+            "$HOME/.gravai/sessions/**/*"
+          ]
+        }
+      }
+    },
     "windows": [
       {
         "title": "Gravai Dev",

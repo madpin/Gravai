@@ -87,11 +87,17 @@ impl Session {
         self.tasks.lock().await.push(handle);
     }
 
-    /// Abort all background tasks.
+    /// Abort all background tasks and wait for them to actually complete.
+    /// This ensures any Drop implementations (e.g. WAV finalization) have run
+    /// before returning — critical for correct stop-session ordering.
     pub async fn abort_tasks(&self) {
-        let tasks = self.tasks.lock().await;
-        for task in tasks.iter() {
-            task.abort();
+        let handles: Vec<tokio::task::JoinHandle<()>> = {
+            let mut tasks = self.tasks.lock().await;
+            tasks.drain(..).collect()
+        };
+        for handle in handles {
+            handle.abort();
+            let _ = handle.await; // wait for cancellation; ignore cancelled/panic errors
         }
     }
 

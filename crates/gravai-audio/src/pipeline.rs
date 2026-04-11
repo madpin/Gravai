@@ -18,6 +18,10 @@ pub struct Utterance {
     pub source: String,
     pub speaker: Option<String>,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Milliseconds from the start of the recording session when speech began.
+    pub start_ms: i64,
+    /// Milliseconds from the start of the recording session when speech ended.
+    pub end_ms: i64,
 }
 
 /// Callback invoked when a new utterance is finalized.
@@ -93,6 +97,10 @@ pub async fn run_pipeline(input: PipelineInput) {
     let mut silence_count: usize = 0;
     let mut last_text: Option<String> = None;
 
+    let mut total_samples: usize = 0;
+    let mut speech_start_sample: usize = 0;
+    let mut speech_end_sample: usize = 0;
+
     info!("Transcription pipeline started for source: {source}");
 
     while active.load(std::sync::atomic::Ordering::Relaxed) {
@@ -111,6 +119,11 @@ pub async fn run_pipeline(input: PipelineInput) {
         let is_speech = vad.is_speech(&chunk);
 
         if is_speech {
+            if speech_buffer.is_empty() {
+                speech_start_sample = total_samples;
+            }
+            speech_end_sample = total_samples + chunk.len();
+
             speech_buffer.extend_from_slice(&chunk);
             silence_count = 0;
 
@@ -127,11 +140,15 @@ pub async fn run_pipeline(input: PipelineInput) {
                 .await
                 {
                     last_text = Some(result.text.clone());
+                    let (start_ms, end_ms) =
+                        utterance_window_ms(speech_start_sample, speech_end_sample, sr, &result);
                     on_utterance(Utterance {
                         text: result.text,
                         source: source.clone(),
                         speaker: result.speaker,
                         timestamp: chrono::Utc::now(),
+                        start_ms,
+                        end_ms,
                     });
                 }
                 speech_buffer.clear();
@@ -151,11 +168,19 @@ pub async fn run_pipeline(input: PipelineInput) {
                     .await
                     {
                         last_text = Some(result.text.clone());
+                        let (start_ms, end_ms) = utterance_window_ms(
+                            speech_start_sample,
+                            speech_end_sample,
+                            sr,
+                            &result,
+                        );
                         on_utterance(Utterance {
                             text: result.text,
                             source: source.clone(),
                             speaker: result.speaker,
                             timestamp: chrono::Utc::now(),
+                            start_ms,
+                            end_ms,
                         });
                     }
                 }
@@ -163,6 +188,8 @@ pub async fn run_pipeline(input: PipelineInput) {
                 silence_count = 0;
             }
         }
+
+        total_samples += chunk.len();
     }
 
     // Flush remaining speech
@@ -177,11 +204,15 @@ pub async fn run_pipeline(input: PipelineInput) {
         )
         .await
         {
+            let (start_ms, end_ms) =
+                utterance_window_ms(speech_start_sample, speech_end_sample, sr, &result);
             on_utterance(Utterance {
                 text: result.text,
                 source: source.clone(),
                 speaker: result.speaker,
                 timestamp: chrono::Utc::now(),
+                start_ms,
+                end_ms,
             });
         }
     }
@@ -193,6 +224,29 @@ pub async fn run_pipeline(input: PipelineInput) {
 struct FinalizeResult {
     text: String,
     speaker: Option<String>,
+    start_offset_ms: i64,
+    end_offset_ms: i64,
+}
+
+fn utterance_window_ms(
+    speech_start_sample: usize,
+    speech_end_sample: usize,
+    sample_rate: u32,
+    result: &FinalizeResult,
+) -> (i64, i64) {
+    let utterance_start_ms = (speech_start_sample as i64 * 1000) / sample_rate as i64;
+    let utterance_end_ms = (speech_end_sample as i64 * 1000) / sample_rate as i64;
+    let utterance_duration_ms = (utterance_end_ms - utterance_start_ms).max(0);
+
+    let start_offset_ms = result.start_offset_ms.clamp(0, utterance_duration_ms);
+    let end_offset_ms = result
+        .end_offset_ms
+        .clamp(start_offset_ms, utterance_duration_ms);
+
+    (
+        utterance_start_ms + start_offset_ms,
+        utterance_start_ms + end_offset_ms,
+    )
 }
 
 /// Transcribe accumulated audio, run diarization, and apply filters.
@@ -276,7 +330,19 @@ async fn finalize(
         Some(label.unwrap_or_else(|| "Remote".to_string()))
     };
 
-    Some(FinalizeResult { text, speaker })
+    let start_offset_ms = segments.first().map(|s| s.start_ms as i64).unwrap_or(0);
+    let end_offset_ms = segments
+        .iter()
+        .map(|s| s.end_ms as i64)
+        .max()
+        .unwrap_or(start_offset_ms);
+
+    Some(FinalizeResult {
+        text,
+        speaker,
+        start_offset_ms,
+        end_offset_ms,
+    })
 }
 
 /// Pick the speaker with the most total duration across diarization segments,
@@ -301,5 +367,40 @@ fn speaker_id_to_remote_label(speaker_id: &str) -> String {
         format!("Remote {n}")
     } else {
         "Remote".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utterance_window_uses_transcription_segment_offsets() {
+        let result = FinalizeResult {
+            text: "hello there".into(),
+            speaker: Some("You".into()),
+            start_offset_ms: 420,
+            end_offset_ms: 1310,
+        };
+
+        let (start_ms, end_ms) = utterance_window_ms(16000, 48000, 16000, &result);
+
+        assert_eq!(start_ms, 1420);
+        assert_eq!(end_ms, 2310);
+    }
+
+    #[test]
+    fn utterance_window_clamps_invalid_offsets_to_vad_window() {
+        let result = FinalizeResult {
+            text: "hello there".into(),
+            speaker: Some("You".into()),
+            start_offset_ms: -200,
+            end_offset_ms: 5000,
+        };
+
+        let (start_ms, end_ms) = utterance_window_ms(8000, 12000, 16000, &result);
+
+        assert_eq!(start_ms, 500);
+        assert_eq!(end_ms, 750);
     }
 }

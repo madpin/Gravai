@@ -5,13 +5,30 @@
 
   let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null, bookmarks = [], sessionStartedAt = "", currentTimeMs = -1, onUtteranceClick }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null; bookmarks?: any[]; sessionStartedAt?: string; currentTimeMs?: number; onUtteranceClick?: (startMs: number) => void } = $props();
 
-  // Playhead: compute the active utterance based on audio current time
+  // Compute each utterance's offset from session start (ms).
+  // Uses start_ms if available, otherwise derives from timestamp vs session start.
+  function getUtteranceOffsetMs(u: any, baseTime: number): number {
+    if (u.start_ms != null) return u.start_ms;
+    const ts = new Date(u.timestamp).getTime();
+    return ts - baseTime;
+  }
+
+  // Base time = session start (for aligning bookmark offsets with utterance timestamps)
+  let baseTimeMs = $derived(
+    sessionStartedAt ? new Date(sessionStartedAt).getTime()
+    : utterances.length > 0 ? new Date(utterances[0].timestamp).getTime()
+    : 0
+  );
+
+  // Playhead: compute the active utterance based on audio current time.
+  // Uses start_ms if available, otherwise falls back to timestamp offset.
   let activeUtteranceId = $derived.by(() => {
     if (currentTimeMs < 0) return -1;
-    // Find the last utterance whose start_ms <= currentTimeMs
+    if (baseTimeMs === 0) return -1;
     let activeId = -1;
     for (const u of utterances) {
-      if (u.start_ms != null && u.start_ms <= currentTimeMs) {
+      const offsetMs = getUtteranceOffsetMs(u, baseTimeMs);
+      if (offsetMs <= currentTimeMs) {
         activeId = u.id;
       }
     }
@@ -43,21 +60,6 @@
     const s = String(secs % 60).padStart(2, "0");
     return `${m}:${s}`;
   }
-
-  // Compute each utterance's offset from session start (ms).
-  // Uses start_ms if available, otherwise derives from timestamp vs first utterance.
-  function getUtteranceOffsetMs(u: any, baseTime: number): number {
-    if (u.start_ms != null) return u.start_ms;
-    const ts = new Date(u.timestamp).getTime();
-    return ts - baseTime;
-  }
-
-  // Base time = session start (for aligning bookmark offsets with utterance timestamps)
-  let baseTimeMs = $derived(
-    sessionStartedAt ? new Date(sessionStartedAt).getTime()
-    : utterances.length > 0 ? new Date(utterances[0].timestamp).getTime()
-    : 0
-  );
 
   // Assign each bookmark to the utterance it should appear before.
   // Each bookmark is assigned to exactly one slot (no duplicates).
@@ -239,7 +241,7 @@
         class:active-utterance={u.id === activeUtteranceId}
         class:clickable={!!onUtteranceClick}
         data-utterance-id={u.id}
-        ondblclick={onUtteranceClick && u.start_ms != null ? () => onUtteranceClick(u.start_ms) : undefined}
+        ondblclick={onUtteranceClick ? () => onUtteranceClick!(getUtteranceOffsetMs(u, baseTimeMs)) : undefined}
       >
         <span class="transcript-meta">
           <Icon name={sourceIconName(u.source)} size={12}/> {fmtTime(u.timestamp)}

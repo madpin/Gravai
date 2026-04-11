@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { convertFileSrc } from "../lib/tauri";
   import Icon from "./Icon.svelte";
 
@@ -20,8 +21,40 @@
   let duration = $state(0);
   let audioSrc = $derived(audioPath ? convertFileSrc(audioPath) : "");
 
+  function stopPlayback(clearSource = false) {
+    if (audioEl) {
+      audioEl.pause();
+      audioEl.currentTime = 0;
+      if (clearSource) {
+        audioEl.removeAttribute("src");
+        audioEl.load();
+      }
+    }
+
+    playing = false;
+    currentTime = 0;
+    duration = 0;
+    loadError = null;
+  }
+
+  $effect(() => {
+    const el = audioEl;
+    const src = audioSrc;
+
+    if (!el) return;
+
+    stopPlayback(!src);
+    if (src) {
+      el.load();
+    }
+  });
+
+  onDestroy(() => {
+    stopPlayback(true);
+  });
+
   function togglePlay() {
-    if (!audioEl) return;
+    if (!audioEl || !audioSrc) return;
     if (playing) {
       audioEl.pause();
     } else {
@@ -38,6 +71,7 @@
   function handleLoadedMetadata() {
     if (!audioEl) return;
     duration = audioEl.duration;
+    loadError = null;
   }
 
   let loadError = $state<string | null>(null);
@@ -105,7 +139,12 @@
       preload="metadata"
     ></audio>
 
-    <button class="player-btn" onclick={togglePlay} title={playing ? "Pause" : "Play"}>
+    <button
+      class="player-btn"
+      onclick={togglePlay}
+      title={playing ? "Pause" : "Play"}
+      disabled={!audioSrc}
+    >
       <Icon name={playing ? "pause" : "play"} size={16} />
     </button>
 
@@ -153,6 +192,11 @@
     display: flex; align-items: center; justify-content: center;
     cursor: pointer; transition: transform 0.1s, background 0.1s;
     background: var(--accent); color: white; flex-shrink: 0;
+  }
+  .player-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+    transform: none;
   }
   .player-btn:hover { transform: scale(1.08); }
   .player-btn:active { transform: scale(0.95); }
