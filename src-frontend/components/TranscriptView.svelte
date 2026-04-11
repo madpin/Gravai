@@ -81,6 +81,14 @@
     return { before, trailing };
   });
 
+  // Cap the number of utterances rendered in the DOM to prevent unbounded growth.
+  // The full array is preserved in the store for search/summary; only the tail is shown.
+  const MAX_RENDERED = 300;
+  let hiddenCount = $derived(Math.max(0, utterances.length - MAX_RENDERED));
+  let visibleUtterances = $derived(
+    utterances.length > MAX_RENDERED ? utterances.slice(-MAX_RENDERED) : utterances
+  );
+
   const speakerColors = ["#7c6cff", "#34d399", "#fbbf24", "#f87171", "#60a5fa", "#a78bfa", "#fb923c", "#2dd4bf"];
   let speakerColorMap: Record<string, string> = {};
   let colorIdx = 0;
@@ -228,8 +236,11 @@
   {#if utterances.length === 0}
     <div class="empty-state">No transcript yet.</div>
   {:else}
-    {#each utterances as u, i}
-      {#each bookmarkSlots.before.get(i) ?? [] as bm (bm.id)}
+    {#if hiddenCount > 0}
+      <div class="hidden-count-notice">{hiddenCount} earlier utterance{hiddenCount === 1 ? "" : "s"} not shown — view full transcript in Archive.</div>
+    {/if}
+    {#each visibleUtterances as u, i}
+      {#each bookmarkSlots.before.get(i + hiddenCount) ?? [] as bm (bm.id)}
         <div class="transcript-bookmark-marker">
           <Icon name="bookmark" size={11}/> <span class="bookmark-marker-time">[{fmtOffsetMs(bm.offset_ms)}]</span>
           {#if bm.note}<span class="bookmark-marker-note">{bm.note}</span>{/if}
@@ -314,3 +325,14 @@
     {/each}
   {/if}
 </div>
+
+<style>
+  .hidden-count-notice {
+    padding: 6px 14px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+    text-align: center;
+  }
+</style>

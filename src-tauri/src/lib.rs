@@ -492,6 +492,7 @@ pub fn run() {
             commands::resume_session,
             commands::stop_session,
             commands::get_transcript,
+            commands::get_transcript_since,
             commands::search_utterances,
             commands::list_sessions,
             commands::detect_meetings,

@@ -795,6 +795,20 @@ pub async fn get_transcript(session_id: String) -> Result<serde_json::Value, Str
     serde_json::to_value(&utterances).map_err(|e| e.to_string())
 }
 
+/// Get transcript utterances added after a given id (exclusive). Used for incremental live-poll.
+#[tauri::command]
+pub async fn get_transcript_since(
+    session_id: String,
+    after_id: i64,
+) -> Result<serde_json::Value, String> {
+    let db_path = gravai_config::data_dir().join("gravai.db");
+    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let utterances = db
+        .get_utterances_since(&session_id, after_id)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&utterances).map_err(|e| e.to_string())
+}
+
 /// Search utterances across all sessions.
 #[tauri::command]
 pub async fn search_utterances(query: String) -> Result<serde_json::Value, String> {

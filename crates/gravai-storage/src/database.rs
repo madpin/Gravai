@@ -274,6 +274,41 @@ impl Database {
         rows.collect()
     }
 
+    /// Fetch utterances added after a given row id (exclusive). Used for incremental live-poll.
+    pub fn get_utterances_since(
+        &self,
+        session_id: &str,
+        after_id: i64,
+    ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
+                    sentiment_label, sentiment_score, emotions_json,
+                    corrected_text, correction_status, correction_provider, corrected_at
+             FROM utterances WHERE session_id = ?1 AND id > ?2 ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id, after_id], |row| {
+            Ok(UtteranceRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                source: row.get(3)?,
+                speaker: row.get(4)?,
+                text: row.get(5)?,
+                confidence: row.get(6)?,
+                start_ms: row.get(7)?,
+                end_ms: row.get(8)?,
+                sentiment_label: row.get(9)?,
+                sentiment_score: row.get(10)?,
+                emotions_json: row.get(11)?,
+                corrected_text: row.get(12)?,
+                correction_status: row.get(13)?,
+                correction_provider: row.get(14)?,
+                corrected_at: row.get(15)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Full-text search across all utterances.
     pub fn search_utterances(&self, query: &str) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(

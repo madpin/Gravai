@@ -38,6 +38,8 @@
   let transcriptPoll: number | null = null;
   let meetingPoll: number | null = null;
   let unlisteners: (() => void)[] = [];
+  // Tracks the highest utterance id received so far; used for incremental poll.
+  let lastUtteranceId = 0;
 
   function log(msg: string) {
     const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -59,6 +61,7 @@
       liveUtterances.set([]);
       liveSummary.set(null);
       bookmarkCount.set(0);
+      lastUtteranceId = 0;
 
       // Update config before starting — must await so start_session reads the correct settings
       await invoke("update_config", {
@@ -135,7 +138,18 @@
     transcriptPoll = window.setInterval(async () => {
       const sid = get(currentSessionId);
       if (!sid) return;
-      try { liveUtterances.set(await invoke("get_transcript", { sessionId: sid })); } catch (_) {}
+      try {
+        const newUtts: any[] = await invoke("get_transcript_since", { sessionId: sid, afterId: lastUtteranceId });
+        if (newUtts.length > 0) {
+          lastUtteranceId = newUtts[newUtts.length - 1].id;
+          liveUtterances.update(current => {
+            // Deduplicate: the transcript event may have already added some of these
+            const existingIds = new Set(current.map((u: any) => u.id));
+            const fresh = newUtts.filter((u: any) => !existingIds.has(u.id));
+            return fresh.length > 0 ? [...current, ...fresh] : current;
+          });
+        }
+      } catch (_) {}
     }, 2000);
   }
   function stopTranscriptPoll() { if (transcriptPoll) { clearInterval(transcriptPoll); transcriptPoll = null; } }
@@ -212,6 +226,8 @@
     const ut = await listen("gravai:transcript", (e: any) => {
       const d = e.payload;
       if (d?.text && get(currentSessionId)) {
+        // Track the id so the incremental poll can skip already-seen utterances.
+        if (d.id && d.id > lastUtteranceId) lastUtteranceId = d.id;
         liveUtterances.update(u => [...u, { ...d, timestamp: d.timestamp || new Date().toISOString() }]);
       }
     });
@@ -250,14 +266,21 @@
     });
     unlisteners.push(ue);
 
-    // Handle LLM transcript corrections arriving after utterances are inserted
+    // Handle LLM transcript corrections arriving after utterances are inserted.
+    // Fetch only the corrected utterances by id range and patch them in-place.
     const uc = await listen("gravai:transcript-corrected", (e: any) => {
       const d = e.payload;
       const sid = get(currentSessionId);
       if (!d?.utterance_ids?.length || !sid || d.session_id !== sid) return;
-      // Re-fetch the full transcript to pick up corrected_text values
-      invoke("get_transcript", { sessionId: sid })
-        .then((utts: any) => { if (Array.isArray(utts)) liveUtterances.set(utts); })
+      const minId: number = Math.min(...d.utterance_ids);
+      invoke("get_transcript_since", { sessionId: sid, afterId: minId - 1 })
+        .then((utts: any) => {
+          if (!Array.isArray(utts)) return;
+          const byId = new Map(utts.map((u: any) => [u.id, u]));
+          liveUtterances.update(current =>
+            current.map(u => byId.has(u.id) ? { ...u, ...byId.get(u.id) } : u)
+          );
+        })
         .catch(() => {});
     });
     unlisteners.push(uc);
