@@ -168,11 +168,7 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
                         break;
                     }
                     downloaded += chunk.len() as u64;
-                    let pct = if total > 0 {
-                        (downloaded * 100) / total
-                    } else {
-                        0
-                    };
+                    let pct = (downloaded * 100).checked_div(total).unwrap_or(0);
                     if pct != last_pct {
                         last_pct = pct;
                         let _ = app.emit("gravai:model-download", serde_json::json!({
@@ -260,11 +256,7 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
         downloaded += chunk.len() as u64;
 
         // Emit progress every 1%
-        let pct = if total > 0 {
-            (downloaded * 100) / total
-        } else {
-            0
-        };
+        let pct = (downloaded * 100).checked_div(total).unwrap_or(0);
         if pct != last_pct {
             last_pct = pct;
             let _ = app.emit(
@@ -809,11 +801,10 @@ pub async fn download_llm_from_url(
             .await
             .map_err(|e| format!("Write: {e}"))?;
         downloaded += chunk.len() as u64;
-        let pct = if total > 0 {
-            (downloaded * 100 / total).min(100)
-        } else {
-            0
-        };
+        let pct = (downloaded * 100)
+            .checked_div(total)
+            .unwrap_or(0)
+            .min(100);
         if pct != last_pct {
             last_pct = pct;
             let _ = app.emit(
