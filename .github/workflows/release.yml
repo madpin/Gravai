@@ -17,8 +17,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CFLAGS: "-march=armv8.2-a"
-  CXXFLAGS: "-march=armv8.2-a"
+  # Pin to armv8.2-a baseline to avoid clang auto-enabling i8mm intrinsics that
+  # whisper-rs 0.14's ggml uses without proper target guards. The +crypto+sha3
+  # extensions are required by aws-lc-sys (pulled in via mistral.rs → rustls)
+  # which expects __ARM_FEATURE_AES / __ARM_FEATURE_SHA2 to be statically
+  # available on aarch64-apple-darwin.
+  CFLAGS: "-march=armv8.2-a+crypto+sha3"
+  CXXFLAGS: "-march=armv8.2-a+crypto+sha3"
 
 jobs:
   build-and-release:

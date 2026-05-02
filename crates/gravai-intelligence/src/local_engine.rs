@@ -381,8 +381,7 @@ fn estimate_progress(
             // We require `cur > 0` so we don't immediately bail before the
             // download has actually started.
             let stable = cur > 0
-                && now.duration_since(state.last_dl_changed_at)
-                    > std::time::Duration::from_secs(5);
+                && now.duration_since(state.last_dl_changed_at) > std::time::Duration::from_secs(5);
 
             if by_size || stable {
                 state.download_done_at = Some(now);

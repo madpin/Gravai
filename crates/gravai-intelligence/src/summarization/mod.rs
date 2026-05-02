@@ -250,7 +250,8 @@ mod tests {
 
     #[test]
     fn handles_braces_inside_strings() {
-        let r = r#"{"tldr":"a {fake} brace","key_decisions":[],"action_items":[],"open_questions":[]}"#;
+        let r =
+            r#"{"tldr":"a {fake} brace","key_decisions":[],"action_items":[],"open_questions":[]}"#;
         let s = parse_summary_response(r).unwrap();
         assert_eq!(s.tldr, "a {fake} brace");
     }
