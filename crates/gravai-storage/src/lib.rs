@@ -3,4 +3,6 @@
 mod database;
 mod migrations;
 
-pub use database::{BookmarkRecord, Database, KnowledgeEntry, SessionRecord, UtteranceRecord};
+pub use database::{
+    BookmarkRecord, Database, KnowledgeEntry, SessionRecord, SummaryRecord, UtteranceRecord,
+};

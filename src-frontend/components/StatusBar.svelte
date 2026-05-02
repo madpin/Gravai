@@ -5,7 +5,7 @@
   import {
     isRecording, isPaused, activityLogs, healthStatus, currentPage,
     currentSessionId, sessionStartTime, lastSessionId as lastSessionIdStore,
-    liveUtterances, liveSummary,
+    liveUtterances, liveSummary, llmStatus,
   } from "../lib/store";
 
   let snap = $state<any>(null);
@@ -46,6 +46,19 @@
 
   let lastLog = $derived($activityLogs[$activityLogs.length - 1] || "");
   let warn = $derived(snap && (snap.cpu_pct > 60 || snap.memory_pct > 80));
+
+  // Local LLM status indicator — show only while loading or on error.
+  let llmBusy = $derived(
+    $llmStatus.state === "loading"
+    || $llmStatus.state === "first_run"
+    || $llmStatus.state === "progress"
+    || $llmStatus.state === "error",
+  );
+  let llmPct = $derived(
+    typeof $llmStatus.progress === "number"
+      ? `${Math.round($llmStatus.progress * 100)}%`
+      : "",
+  );
 
   function fmtUptime(secs: number): string {
     const m = Math.floor(secs / 60);
@@ -92,9 +105,26 @@
     {/if}
   </div>
 
-  <!-- Last activity log -->
+  <!-- Last activity log + LLM status -->
   <div class="sb-section sb-center">
-    {#if lastLog}
+    {#if llmBusy}
+      <span
+        class="sb-llm"
+        class:first-run={$llmStatus.state === "first_run"}
+        class:err={$llmStatus.state === "error"}
+        title={$llmStatus.phase ?? $llmStatus.message ?? "Loading local LLM…"}
+      >
+        <Icon name={$llmStatus.state === "error" ? "alert-triangle" : "spinner"} size={11}/>
+        {#if $llmStatus.state === "first_run"}
+          Preparing {$llmStatus.model_id ?? "model"}
+        {:else if $llmStatus.state === "error"}
+          LLM error
+        {:else}
+          Loading {$llmStatus.model_id ?? "model"}
+        {/if}
+        {#if llmPct}<span class="sb-llm-pct">· {llmPct}</span>{/if}
+      </span>
+    {:else if lastLog}
       <span class="sb-log" title={lastLog}>{lastLog}</span>
     {/if}
   </div>
@@ -171,6 +201,28 @@
     font-size: 11px; color: var(--text-tertiary);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     max-width: 100%;
+  }
+
+  /* LLM status pill (replaces .sb-log while busy) */
+  .sb-llm {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 500;
+    padding: 1px 8px; border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sb-llm.first-run {
+    background: color-mix(in srgb, var(--warning, #f59e0b) 14%, transparent);
+    color: var(--warning, #f59e0b);
+  }
+  .sb-llm.err {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    color: var(--danger);
+  }
+  .sb-llm-pct {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.85;
   }
 
   /* Resources */

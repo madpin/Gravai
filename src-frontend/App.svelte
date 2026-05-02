@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { currentPage, healthStatus, addAlert, modelDownloading } from "./lib/store";
+  import { currentPage, healthStatus, addAlert, modelDownloading, llmStatus } from "./lib/store";
   import { invoke, listen } from "./lib/tauri";
   import { onMount, onDestroy } from "svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -47,6 +47,7 @@
   let unlistenNavigate: (() => void) | null = null;
   let unlistenUpdate: (() => void) | null = null;
   let unlistenDownload: (() => void) | null = null;
+  let unlistenLlmStatus: (() => void) | null = null;
 
   onMount(async () => {
     if (!localStorage.getItem("gravai_onboarded")) {
@@ -103,9 +104,56 @@
         }, 1500);
       }
     });
+
+    // Local LLM engine lifecycle. We mirror it into a global store so any
+    // page (Recording, Chat, Archive…) can show progress, and we promote the
+    // (rare) error case to an alert so the user notices.
+    unlistenLlmStatus = await listen("gravai:llm-status", (e: any) => {
+      const d = e.payload;
+      if (!d?.state) return;
+      llmStatus.update(prev => {
+        // Set started_at when transitioning into any active load state.
+        const isActiveLoad = d.state === "loading"
+          || d.state === "first_run"
+          || d.state === "progress";
+        const wasActive = prev.state === "loading"
+          || prev.state === "first_run"
+          || prev.state === "progress";
+        const isLoadStart = isActiveLoad && !wasActive;
+
+        // Preserve the high-level state across "progress" tick events so the
+        // UI keeps showing first-run vs loading framing.
+        let nextState = d.state;
+        if (d.state === "progress" && wasActive) {
+          nextState = prev.state;
+        }
+
+        return {
+          state: nextState,
+          model_id: d.model_id ?? prev.model_id,
+          message: d.message ?? prev.message,
+          progress: typeof d.progress === "number" ? d.progress : prev.progress,
+          phase: d.phase ?? prev.phase,
+          eta_seconds: typeof d.eta_seconds === "number" ? d.eta_seconds : prev.eta_seconds,
+          started_at: isLoadStart
+            ? Date.now()
+            : (d.state === "ready" || d.state === "idle" || d.state === "unloaded" || d.state === "error"
+                ? null
+                : prev.started_at),
+        };
+      });
+      if (d.state === "error" && d.message) {
+        addAlert({
+          level: "error",
+          message: `Local LLM failed to load: ${d.message}`,
+          actions: [{ label: "Open Models", handler: () => currentPage.set("models") }],
+          dismissable: true,
+        });
+      }
+    });
   });
 
-  onDestroy(() => { unlistenNavigate?.(); unlistenUpdate?.(); unlistenDownload?.(); });
+  onDestroy(() => { unlistenNavigate?.(); unlistenUpdate?.(); unlistenDownload?.(); unlistenLlmStatus?.(); });
 
   function setPage(id: string) {
     currentPage.set(id);

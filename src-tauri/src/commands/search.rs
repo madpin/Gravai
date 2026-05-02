@@ -217,7 +217,9 @@ pub async fn ask_gravai(
         .collect();
 
     let max_tokens = config.llm.max_tokens;
-    let client = gravai_intelligence::LlmClient::new(&config.llm);
+    let client = gravai_intelligence::LlmClient::new(&config.llm)
+        .await
+        .map_err(|e| e.to_string())?;
     let response = gravai_intelligence::chat::ask_gravai(
         &client,
         &question,

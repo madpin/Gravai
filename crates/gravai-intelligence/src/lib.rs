@@ -5,6 +5,7 @@ pub mod correction;
 pub mod diarization;
 pub mod embeddings;
 pub mod llm_client;
+pub mod local_engine;
 pub mod prompts;
 pub mod sentiment;
 pub mod summarization;

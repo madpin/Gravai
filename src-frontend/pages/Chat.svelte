@@ -3,6 +3,7 @@
   import { invoke } from "../lib/tauri";
   import { save } from "@tauri-apps/plugin-dialog";
   import Icon from "../components/Icon.svelte";
+  import LlmStatusBanner from "../components/LlmStatusBanner.svelte";
   import { currentPage, pendingArchiveSessionId } from "../lib/store";
 
   let question = $state("");
@@ -282,6 +283,10 @@
       </div>
     </div>
 
+    <div class="chat-llm-status">
+      <LlmStatusBanner />
+    </div>
+
     <div class="chat-messages" bind:this={chatEl}>
       {#if messages.length === 0}
         <div class="empty-state">
@@ -480,6 +485,8 @@
   .btn-icon-danger:hover { color: var(--danger); border-color: rgba(248,113,113,0.3); background: rgba(248,113,113,0.08); }
 
   /* Chat area */
+  .chat-llm-status { padding: 8px 16px 0; flex-shrink: 0; }
+  .chat-llm-status:empty { display: none; padding: 0; }
   .chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 
   .chat-msg { max-width: 82%; padding: 10px 14px; border-radius: 12px; }

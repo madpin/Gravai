@@ -6,6 +6,7 @@
   import TranscriptView from "../components/TranscriptView.svelte";
   import AppPicker from "../components/AppPicker.svelte";
   import Icon from "../components/Icon.svelte";
+  import LlmStatusBanner from "../components/LlmStatusBanner.svelte";
 
   let timer = $state("");
   let micEnabled = $state(true);
@@ -134,23 +135,27 @@
   }
   function stopTimer() { if (timerInterval) { clearInterval(timerInterval); timerInterval = null; } timer = ""; }
 
+  let pollInFlight = false;
+  async function pollTranscript() {
+    if (pollInFlight) return;
+    const sid = get(currentSessionId);
+    if (!sid) return;
+    pollInFlight = true;
+    try {
+      const newUtts: any[] = await invoke("get_transcript_since", { sessionId: sid, afterId: lastUtteranceId });
+      if (newUtts.length > 0) {
+        lastUtteranceId = newUtts[newUtts.length - 1].id;
+        liveUtterances.update(current => {
+          const existingIds = new Set(current.map((u: any) => u.id));
+          const fresh = newUtts.filter((u: any) => !existingIds.has(u.id));
+          return fresh.length > 0 ? [...current, ...fresh] : current;
+        });
+      }
+    } catch (_) {}
+    pollInFlight = false;
+  }
   function startTranscriptPoll() {
-    transcriptPoll = window.setInterval(async () => {
-      const sid = get(currentSessionId);
-      if (!sid) return;
-      try {
-        const newUtts: any[] = await invoke("get_transcript_since", { sessionId: sid, afterId: lastUtteranceId });
-        if (newUtts.length > 0) {
-          lastUtteranceId = newUtts[newUtts.length - 1].id;
-          liveUtterances.update(current => {
-            // Deduplicate: the transcript event may have already added some of these
-            const existingIds = new Set(current.map((u: any) => u.id));
-            const fresh = newUtts.filter((u: any) => !existingIds.has(u.id));
-            return fresh.length > 0 ? [...current, ...fresh] : current;
-          });
-        }
-      } catch (_) {}
-    }, 2000);
+    transcriptPoll = window.setInterval(pollTranscript, 2000);
   }
   function stopTranscriptPoll() { if (transcriptPoll) { clearInterval(transcriptPoll); transcriptPoll = null; } }
 
@@ -223,21 +228,26 @@
     });
     unlisteners.push(uv);
 
-    const ut = await listen("gravai:transcript", (e: any) => {
-      const d = e.payload;
-      if (d?.text && get(currentSessionId)) {
-        // Track the id so the incremental poll can skip already-seen utterances.
-        if (d.id && d.id > lastUtteranceId) lastUtteranceId = d.id;
-        liveUtterances.update(u => [...u, { ...d, timestamp: d.timestamp || new Date().toISOString() }]);
-      }
+    const ut = await listen("gravai:transcript", (_e: any) => {
+      // Don't add directly — trigger an immediate poll so the DB is the single
+      // source of truth and we never get dual-write duplicates.
+      if (get(currentSessionId)) pollTranscript();
     });
     unlisteners.push(ut);
 
+    // Silence alerts come in two flavours:
+    // - scope: "all" — global silence (no audio anywhere); fires after 10 s.
+    // - scope: "source" — a specific source went silent while another keeps
+    //   producing audio (common: mic active but selected SCK app stopped
+    //   emitting). Fires after 60 s of silence on that source. We log it and
+    //   surface it loudly because the user otherwise has no visible cue.
     const us = await listen("gravai:silence-alert", (e: any) => {
       const d = e.payload;
+      const message = d?.message || "No audio detected for 10+ seconds";
+      log(`⚠️ ${message}`);
       addAlert({
         level: "warning",
-        message: d?.message || "No audio detected for 10+ seconds",
+        message,
         dismissable: true,
       });
     });
@@ -268,12 +278,16 @@
 
     // Handle LLM transcript corrections arriving after utterances are inserted.
     // Fetch only the corrected utterances by id range and patch them in-place.
+    // We match against the last session id (which lives past `stop()`), since
+    // corrections frequently complete after a session has stopped — especially
+    // on the first run when the model is still loading.
     const uc = await listen("gravai:transcript-corrected", (e: any) => {
       const d = e.payload;
-      const sid = get(currentSessionId);
-      if (!d?.utterance_ids?.length || !sid || d.session_id !== sid) return;
+      if (!d?.utterance_ids?.length || !d.session_id) return;
+      const visibleSid = get(currentSessionId) ?? get(lastSessionIdStore);
+      if (d.session_id !== visibleSid) return;
       const minId: number = Math.min(...d.utterance_ids);
-      invoke("get_transcript_since", { sessionId: sid, afterId: minId - 1 })
+      invoke("get_transcript_since", { sessionId: d.session_id, afterId: minId - 1 })
         .then((utts: any) => {
           if (!Array.isArray(utts)) return;
           const byId = new Map(utts.map((u: any) => [u.id, u]));
@@ -452,7 +466,7 @@
             </div>
             <div class="config-tooltip">
               <div class="config-tooltip-row"><Icon name="message-circle" size={11}/> Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
-              <div class="config-tooltip-row"><Icon name="bot" size={11}/> {activeProfile.llm_provider || 'ollama'} ({activeProfile.llm_model || 'gemma3:4b'})</div>
+              <div class="config-tooltip-row"><Icon name="bot" size={11}/> {activeProfile.llm_provider || 'local'} ({activeProfile.llm_provider === 'api' ? (activeProfile.llm_model || 'gpt-4o-mini') : (activeProfile.llm_local_model || 'gemma-4-e2b')})</div>
               <div class="config-tooltip-row"><Icon name="users" size={11}/> Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
               {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row"><Icon name="file-text" size={11}/> Auto-export transcript</div>{/if}
               {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row"><Icon name="save" size={11}/> Real-time save</div>{/if}
@@ -474,6 +488,9 @@
         {starting ? "Starting..." : $isRecording ? ($isPaused ? "Paused" : "Recording") : "Idle"}
       </span>
     </div>
+
+    <!-- Local LLM engine status (loading / first run / error) -->
+    <LlmStatusBanner />
 
     <!-- Export status indicator -->
     {#if exportAutoTranscript || exportAutoAudio || exportRealtimeSave}

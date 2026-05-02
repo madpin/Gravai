@@ -16,25 +16,31 @@ pub struct TranscriptCorrectionProvider {
 }
 
 impl TranscriptCorrectionProvider {
-    pub fn new(
+    pub async fn new(
         llm_config: &gravai_config::LlmConfig,
         model_override: Option<&str>,
         custom_prompt: Option<&str>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let mut cfg = llm_config.clone();
-        if let Some(m) = model_override {
-            cfg.model = m.to_string();
+        // Model override only applies to API provider (local always uses the loaded engine).
+        if cfg.provider == "api" {
+            if let Some(m) = model_override {
+                cfg.model = m.to_string();
+            }
         }
-        let provider_name = format!("{}/{}", cfg.provider, cfg.model);
+        let provider_name = match cfg.provider.as_str() {
+            "local" => format!("local/{}", cfg.local_model),
+            _ => format!("api/{}", cfg.model),
+        };
         let system_prompt = custom_prompt
             .filter(|s| !s.trim().is_empty())
             .unwrap_or(prompts::CORRECTION_SYSTEM)
             .to_string();
-        Self {
-            client: LlmClient::new(&cfg),
+        Ok(Self {
+            client: LlmClient::new(&cfg).await?,
             provider_name,
             system_prompt,
-        }
+        })
     }
 
     /// Correct a batch of utterances using knowledge entries.

@@ -10,7 +10,7 @@ You are helping with the Gravai codebase. Provide a concise, accurate overview o
 - **Frontend**: Svelte 5 + TypeScript
 - **Target**: macOS 13+, Apple Silicon
 - **Storage**: SQLite + FTS5 + vector embeddings at `~/.gravai/`
-- **AI**: On-device only — Whisper (ONNX) for transcription, Ollama/OpenAI-compatible LLM for intelligence
+- **AI**: On-device only — Whisper (ONNX) for transcription, mistral.rs (local GGUF) or OpenAI-compatible API for intelligence
 
 ## Cargo Workspace (`crates/`)
 

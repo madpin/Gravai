@@ -20,3 +20,5 @@ minijinja = { workspace = true }
 chrono = { workspace = true }
 ort = { workspace = true }
 tokenizers = { workspace = true }
+mistralrs = { workspace = true }
+anyhow = "1"

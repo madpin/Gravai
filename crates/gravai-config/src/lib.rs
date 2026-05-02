@@ -247,10 +247,15 @@ impl Default for EchoSuppressionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
+    /// LLM backend: "local" (in-process GGUF via mistral.rs) or "api" (OpenAI-compatible HTTP).
     pub provider: String,
+    /// GGUF model ID for local inference (e.g. "gemma-4-e2b"). Only used when provider == "local".
+    pub local_model: String,
+    /// Base URL for the API provider (e.g. "https://api.openai.com/v1"). Only used when provider == "api".
     pub base_url: String,
+    /// Model name for the API provider (e.g. "gpt-4o-mini"). Only used when provider == "api".
     pub model: String,
-    /// API key for BYOK providers (OpenAI, Anthropic, etc.). Not used for Ollama.
+    /// API key for the external provider. Only used when provider == "api".
     pub api_key: Option<String>,
     /// Maximum tokens to generate. Defaults to 2048.
     pub max_tokens: u32,
@@ -259,11 +264,58 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            provider: "ollama".into(),
-            base_url: "http://localhost:11434/v1".into(),
-            model: "gemma3:4b".into(),
+            provider: "local".into(),
+            local_model: "gemma-4-e2b".into(),
+            base_url: String::new(),
+            model: String::new(),
             api_key: None,
             max_tokens: 2048,
+        }
+    }
+}
+
+impl LlmConfig {
+    /// Migrate legacy provider values from older config files.
+    pub fn migrate(&mut self) {
+        match self.provider.as_str() {
+            "ollama" | "" => {
+                self.provider = "local".into();
+                self.base_url.clear();
+                // Best-effort model name mapping
+                self.local_model = match self.model.as_str() {
+                    m if m.contains("gemma") => "gemma-4-e2b",
+                    m if m.contains("phi") => "phi3-mini-q4",
+                    m if m.contains("mistral") => "mistral-7b-q4",
+                    m if m.contains("qwen") => "qwen3-8b",
+                    _ => "gemma-4-e2b",
+                }
+                .into();
+            }
+            "openai" | "anthropic" => {
+                self.provider = "api".into();
+                // base_url, model, api_key already set correctly
+            }
+            "local" | "api" => {}
+            _ => {
+                // Unknown provider — assume API
+                self.provider = "api".into();
+            }
+        }
+    }
+}
+
+impl CorrectionConfig {
+    /// Migrate legacy / over-aggressive correction settings.
+    /// Older configs were saved with very small batch + debounce values which,
+    /// combined with the slow first-run model load, made every recording feel
+    /// like the LLM was hung. Bring those up to sane defaults; users who
+    /// explicitly want low values can re-set them in Settings.
+    pub fn migrate(&mut self) {
+        if self.batch_size < 3 {
+            self.batch_size = 4;
+        }
+        if self.debounce_seconds < 5 {
+            self.debounce_seconds = 8;
         }
     }
 }
@@ -482,7 +534,11 @@ pub fn load_config() -> AppConfig {
     if path.exists() {
         match std::fs::read_to_string(&path) {
             Ok(content) => match serde_json::from_str::<AppConfig>(&content) {
-                Ok(config) => {
+                Ok(mut config) => {
+                    config.llm.migrate();
+                    config.correction.migrate();
+                    // Persist migration so the file on disk is updated
+                    let _ = save_config(&config);
                     tracing::info!("Config loaded from {}", path.display());
                     return config;
                 }

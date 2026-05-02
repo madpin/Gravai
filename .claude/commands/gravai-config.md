@@ -56,9 +56,10 @@ pub struct VadConfig {
 ### `LlmConfig`
 ```rust
 pub struct LlmConfig {
-    pub provider: String,         // "ollama", "openai", "anthropic"
-    pub base_url: String,         // "http://localhost:11434" for Ollama
-    pub model: String,
+    pub provider: String,         // "local" or "api"
+    pub local_model: String,      // GGUF model ID for local inference (e.g. "gemma3-4b-q4")
+    pub base_url: String,         // API endpoint URL (only for provider == "api")
+    pub model: String,            // API model name (only for provider == "api")
     pub api_key: Option<String>,
     pub max_tokens: u32,
 }

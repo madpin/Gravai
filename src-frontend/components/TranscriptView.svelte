@@ -301,7 +301,7 @@
         <span
           class="transcript-text"
           class:low-confidence={u.confidence != null && u.confidence < 0.5}
-        >{#if u.corrected_text && showingOriginal.has(u.id)}<span class="original-text">{u.text}</span>{:else}{u.corrected_text ?? u.text}{/if}{#if u.corrected_text}<button
+        >{#if u.corrected_text && showingOriginal.has(u.id)}<span class="original-text">{u.text}</span>{:else}{u.corrected_text || u.text}{/if}{#if u.corrected_text}<button
             class="correction-mark"
             class:showing-original={showingOriginal.has(u.id)}
             data-tooltip={showingOriginal.has(u.id) ? "Showing original — click to restore correction" : `Original: ${u.text}`}

@@ -30,7 +30,7 @@ make clean-data       # Remove user data (~/.gravai/)
 
 ## Architecture
 
-Gravai is a privacy-first macOS app for audio capture, transcription, and AI meeting intelligence. All processing is on-device (Whisper + Ollama); no audio is sent to the cloud by default.
+Gravai is a privacy-first macOS app for audio capture, transcription, and AI meeting intelligence. All processing is on-device (Whisper + mistral.rs for local GGUF inference); no audio is sent to the cloud by default.
 
 **Stack:** Rust (9 crates) + Tauri v2 + Svelte 5. Targets macOS 13+ / Apple Silicon.
 

@@ -16,7 +16,7 @@ Gravai eliminates the compromise:
 
 - **Multi-source audio capture** — record microphone + any app's audio simultaneously
 - **On-device transcription** — Whisper runs locally on Apple Silicon, no internet required
-- **AI meeting summaries** — TL;DR, action items, key decisions via local LLM (Ollama)
+- **AI meeting summaries** — TL;DR, action items, key decisions via local LLM (mistral.rs)
 - **Privacy by design** — zero network calls unless you explicitly opt into BYOK APIs
 - **No virtual mic** — Gravai never injects audio into other apps or appears as a system device
 
@@ -93,7 +93,7 @@ Inspect disk use per session, delete audio or full sessions, and run preflight-s
 - Ask Gravai: RAG-powered Q&A over your meeting archive
 - Semantic search across all transcripts
 - Speaker diarization for remote participants
-- Local LLM via Ollama (gemma3:4b default) or BYOK (OpenAI, Anthropic)
+- Local LLM via mistral.rs (GGUF models, on-device) or BYOK (OpenAI, Anthropic)
 
 ### Organization
 - Searchable archive with keyword, semantic, and hybrid search
@@ -138,7 +138,7 @@ gravai/
 - **Audio:** cpal (microphone), ScreenCaptureKit (system audio), rubato (resampling), hound (WAV)
 - **Transcription:** whisper-rs (whisper.cpp bindings)
 - **ML Inference:** ORT/ONNX Runtime (Silero VAD, diarization)
-- **LLM:** OpenAI-compatible API (Ollama, OpenAI, Anthropic)
+- **LLM:** mistral.rs (local GGUF) or OpenAI-compatible API
 - **Storage:** SQLite with FTS5 full-text search + vector embeddings
 - **Templates:** Minijinja (Jinja2-compatible prompt templates)
 
@@ -151,7 +151,7 @@ gravai/
 - Apple Silicon (M1/M2/M3/M4) recommended
 - [Rust toolchain](https://rustup.rs/) (1.75+)
 - [pnpm](https://pnpm.io/) (Node.js package manager)
-- [Ollama](https://ollama.ai/) (optional, for AI summaries)
+- Local LLM models are downloaded via the app (Settings > Models)
 
 ### Install & Run
 
@@ -182,7 +182,7 @@ The app will:
 3. Click the red Record button
 4. Speak — live transcription appears in real-time
 5. Click Stop when done
-6. Click "Generate Summary" to create an AI brief (requires Ollama running)
+6. Click "Generate Summary" to create an AI brief (requires a local LLM model downloaded)
 
 ---
 
@@ -196,7 +196,7 @@ All settings are accessible from the Settings page with auto-save. Configuration
 | **Transcription** | Engine (Whisper/HTTP), model size, language |
 | **VAD** | Engine (WebRTC/Silero), pause duration, min/max utterance length |
 | **Features** | Echo suppression, meeting detection, diarization |
-| **AI/LLM** | Provider (Ollama/OpenAI/Anthropic), model, API URL |
+| **AI/LLM** | Provider (Local/API), model selection, API URL |
 
 Import/export configuration as JSON for backup or team sharing.
 
@@ -209,7 +209,7 @@ Gravai is designed around a simple principle: **your data stays on your device**
 - All transcription runs on-device via Whisper — no audio is sent to any server
 - Screen Recording permission is only requested when you start recording with system audio
 - Meeting detection uses `ps` (process list) — no ScreenCaptureKit permission needed for detection
-- LLM summaries default to local Ollama — network is only used if you explicitly configure BYOK APIs
+- LLM summaries default to local inference via mistral.rs — network is only used if you explicitly configure BYOK APIs
 - Calendar access is optional and uses osascript (AppleScript)
 - No telemetry, no analytics, no accounts
 
@@ -296,7 +296,7 @@ Key dependencies:
 - [whisper-rs](https://github.com/tazz4843/whisper-rs) — whisper.cpp Rust bindings
 - [cpal](https://github.com/RustAudio/cpal) — cross-platform audio
 - [screencapturekit-rs](https://github.com/nicegram/nicegram-ios) — macOS system audio
-- [Ollama](https://ollama.ai/) — local LLM inference
+- [mistral.rs](https://github.com/EricLBuehler/mistral.rs) — local LLM inference
 
 ---
 

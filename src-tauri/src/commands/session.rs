@@ -81,6 +81,11 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             if let Some(ref model) = profile.llm_model {
                 config.llm.model = model.clone();
             }
+            if let Some(ref local_model) = profile.llm_local_model {
+                config.llm.local_model = local_model.clone();
+            }
+            // Re-run migration in case the profile has legacy provider values
+            config.llm.migrate();
             if let Some(enabled) = profile.diarization_enabled {
                 config.features.diarization.enabled = enabled;
             }
@@ -400,16 +405,23 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     let sentiment_engine: Option<Arc<dyn gravai_intelligence::SentimentEngine>> =
         sentiment_result.ok().flatten();
 
-    // Set up LLM correction state (debounced batch, enabled only if configured)
+    // Set up LLM correction state (debounced batch, enabled only if configured).
+    // Failure to init correction should not prevent the session from starting.
     let correction_provider: Option<Arc<gravai_intelligence::TranscriptCorrectionProvider>> =
         if config.correction.enabled {
-            Some(Arc::new(
-                gravai_intelligence::TranscriptCorrectionProvider::new(
-                    &config.llm,
-                    config.correction.model.as_deref(),
-                    config.correction.custom_prompt.as_deref(),
-                ),
-            ))
+            match gravai_intelligence::TranscriptCorrectionProvider::new(
+                &config.llm,
+                config.correction.model.as_deref(),
+                config.correction.custom_prompt.as_deref(),
+            )
+            .await
+            {
+                Ok(provider) => Some(Arc::new(provider)),
+                Err(e) => {
+                    warn!("Correction provider unavailable, continuing without it: {e}");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -915,9 +927,6 @@ async fn run_correction_task(
 
     match provider.correct(&utterances, &knowledge).await {
         Ok(corrections) => {
-            if corrections.is_empty() {
-                return;
-            }
             let db = match gravai_storage::Database::open(&db_path) {
                 Ok(db) => db,
                 Err(e) => {
@@ -925,15 +934,23 @@ async fn run_correction_task(
                     return;
                 }
             };
+            // Resolve every utterance in the batch. Ids the LLM echoed back get
+            // their corrected text; ids it omitted (very common with chatty
+            // models like Gemma) are marked `done` with the original text so
+            // they don't stay `pending` forever.
             let mut corrected_ids = Vec::new();
-            for (id, corrected_text) in &corrections {
+            for utt in &utterances {
+                let corrected_text = corrections
+                    .get(&utt.id)
+                    .cloned()
+                    .unwrap_or_else(|| utt.text.clone());
                 let _ = db.update_utterance_correction(
-                    *id,
-                    corrected_text,
+                    utt.id,
+                    &corrected_text,
                     &provider.provider_name,
                     "done",
                 );
-                corrected_ids.push(*id);
+                corrected_ids.push(utt.id);
             }
             if !corrected_ids.is_empty() {
                 event_bus.publish(gravai_core::GravaiEvent::TranscriptCorrected {
@@ -944,11 +961,11 @@ async fn run_correction_task(
         }
         Err(e) => {
             warn!("Correction task failed: {e}");
-            // Mark as error
+            // Mark as error without touching corrected_text — writing "" would make the
+            // frontend render blank text instead of the original ASR transcript.
             if let Ok(db) = gravai_storage::Database::open(&db_path) {
                 for id in &utterance_ids {
-                    let _ =
-                        db.update_utterance_correction(*id, "", &provider.provider_name, "error");
+                    let _ = db.mark_utterance_correction_error(*id, &provider.provider_name);
                 }
             }
         }

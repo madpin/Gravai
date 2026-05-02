@@ -22,6 +22,8 @@ pub struct Profile {
     /// LLM overrides
     pub llm_provider: Option<String>,
     pub llm_model: Option<String>,
+    /// GGUF model ID override for local inference (e.g. "gemma-4-e2b").
+    pub llm_local_model: Option<String>,
     /// Shortcut set ID
     pub shortcut_set_id: Option<String>,
 }
@@ -41,6 +43,7 @@ impl Default for Profile {
             echo_suppression_enabled: None,
             llm_provider: None,
             llm_model: None,
+            llm_local_model: None,
             shortcut_set_id: None,
         }
     }
@@ -93,7 +96,24 @@ impl ProfileStore {
         let path = super::data_dir().join("profiles.json");
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(store) = serde_json::from_str(&content) {
+                if let Ok(mut store) = serde_json::from_str::<Self>(&content) {
+                    let mut migrated = false;
+                    for profile in store.profiles.values_mut() {
+                        if let Some(ref p) = profile.llm_provider {
+                            let new_p = match p.as_str() {
+                                "ollama" => Some("local"),
+                                "openai" | "anthropic" => Some("api"),
+                                _ => None,
+                            };
+                            if let Some(np) = new_p {
+                                profile.llm_provider = Some(np.to_string());
+                                migrated = true;
+                            }
+                        }
+                    }
+                    if migrated {
+                        let _ = store.save();
+                    }
                     return store;
                 }
             }

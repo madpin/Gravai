@@ -8,11 +8,16 @@
   let silero = $state<any>(null);
   let aiModels = $state<any[]>([]);
   let embeddingModels = $state<any[]>([]);
+  let llmModels = $state<any[]>([]);
+  let activeLlmModel = $state("gemma-4-e2b");
+  let llmProvider = $state("local");
   let activeEmbeddingModel = $state("bag-of-words");
   let modelsDir = $state("");
   let downloading = $derived($modelDownloading);
   let actionMsg = $state("");
   let unlistenDownload: (() => void) | null = null;
+  let customUrl = $state("");
+  let customFilename = $state("");
 
   onMount(async () => {
     await load();
@@ -34,6 +39,7 @@
       silero = info.silero_vad;
       aiModels = info.ai_models || [];
       embeddingModels = info.embedding_models || [];
+      llmModels = info.llm_models || [];
       modelsDir = info.models_dir || "";
     } catch (_) {}
   }
@@ -82,6 +88,8 @@
       const cfg: any = await invoke("get_config");
       activeModel = cfg.transcription?.model || "medium";
       activeEmbeddingModel = cfg.embedding?.model || "bag-of-words";
+      activeLlmModel = cfg.llm?.local_model || "gemma-4-e2b";
+      llmProvider = cfg.llm?.provider || "local";
     } catch (_) {}
     // Also get active profile name
     try {
@@ -94,6 +102,48 @@
       }
     } catch (_) {}
   });
+
+  async function setActiveLlm(modelId: string) {
+    try {
+      await invoke("update_config", { patch: { llm: { local_model: modelId } } });
+      activeLlmModel = modelId;
+      actionMsg = `Active LLM set to "${modelId}".`;
+      setTimeout(() => actionMsg = "", 3000);
+    } catch (e) { actionMsg = `Error: ${e}`; }
+  }
+
+  async function deleteLlm(id: string) {
+    if (!confirm(`Delete LLM model "${id}"?`)) return;
+    try {
+      const msg: string = await invoke("delete_llm_model", { modelId: id });
+      actionMsg = msg; setTimeout(() => actionMsg = "", 3000);
+      await load();
+    } catch (e) { actionMsg = `Error: ${e}`; }
+  }
+
+  async function downloadCustomLlm() {
+    const url = customUrl.trim();
+    if (!url) { actionMsg = "Enter a URL"; return; }
+    // Auto-detect filename from URL if not provided
+    let fname = customFilename.trim();
+    if (!fname) {
+      const parts = url.split("/");
+      fname = parts[parts.length - 1]?.split("?")[0] || "";
+    }
+    if (!fname.endsWith(".gguf")) {
+      actionMsg = "Filename must end with .gguf"; setTimeout(() => actionMsg = "", 4000);
+      return;
+    }
+    modelDownloading.update(cur => ({ ...cur, [fname]: { progress: 0, status: "starting" } }));
+    try {
+      const msg: string = await invoke("download_llm_from_url", { url, filename: fname });
+      actionMsg = msg; setTimeout(() => actionMsg = "", 3000);
+      customUrl = ""; customFilename = "";
+    } catch (e) {
+      modelDownloading.update(cur => { const { [fname]: _, ...rest } = cur; return rest; });
+      actionMsg = `Error: ${e}`; setTimeout(() => actionMsg = "", 5000);
+    }
+  }
 
   import { currentPage } from "../lib/store";
 </script>
@@ -110,6 +160,83 @@
     <button class="btn-link" onclick={() => currentPage.set("profiles")}>Change in Profiles →</button>
   {/if}
 </p>
+
+<!-- LLM Models -->
+<div class="card">
+  <div class="card-header">LLM Models (Local Inference)</div>
+  <p class="card-note">
+    GGUF models for on-device AI summarization, chat, and transcript correction via mistral.rs.
+    {#if llmProvider === "api"}
+      Currently using <strong>API provider</strong>. Switch to Local in <button class="btn-link" onclick={() => currentPage.set("profiles")}>Profiles</button> to use these models.
+    {:else}
+      Active model: <strong>{activeLlmModel}</strong>.
+    {/if}
+  </p>
+  <div class="model-list">
+    {#each llmModels as m}
+      <div class="model-row" class:active-model={activeLlmModel === m.id}>
+        <div class="model-info">
+          <div class="model-name">
+            {m.id}
+            {#if activeLlmModel === m.id && llmProvider === "local"}
+              <span class="card-tag card-tag-active">Active</span>
+            {/if}
+            {#if !m.catalog}
+              <span class="card-tag">Custom</span>
+            {/if}
+          </div>
+          <div class="model-desc">
+            {m.description}
+            {#if m.note}<span class="ai-model-note"> — <Icon name="alert-triangle" size={11}/> {m.note}</span>{/if}
+          </div>
+        </div>
+
+        <div class="model-status">
+          {#if downloading[m.id]}
+            <div class="model-progress">
+              <div class="model-progress-bar" style="width: {downloading[m.id].progress}%"></div>
+            </div>
+            <span class="model-progress-text">{downloading[m.id].progress}%</span>
+          {:else if m.downloaded}
+            <span class="model-size">{fmtBytes(m.actual_size)}</span>
+          {:else}
+            <span class="model-size muted">~{fmtBytes(m.approx_size)}</span>
+          {/if}
+        </div>
+
+        <div class="model-actions">
+          {#if downloading[m.id]}
+            <span class="model-status-muted">Downloading...</span>
+          {:else if m.downloaded}
+            <span class="model-status-ok"><Icon name="check" size={13}/> Ready</span>
+            {#if activeLlmModel === m.id}
+              <span class="model-status-active">Active</span>
+            {:else}
+              <button class="btn btn-xs btn-accent" onclick={() => setActiveLlm(m.id)}>Set Active</button>
+              <button class="btn btn-xs btn-ghost btn-danger" onclick={() => deleteLlm(m.id)}>Delete</button>
+            {/if}
+          {:else}
+            <button class="btn btn-xs btn-accent" onclick={() => download(m.id)}>Download</button>
+          {/if}
+        </div>
+      </div>
+    {/each}
+
+    <!-- Custom GGUF download -->
+    <div class="model-row custom-download-row">
+      <div class="model-info" style="flex:1">
+        <div class="model-name" style="font-size:12px; font-weight:500; margin-bottom:6px;">Download custom GGUF model</div>
+        <div class="custom-download-form">
+          <input class="input input-sm" style="flex:2" bind:value={customUrl}
+            placeholder="https://huggingface.co/.../model-Q4_K_M.gguf" />
+          <input class="input input-sm" style="flex:1" bind:value={customFilename}
+            placeholder="filename.gguf (auto from URL)" />
+          <button class="btn btn-xs btn-accent" onclick={downloadCustomLlm}>Download</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- Whisper models -->
 <div class="card">
@@ -353,4 +480,7 @@
   .model-profile-note { color: var(--text-tertiary); }
   .card-note { font-size: 11px; color: var(--text-tertiary); padding: 8px 16px 4px; }
   .models-dir-note { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+  .custom-download-row { flex-direction: column; align-items: stretch; }
+  .custom-download-form { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
+  .custom-download-form .input { font-size: 11px; padding: 4px 8px; }
 </style>

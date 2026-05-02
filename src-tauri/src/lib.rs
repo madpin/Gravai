@@ -133,6 +133,10 @@ pub fn run() {
     // Clone event bus for setup closure
     let event_bus = app_state.event_bus.clone();
 
+    // Register the event bus with the local LLM engine so it can publish
+    // `LlmStatus` events during model load/swap.
+    gravai_intelligence::local_engine::set_event_bus(event_bus.clone());
+
     // ── Background meeting detection loop ────────────────────────────────
     // Publishes GravaiEvent::MeetingDetected / MeetingEnded to the event bus,
     // which the event bridge picks up and uses to fire automations.
@@ -305,14 +309,38 @@ pub fn run() {
             let handle = app.handle().clone();
             let mut rx = event_bus.subscribe();
 
-            // Shared state for silence monitoring
+            // ── Silence monitoring ──────────────────────────────────────
+            //
+            // We track silence both globally (no audio on any source) AND
+            // per-source. The per-source check is essential because a
+            // common failure mode is: mic keeps producing audio while the
+            // selected SCK app stops emitting (paused video, ended call,
+            // etc.) and SCK silently delivers zero buffers. Without
+            // per-source tracking the global silence detector never fires
+            // and the user has no idea their system audio is gone.
+            //
+            // - Global: 10 s threshold, fires once until any audio resumes.
+            // - Per-source: 60 s threshold, only fires for sources that
+            //   have actually been active before going silent (so a user
+            //   recording dictation only doesn't get nagged about
+            //   never-active system audio).
+            #[derive(Default)]
+            struct SourceSilenceState {
+                last_audio_time: Option<std::time::Instant>,
+                has_been_active: bool,
+                alerted: bool,
+            }
+
             let is_recording = Arc::new(AtomicBool::new(false));
-            let last_audio_time = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
-            let silence_alerted = Arc::new(AtomicBool::new(false));
+            let global_last_audio = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+            let global_alerted = Arc::new(AtomicBool::new(false));
+            let per_source: Arc<std::sync::Mutex<std::collections::HashMap<String, SourceSilenceState>>> =
+                Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
             let is_recording_silence = is_recording.clone();
-            let last_audio_silence = last_audio_time.clone();
-            let silence_alerted_clone = silence_alerted.clone();
+            let global_last_audio_for_task = global_last_audio.clone();
+            let global_alerted_for_task = global_alerted.clone();
+            let per_source_for_task = per_source.clone();
             let handle_for_silence = handle.clone();
 
             // Silence monitor task — checks every 2s
@@ -323,19 +351,24 @@ pub fn run() {
                     if !is_recording_silence.load(Ordering::Relaxed) {
                         continue;
                     }
-                    let elapsed = last_audio_silence
+
+                    // Global silence (any audio at all from any source)
+                    let global_elapsed = global_last_audio_for_task
                         .lock()
                         .unwrap()
                         .elapsed()
                         .as_secs();
-                    if elapsed >= 10 && !silence_alerted_clone.load(Ordering::Relaxed) {
-                        silence_alerted_clone.store(true, Ordering::Relaxed);
-                        // Emit to frontend
-                        let _ = handle_for_silence.emit("gravai:silence-alert", serde_json::json!({
-                            "message": "No audio detected on mic or system for 10+ seconds",
-                            "elapsed": elapsed
-                        }));
-                        // Also send macOS notification
+                    if global_elapsed >= 10 && !global_alerted_for_task.load(Ordering::Relaxed) {
+                        global_alerted_for_task.store(true, Ordering::Relaxed);
+                        let _ = handle_for_silence.emit(
+                            "gravai:silence-alert",
+                            serde_json::json!({
+                                "scope": "all",
+                                "source": null,
+                                "message": "No audio detected on mic or system for 10+ seconds",
+                                "elapsed": global_elapsed,
+                            }),
+                        );
                         #[cfg(target_os = "macos")]
                         {
                             use tauri_plugin_notification::NotificationExt;
@@ -343,7 +376,60 @@ pub fn run() {
                                 .notification()
                                 .builder()
                                 .title("Gravai — Silence Detected")
-                                .body("No audio detected for 10+ seconds. Check your microphone and system audio.")
+                                .body(
+                                    "No audio detected for 10+ seconds. \
+                                     Check your microphone and system audio.",
+                                )
+                                .show();
+                        }
+                    }
+
+                    // Per-source silence (one source dropped while another keeps going)
+                    let mut alerts: Vec<(String, u64)> = Vec::new();
+                    {
+                        let mut map = per_source_for_task.lock().unwrap();
+                        for (source, state) in map.iter_mut() {
+                            if !state.has_been_active || state.alerted {
+                                continue;
+                            }
+                            let Some(t) = state.last_audio_time else { continue };
+                            let elapsed = t.elapsed().as_secs();
+                            if elapsed >= 60 {
+                                state.alerted = true;
+                                alerts.push((source.clone(), elapsed));
+                            }
+                        }
+                    }
+                    for (source, elapsed) in alerts {
+                        let pretty = match source.as_str() {
+                            "microphone" => "Microphone",
+                            "system_audio" => "System audio",
+                            other => other,
+                        };
+                        let hint = if source == "system_audio" {
+                            " — the selected app may have stopped playing audio. Recording continues; pick a different app or switch to All Apps if needed."
+                        } else {
+                            " — check your microphone or input device. Recording continues."
+                        };
+                        let message =
+                            format!("{pretty} went silent for {elapsed}s{hint}");
+                        let _ = handle_for_silence.emit(
+                            "gravai:silence-alert",
+                            serde_json::json!({
+                                "scope": "source",
+                                "source": source,
+                                "message": message,
+                                "elapsed": elapsed,
+                            }),
+                        );
+                        #[cfg(target_os = "macos")]
+                        {
+                            use tauri_plugin_notification::NotificationExt;
+                            let _ = handle_for_silence
+                                .notification()
+                                .builder()
+                                .title(format!("Gravai — {pretty} silent"))
+                                .body(message.clone())
                                 .show();
                         }
                     }
@@ -357,10 +443,34 @@ pub fn run() {
                         Ok(event) => {
                             let (event_name, payload) = match &event {
                                 GravaiEvent::VolumeLevel { source, db } => {
-                                    // Update last audio time if either channel is active
+                                    // -50 dB chosen as a generous threshold:
+                                    // higher than typical room noise (~-60 dB)
+                                    // but well below normal speech (~-20 dB)
+                                    // and especially below pure digital silence
+                                    // (-91 dB) which is what SCK delivers when
+                                    // the captured app stops playing.
                                     if *db > -50.0 {
-                                        *last_audio_time.lock().unwrap() = std::time::Instant::now();
-                                        silence_alerted.store(false, Ordering::Relaxed);
+                                        let now = std::time::Instant::now();
+                                        // Global silence reset
+                                        *global_last_audio.lock().unwrap() = now;
+                                        global_alerted.store(false, Ordering::Relaxed);
+                                        // Per-source silence reset
+                                        let mut map = per_source.lock().unwrap();
+                                        let entry = map
+                                            .entry(source.clone())
+                                            .or_default();
+                                        entry.last_audio_time = Some(now);
+                                        entry.has_been_active = true;
+                                        entry.alerted = false;
+                                    } else {
+                                        // Even silent samples count as "the
+                                        // source exists" — we just don't
+                                        // refresh `last_audio_time`. This lets
+                                        // us tell the difference between "not
+                                        // configured" and "configured but
+                                        // silent" without a separate signal.
+                                        let mut map = per_source.lock().unwrap();
+                                        map.entry(source.clone()).or_default();
                                     }
                                     (
                                         "gravai:volume",
@@ -375,8 +485,13 @@ pub fn run() {
                                     let recording = state == "recording";
                                     is_recording.store(recording, Ordering::Relaxed);
                                     if recording {
-                                        *last_audio_time.lock().unwrap() = std::time::Instant::now();
-                                        silence_alerted.store(false, Ordering::Relaxed);
+                                        // Reset all silence trackers at session
+                                        // start so previous-session state never
+                                        // leaks into the new one.
+                                        let now = std::time::Instant::now();
+                                        *global_last_audio.lock().unwrap() = now;
+                                        global_alerted.store(false, Ordering::Relaxed);
+                                        per_source.lock().unwrap().clear();
                                     }
                                     // Update tray tooltip and dynamic menu items
                                     if let Some(tray) = handle.tray_by_id("gravai-tray") {
@@ -433,6 +548,17 @@ pub fn run() {
                                 GravaiEvent::TranscriptCorrected { session_id, utterance_ids } => (
                                     "gravai:transcript-corrected",
                                     serde_json::json!({ "session_id": session_id, "utterance_ids": utterance_ids }),
+                                ),
+                                GravaiEvent::LlmStatus { state, model_id, message, progress, phase, eta_seconds } => (
+                                    "gravai:llm-status",
+                                    serde_json::json!({
+                                        "state": state,
+                                        "model_id": model_id,
+                                        "message": message,
+                                        "progress": progress,
+                                        "phase": phase,
+                                        "eta_seconds": eta_seconds,
+                                    }),
                                 ),
                                 _ => ("gravai:event", serde_json::json!({})),
                             };
@@ -498,6 +624,7 @@ pub fn run() {
             commands::detect_meetings,
             // Phase 3: Intelligence
             commands::summarize_session,
+            commands::get_session_summary,
             commands::get_export_formats,
             commands::export_session_audio,
             commands::get_session_sentiment,
@@ -540,6 +667,12 @@ pub fn run() {
             commands::get_models_status,
             commands::download_model,
             commands::delete_model,
+            // LLM engine lifecycle + model management
+            commands::get_llm_status,
+            commands::preload_llm_engine,
+            commands::unload_llm_engine,
+            commands::download_llm_from_url,
+            commands::delete_llm_model,
             // Storage management
             commands::get_storage_info,
             commands::delete_session_audio,

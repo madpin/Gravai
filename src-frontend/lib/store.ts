@@ -58,5 +58,34 @@ export function clearAlerts() {
 // Model download state — persists across tab navigation
 export const modelDownloading = writable<Record<string, { progress: number; status: string }>>({});
 
+// Local LLM engine status — persists across tab navigation so any page
+// (Recording, Archive, Chat, Settings) can show a shared "preparing model"
+// indicator instead of looking hung during the (possibly multi-minute) ISQ
+// first-run. Updated by the global `gravai:llm-status` listener in App.svelte.
+//
+// `progress` is a 0.0–1.0 estimate; `phase` is a short human label
+// ("Quantizing weights", "Saving cache", …); `eta_seconds` is the typical
+// total duration the backend expects, used to drive smooth animation
+// between (~1 Hz) server-side progress ticks.
+export type LlmStatusState = "idle" | "loading" | "first_run" | "progress" | "ready" | "unloaded" | "error";
+export const llmStatus = writable<{
+  state: LlmStatusState;
+  model_id: string | null;
+  message: string | null;
+  progress: number | null;
+  phase: string | null;
+  eta_seconds: number | null;
+  /** Wall-clock when the load started, used to render an elapsed timer. */
+  started_at: number | null;
+}>({
+  state: "idle",
+  model_id: null,
+  message: null,
+  progress: null,
+  phase: null,
+  eta_seconds: null,
+  started_at: null,
+});
+
 // Cross-page navigation: clicking a citation in Chat navigates to Archive with this session pre-selected
 export const pendingArchiveSessionId = writable<string | null>(null);

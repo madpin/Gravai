@@ -93,3 +93,6 @@ objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMedia
 
 # File I/O for downloads
 futures-util = "0.3"
+
+# Local LLM inference (GGUF models via mistral.rs)
+mistralrs = { version = "0.8", default-features = false, features = ["metal", "accelerate"] }

@@ -69,6 +69,24 @@ pub struct BookmarkRecord {
     pub created_at: String,
 }
 
+/// A persisted meeting summary for a session.
+///
+/// `key_decisions`, `action_items`, `open_questions` are stored as JSON
+/// strings in the DB (matching the schema in `001_initial.sql`). The
+/// Tauri layer parses them back into structured arrays before returning
+/// to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SummaryRecord {
+    pub id: i64,
+    pub session_id: String,
+    pub tldr: Option<String>,
+    pub key_decisions: Option<String>,
+    pub action_items: Option<String>,
+    pub open_questions: Option<String>,
+    pub created_at: String,
+    pub provider: Option<String>,
+}
+
 /// Main database handle.
 pub struct Database {
     conn: Connection,
@@ -221,6 +239,66 @@ impl Database {
         Ok(count > 0)
     }
 
+    // -- Session summaries --
+
+    /// Insert or replace the summary for a session. We delete any prior
+    /// summary first so a session always has at most one row — re-running
+    /// "Generate Summary" overwrites instead of accumulating.
+    pub fn upsert_session_summary(
+        &self,
+        session_id: &str,
+        tldr: Option<&str>,
+        key_decisions_json: Option<&str>,
+        action_items_json: Option<&str>,
+        open_questions_json: Option<&str>,
+        provider: Option<&str>,
+    ) -> Result<i64, rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        self.conn.execute(
+            "INSERT INTO session_summaries
+                (session_id, tldr, key_decisions, action_items, open_questions, provider)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                session_id,
+                tldr,
+                key_decisions_json,
+                action_items_json,
+                open_questions_json,
+                provider,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Fetch the latest summary for a session, if any.
+    pub fn get_session_summary(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SummaryRecord>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, tldr, key_decisions, action_items, open_questions, created_at, provider
+             FROM session_summaries WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![session_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(SummaryRecord {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                tldr: row.get(2)?,
+                key_decisions: row.get(3)?,
+                action_items: row.get(4)?,
+                open_questions: row.get(5)?,
+                created_at: row.get(6)?,
+                provider: row.get(7)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     // -- Utterances --
 
     pub fn insert_utterance(&self, u: &UtteranceRecord) -> Result<i64, rusqlite::Error> {
@@ -353,6 +431,21 @@ impl Database {
             "UPDATE utterances SET corrected_text = ?1, correction_provider = ?2, \
              correction_status = ?3, corrected_at = datetime('now') WHERE id = ?4",
             params![corrected_text, provider, status, id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark an utterance correction as failed without overwriting corrected_text.
+    /// Called on LLM error so we record the failure but preserve the original displayed text.
+    pub fn mark_utterance_correction_error(
+        &self,
+        id: i64,
+        provider: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE utterances SET correction_status = 'error', correction_provider = ?1, \
+             corrected_at = datetime('now') WHERE id = ?2",
+            params![provider, id],
         )?;
         Ok(())
     }

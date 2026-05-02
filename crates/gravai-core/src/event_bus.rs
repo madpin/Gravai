@@ -72,6 +72,33 @@ pub enum GravaiEvent {
         session_id: String,
         utterance_ids: Vec<i64>,
     },
+
+    /// Local LLM engine lifecycle status — emitted around model load/swap
+    /// so the UI can show a "Preparing local model…" indicator instead of
+    /// looking hung during the (possibly multi-minute) ISQ first-run.
+    ///
+    /// `state` is one of:
+    /// - `"loading"` — engine load started (cache hit; quick)
+    /// - `"first_run"` — no UQFF cache; downloads + quantizes (slow, ~minutes)
+    /// - `"progress"` — periodic update during load (every ~1 s); progress + phase set
+    /// - `"ready"` — engine loaded, inference can proceed
+    /// - `"unloaded"` — engine evicted to free memory
+    /// - `"error"` — load failed; `message` carries the reason
+    ///
+    /// `progress` is a 0.0–1.0 estimate; capped at 0.95 until `ready` is sent
+    /// so the UI never lies about completion. `phase` is a short
+    /// human-readable label (e.g. "Downloading model weights",
+    /// "Quantizing weights", "Warming up"). `eta_seconds` is the typical
+    /// total duration for the current load type — the frontend can use it
+    /// to drive a smooth animation between server-side progress ticks.
+    LlmStatus {
+        state: String,
+        model_id: String,
+        message: Option<String>,
+        progress: Option<f32>,
+        phase: Option<String>,
+        eta_seconds: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]

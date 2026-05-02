@@ -6,6 +6,10 @@
 # Skip pre-flight `make check` when: FORCE=1, or extra goal `force` / `--force` (GNU Make: `make version --force`; Apple make: `make version force`)
 VERSION_SKIP_CHECK := $(if $(FORCE),1,$(filter --force force,$(MAKECMDGOALS)))
 
+# mistral.rs Metal shader precompilation requires full Xcode.app (not just CLT).
+# Setting to 0 defers shader compilation to runtime — works with Command Line Tools only.
+export MISTRALRS_METAL_PRECOMPILE ?= 0
+
 # Default target
 help: ## Show this help
 	@echo "Gravai Development Commands"

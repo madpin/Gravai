@@ -67,6 +67,11 @@
     seekRequest = null;
     try { utterances = await invoke("get_transcript", { sessionId: id }); } catch (_) {}
     try { bookmarks = await invoke("list_bookmarks", { sessionId: id }); } catch (_) {}
+    // Load any previously saved summary so the user doesn't have to re-run the LLM
+    try {
+      const saved = await invoke("get_session_summary", { sessionId: id });
+      if (saved) summary = saved;
+    } catch (_) {}
     // Load audio (may trigger a merge of multiple tracks — show loading state)
     audioLoading = true;
     try {

@@ -68,6 +68,8 @@ pub async fn update_config(
     let current = serde_json::to_value(&*config).map_err(|e| e.to_string())?;
     let merged = gravai_config::deep_merge(&current, &patch);
     *config = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+    config.llm.migrate();
+    config.correction.migrate();
 
     // Persist to disk
     gravai_config::save_config(&config).map_err(|e| e.to_string())?;

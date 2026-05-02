@@ -3,19 +3,22 @@
 use minijinja::Environment;
 use tracing::warn;
 
-pub const DEFAULT_SUMMARY_SYSTEM: &str = r#"You are a meeting intelligence assistant. Given a transcript, produce a structured meeting summary in JSON format with these fields:
-- "tldr": 2-3 sentence summary
+pub const DEFAULT_SUMMARY_SYSTEM: &str = r#"You are a meeting intelligence assistant. Given a transcript, produce a structured meeting summary as a single JSON object with these fields:
+- "tldr": 2-3 sentence summary (string)
 - "key_decisions": array of strings (decisions made)
 - "action_items": array of {"description": string, "owner": string or null}
 - "open_questions": array of strings (unresolved topics)
 
-Return ONLY valid JSON, no markdown fences."#;
+Reply with the JSON object ONLY — start with `{` and end with `}`. No prose, no markdown fences, no commentary before or after."#;
 
 pub const DEFAULT_SUMMARY_USER: &str = r#"Summarize this meeting transcript:
 
 {% for u in utterances %}
 [{{ u.timestamp }}] {{ u.source }}{% if u.speaker %} ({{ u.speaker }}){% endif %}: {{ u.text }}
-{% endfor %}"#;
+{% endfor %}
+
+Return the JSON object now. Empty arrays are fine when a section has nothing.
+Begin your reply with `{`."#;
 
 pub const CORRECTION_SYSTEM: &str = "You are a transcript correction assistant. \
 Fix transcription errors (spelling, proper nouns, punctuation) using the provided \

@@ -19,7 +19,7 @@
     echo_enabled: true, echo_threshold: 0.55,
     meeting_enabled: true, diarization_enabled: false, sentiment_enabled: false,
     // LLM
-    llm_provider: "ollama", llm_model: "gemma3:4b", llm_url: "http://localhost:11434/v1",
+    llm_provider: "local", llm_model: "", llm_local_model: "gemma-4-e2b", llm_url: "",
     // Export
     auto_export_transcript: false, auto_export_audio: false,
     transcript_folder: "", audio_folder: "",
@@ -48,6 +48,7 @@
         if (p.transcription_language) patch.transcription = { ...patch.transcription, language: p.transcription_language };
         if (p.llm_provider) patch.llm = { ...patch.llm, provider: p.llm_provider };
         if (p.llm_model) patch.llm = { ...patch.llm, model: p.llm_model };
+        if (p.llm_local_model) patch.llm = { ...patch.llm, local_model: p.llm_local_model };
         if (p.diarization_enabled != null) patch.features = { ...patch.features, diarization: { enabled: p.diarization_enabled } };
         if (p.echo_suppression_enabled != null) patch.features = { ...patch.features, echo_suppression: { enabled: p.echo_suppression_enabled } };
         if (Object.keys(patch).length > 0) await invoke("update_config", { patch });
@@ -70,9 +71,10 @@
       e.meeting_enabled = p.meeting_enabled ?? true;
       e.diarization_enabled = p.diarization_enabled ?? false;
       e.sentiment_enabled = p.sentiment_enabled ?? false;
-      e.llm_provider = p.llm_provider || "ollama";
-      e.llm_model = p.llm_model || "gemma3:4b";
-      e.llm_url = p.llm_url || "http://localhost:11434/v1";
+      e.llm_provider = p.llm_provider || "local";
+      e.llm_model = p.llm_model || "";
+      e.llm_local_model = p.llm_local_model || "gemma-4-e2b";
+      e.llm_url = p.llm_url || "";
       e.auto_export_transcript = p.auto_export_transcript ?? false;
       e.auto_export_audio = p.auto_export_audio ?? false;
       e.transcript_folder = p.transcript_folder || "";
@@ -86,7 +88,7 @@
         vad_engine: "webrtc", vad_pause: 0.5, vad_min: 0.3, vad_max: 30,
         echo_enabled: true, echo_threshold: 0.55,
         meeting_enabled: true, diarization_enabled: false, sentiment_enabled: false,
-        llm_provider: "ollama", llm_model: "gemma3:4b", llm_url: "http://localhost:11434/v1",
+        llm_provider: "local", llm_model: "", llm_local_model: "gemma-4-e2b", llm_url: "",
         auto_export_transcript: false, auto_export_audio: false,
         transcript_folder: "", audio_folder: "", transcript_format: "markdown", realtime_save: true,
       };
@@ -104,7 +106,7 @@
       vad_engine: e.vad_engine, vad_pause: e.vad_pause, vad_min: e.vad_min, vad_max: e.vad_max,
       echo_suppression_enabled: e.echo_enabled, echo_threshold: e.echo_threshold,
       meeting_enabled: e.meeting_enabled, diarization_enabled: e.diarization_enabled, sentiment_enabled: e.sentiment_enabled,
-      llm_provider: e.llm_provider, llm_model: e.llm_model, llm_url: e.llm_url,
+      llm_provider: e.llm_provider, llm_model: e.llm_model, llm_local_model: e.llm_local_model, llm_url: e.llm_url,
       auto_export_transcript: e.auto_export_transcript, auto_export_audio: e.auto_export_audio,
       transcript_folder: e.transcript_folder || null, audio_folder: e.audio_folder || null,
       transcript_format: e.transcript_format, realtime_save: e.realtime_save,
@@ -167,9 +169,14 @@
     <div class="card-header section">AI / LLM</div>
     <div class="settings-grid">
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Provider</span></div>
-        <select class="select" bind:value={e.llm_provider}><option value="ollama">Ollama</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Model</span></div><input class="input" bind:value={e.llm_model} /></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">API URL</span></div><input class="input" bind:value={e.llm_url} /></div>
+        <select class="select" bind:value={e.llm_provider}><option value="local">Local (on-device)</option><option value="api">API (OpenAI-compatible)</option></select></div>
+      {#if e.llm_provider === "local"}
+        <div class="setting-row"><div class="setting-info"><span class="setting-label">Local Model</span></div>
+          <select class="select" bind:value={e.llm_local_model}><option value="gemma-4-e2b">Gemma 4 E2B</option><option value="gemma-4-e4b">Gemma 4 E4B</option><option value="gemma-4-27b-moe">Gemma 4 27B MoE</option><option value="qwen3-0.6b">Qwen3 0.6B</option><option value="qwen3-1.7b">Qwen3 1.7B</option><option value="gemma-4-e2b">Qwen3 4B</option><option value="qwen3-8b">Qwen3 8B</option><option value="llama-3.2-3b">Llama 3.2 3B</option><option value="phi3-mini-q4">Phi-3 Mini</option><option value="mistral-7b-q4">Mistral 7B</option></select></div>
+      {:else}
+        <div class="setting-row"><div class="setting-info"><span class="setting-label">Model</span></div><input class="input" bind:value={e.llm_model} placeholder="gpt-4o-mini" /></div>
+        <div class="setting-row"><div class="setting-info"><span class="setting-label">API URL</span></div><input class="input" bind:value={e.llm_url} placeholder="https://api.openai.com/v1" /></div>
+      {/if}
     </div>
 
     <!-- Export -->

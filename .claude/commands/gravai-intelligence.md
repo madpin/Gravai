@@ -12,16 +12,15 @@ All AI/ML features beyond transcription: LLM chat, meeting summarization, speake
 
 ### `llm_client.rs` — LLM Integration
 ```rust
-pub struct LlmClient {
-    pub base_url: String,  // e.g., "http://localhost:11434" for Ollama
-    pub model: String,
-    pub api_key: Option<String>,
-    client: reqwest::Client,
+pub enum LlmClient {
+    Local { engine: Arc<LocalLlmEngine> },
+    Api { base_url: String, model: String, api_key: Option<String>, client: reqwest::Client },
 }
 ```
-- `chat(messages: Vec<Message>) -> Result<String>`: POST to `/v1/chat/completions`
-- **OpenAI-compatible API** — works with Ollama, OpenAI, Anthropic (via compatibility layer), LM Studio
-- Config: `LlmConfig { provider, base_url, model, api_key, max_tokens }` in `gravai-config`
+- `async fn new(config: &LlmConfig) -> Result<Self, String>`: Dispatches on provider
+- `chat(messages, max_tokens, temperature) -> Result<String>`: Local GGUF inference or HTTP POST
+- Two backends: `"local"` (mistral.rs in-process GGUF) or `"api"` (any OpenAI-compatible endpoint)
+- Config: `LlmConfig { provider, local_model, base_url, model, api_key, max_tokens }` in `gravai-config`
 
 ### `chat.rs` — Ask Gravai (RAG)
 ```rust
@@ -110,7 +109,7 @@ pub trait EmbeddingProvider: Send + Sync {
 ## Configuration Keys
 ```json
 {
-  "llm": { "provider": "ollama", "base_url": "http://localhost:11434", "model": "llama3.2" },
+  "llm": { "provider": "local", "local_model": "gemma3-4b-q4", "base_url": "", "model": "", "max_tokens": 2048 },
   "embedding": { "model": "all-minilm" },
   "features": {
     "diarization": true, "diarization_engine": "energy",
