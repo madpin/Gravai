@@ -247,6 +247,22 @@ fn emit_status_full(
     }
 }
 
+/// Publish an `LlmStatus` event from outside this module (Tauri commands etc.).
+///
+/// Used by the summarization / correction Tauri commands so the existing
+/// `LlmStatusBanner` can show "Summarizing..." with a smooth progress bar
+/// during inference, in the same way it does during model load.
+pub fn emit_status_external(
+    state: &str,
+    model_id: &str,
+    message: Option<String>,
+    progress: Option<f32>,
+    phase: Option<String>,
+    eta_seconds: Option<u64>,
+) {
+    emit_status_full(state, model_id, message, progress, phase, eta_seconds);
+}
+
 // ── Progress estimation ──────────────────────────────────────────────────────
 //
 // mistral.rs does not expose progress callbacks for either the HuggingFace

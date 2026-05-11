@@ -67,7 +67,15 @@ export const modelDownloading = writable<Record<string, { progress: number; stat
 // ("Quantizing weights", "Saving cache", …); `eta_seconds` is the typical
 // total duration the backend expects, used to drive smooth animation
 // between (~1 Hz) server-side progress ticks.
-export type LlmStatusState = "idle" | "loading" | "first_run" | "progress" | "ready" | "unloaded" | "error";
+export type LlmStatusState =
+  | "idle"
+  | "loading"
+  | "first_run"
+  | "progress"
+  | "summarizing"
+  | "ready"
+  | "unloaded"
+  | "error";
 export const llmStatus = writable<{
   state: LlmStatusState;
   model_id: string | null;

@@ -115,14 +115,17 @@
         // Set started_at when transitioning into any active load state.
         const isActiveLoad = d.state === "loading"
           || d.state === "first_run"
-          || d.state === "progress";
+          || d.state === "progress"
+          || d.state === "summarizing";
         const wasActive = prev.state === "loading"
           || prev.state === "first_run"
-          || prev.state === "progress";
+          || prev.state === "progress"
+          || prev.state === "summarizing";
         const isLoadStart = isActiveLoad && !wasActive;
 
         // Preserve the high-level state across "progress" tick events so the
-        // UI keeps showing first-run vs loading framing.
+        // UI keeps showing first-run vs loading framing. "summarizing" is
+        // its own framing so it overrides previous active states cleanly.
         let nextState = d.state;
         if (d.state === "progress" && wasActive) {
           nextState = prev.state;
@@ -145,7 +148,7 @@
       if (d.state === "error" && d.message) {
         addAlert({
           level: "error",
-          message: `Local LLM failed to load: ${d.message}`,
+          message: `Local LLM error: ${d.message}`,
           actions: [{ label: "Open Models", handler: () => currentPage.set("models") }],
           dismissable: true,
         });

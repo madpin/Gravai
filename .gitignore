@@ -25,3 +25,4 @@ Thumbs.db
 # Logs
 *.log
 future-work.md
+.claude/settings.local.json

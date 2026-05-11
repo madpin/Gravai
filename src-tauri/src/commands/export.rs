@@ -13,6 +13,12 @@ fn load_export_data(session_id: &str) -> Result<gravai_export::ExportData, Strin
 
     let utterances = db.get_utterances(session_id).map_err(|e| e.to_string())?;
     let bookmarks = db.list_bookmarks(session_id).map_err(|e| e.to_string())?;
+    // Best-effort: a missing or unparsable summary just yields None, the
+    // markdown writer skips the section gracefully.
+    let summary = db
+        .get_session_summary(session_id)
+        .map_err(|e| e.to_string())?
+        .and_then(summary_record_to_export);
 
     Ok(gravai_export::ExportData {
         session_id: session.id,
@@ -27,7 +33,12 @@ fn load_export_data(session_id: &str) -> Result<gravai_export::ExportData, Strin
                 timestamp: u.timestamp.clone(),
                 source: u.source.clone(),
                 speaker: u.speaker.clone(),
-                text: u.text.clone(),
+                text: u
+                    .corrected_text
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(&u.text)
+                    .to_string(),
             })
             .collect(),
         bookmarks: bookmarks
@@ -37,7 +48,32 @@ fn load_export_data(session_id: &str) -> Result<gravai_export::ExportData, Strin
                 note: b.note.clone(),
             })
             .collect(),
-        summary: None, // Could load from DB if we stored summaries
+        summary,
+    })
+}
+
+/// Convert a stored `SummaryRecord` to the export shape. Stored arrays are
+/// serialized as JSON strings; missing or invalid JSON falls back to empty.
+fn summary_record_to_export(
+    rec: gravai_storage::SummaryRecord,
+) -> Option<gravai_export::ExportSummary> {
+    let tldr = rec.tldr.unwrap_or_default();
+    if tldr.trim().is_empty() {
+        return None;
+    }
+    let parse_str_arr = |s: Option<String>| -> Vec<String> {
+        s.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+            .unwrap_or_default()
+    };
+    let parse_val_arr = |s: Option<String>| -> Vec<serde_json::Value> {
+        s.and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+            .unwrap_or_default()
+    };
+    Some(gravai_export::ExportSummary {
+        tldr,
+        key_decisions: parse_str_arr(rec.key_decisions),
+        action_items: parse_val_arr(rec.action_items),
+        open_questions: parse_str_arr(rec.open_questions),
     })
 }
 

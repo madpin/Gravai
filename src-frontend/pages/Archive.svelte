@@ -4,6 +4,7 @@
   import TranscriptView from "../components/TranscriptView.svelte";
   import AudioPlayer from "../components/AudioPlayer.svelte";
   import Icon from "../components/Icon.svelte";
+  import LlmStatusBanner from "../components/LlmStatusBanner.svelte";
   import { pendingArchiveSessionId } from "../lib/store";
   import { get } from "svelte/store";
 
@@ -12,6 +13,8 @@
   let utterances = $state<any[]>([]);
   let summary = $state<any>(null);
   let summaryLoading = $state(false);
+  let summaryError = $state<string | null>(null);
+  let copiedMd = $state(false);
   let searchQuery = $state("");
   let searchMode = $state<"keyword" | "semantic" | "hybrid">("keyword");
   let searchResults = $state<any[] | null>(null);
@@ -59,6 +62,7 @@
   async function select(id: string) {
     selectedId = id;
     summary = null;
+    summaryError = null;
     searchResults = null;
     bookmarks = [];
     audioPath = null;
@@ -117,7 +121,12 @@
   async function summarize() {
     if (!selectedId) return;
     summaryLoading = true;
-    try { summary = await invoke("summarize_session", { sessionId: selectedId }); } catch (_) {}
+    summaryError = null;
+    try {
+      summary = await invoke("summarize_session", { sessionId: selectedId });
+    } catch (e: any) {
+      summaryError = typeof e === "string" ? e : (e?.message ?? "Summary failed");
+    }
     summaryLoading = false;
   }
 
@@ -142,6 +151,19 @@
       a.download = `${selectedId}.md`; a.click();
       exportMsg = "Markdown downloaded"; setTimeout(() => exportMsg = "", 3000);
     } catch (e) { exportMsg = `Error: ${e}`; }
+  }
+
+  async function copyMarkdown() {
+    if (!selectedId) return;
+    try {
+      const md: string = await invoke("export_markdown", { sessionId: selectedId });
+      await navigator.clipboard.writeText(md);
+      copiedMd = true;
+      setTimeout(() => { copiedMd = false; }, 1500);
+    } catch (e) {
+      exportMsg = `Copy failed: ${e}`;
+      setTimeout(() => exportMsg = "", 3000);
+    }
   }
 
   let searchTimeout: number;
@@ -261,6 +283,16 @@
     background: var(--bg-elevated); border-bottom: 1px solid var(--border-subtle);
   }
   .audio-status-warn { color: var(--warning); }
+  .archive-llm-status { padding: 4px 16px 0; }
+  .archive-llm-status:empty { display: none; padding: 0; }
+  .summary-error-card {
+    border-left: 3px solid var(--danger);
+    background: color-mix(in srgb, var(--danger) 5%, var(--bg-primary));
+  }
+  .summary-error-card .card-header { color: var(--danger); justify-content: space-between; }
+  .summary-error-body { padding: 8px 16px 12px; }
+  .summary-error-body p { margin: 0 0 6px; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+  .summary-error-hint { font-size: 11px; color: var(--text-tertiary); }
 </style>
 
 <div class="page-header"><h2>Archive</h2></div>
@@ -354,14 +386,25 @@
       {/if}
       <div class="archive-actions">
         <button class="btn btn-xs btn-accent" onclick={summarize} disabled={summaryLoading}>
-          {#if summaryLoading}Summarizing...{:else}<Icon name="file-text" size={13}/> Summarize{/if}
+          {#if summaryLoading}<Icon name="spinner" size={13}/> Generating...{:else}<Icon name="file-text" size={13}/> Generate Summary{/if}
         </button>
-        <button class="btn btn-xs btn-ghost" onclick={exportMd}><Icon name="file" size={13}/> Markdown</button>
+        <button class="btn btn-xs btn-ghost" onclick={copyMarkdown} title="Copy transcript as Markdown to clipboard">
+          <Icon name={copiedMd ? "check" : "clipboard"} size={13}/> {copiedMd ? "Copied" : "Copy Markdown"}
+        </button>
+        <button class="btn btn-xs btn-ghost" onclick={exportMd} title="Download transcript as Markdown file">
+          <Icon name="file" size={13}/> Markdown
+        </button>
         <select class="select select-compact" bind:value={exportFormat}>
           {#each exportFormats as f}<option value={f.id}>{f.label}</option>{/each}
         </select>
         <button class="btn btn-xs btn-ghost" onclick={exportAudio}><Icon name="speaker" size={13}/> Export Audio</button>
         {#if exportMsg}<span class="action-msg">{exportMsg}</span>{/if}
+      </div>
+
+      <!-- LLM loading progress: surfaces first-run download/quantize so the
+           Generate Summary button doesn't look stuck. -->
+      <div class="archive-llm-status">
+        <LlmStatusBanner />
       </div>
     {/if}
 
@@ -389,14 +432,37 @@
       </div>
     {/if}
 
+    {#if summaryError}
+      <div class="card summary-error-card">
+        <div class="card-header">
+          <Icon name="alert-triangle" size={13}/> Summary failed
+          <button class="btn btn-xs btn-ghost" onclick={() => summaryError = null} title="Dismiss" aria-label="Dismiss">
+            <Icon name="x-circle" size={12}/>
+          </button>
+        </div>
+        <div class="summary-error-body">
+          <p>{summaryError}</p>
+          <p class="summary-error-hint">
+            Check the LLM provider in Settings — for local models make sure the model is downloaded;
+            for API providers verify the base URL and API key.
+          </p>
+        </div>
+      </div>
+    {/if}
+
     {#if summary}
       <div class="card">
         <div class="card-header">Summary</div>
         <div class="summary-content">
-          <h4>TL;DR</h4><p>{summary.tldr}</p>
+          {#if summary.tldr}
+            <h4>TL;DR</h4><p>{summary.tldr}</p>
+          {/if}
           {#if summary.key_decisions?.length}<h4>Key Decisions</h4><ul>{#each summary.key_decisions as d}<li>{d}</li>{/each}</ul>{/if}
           {#if summary.action_items?.length}<h4>Action Items</h4><ul>{#each summary.action_items as a}<li>{a.description} {#if a.owner}<span class="action-owner">@{a.owner}</span>{/if}</li>{/each}</ul>{/if}
           {#if summary.open_questions?.length}<h4>Open Questions</h4><ul>{#each summary.open_questions as q}<li>{q}</li>{/each}</ul>{/if}
+          {#if !summary.tldr && !summary.key_decisions?.length && !summary.action_items?.length && !summary.open_questions?.length}
+            <p class="empty-state">The model returned an empty summary. Try regenerating, or switch to a larger model in Settings.</p>
+          {/if}
         </div>
       </div>
     {/if}

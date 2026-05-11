@@ -6,6 +6,31 @@ use tracing::{info, warn};
 use crate::llm_client::LlmClient;
 use crate::prompts;
 
+/// Approximate prompt-input budget for the transcript itself, in characters.
+///
+/// Most local GGUF/ISQ models we ship target an 8K-token context window;
+/// after the system prompt + JSON schema + ~1.5K tokens reserved for the
+/// summary output, that leaves around ~5–6K tokens for the transcript. At
+/// roughly 4 chars/token of spoken English we cap the transcript at ~22K
+/// chars and let `truncate_transcript` keep the head and tail (which is
+/// where most "intent" and "outcome" content sits in real meetings).
+///
+/// Going above this on small local models causes a quadratic blow-up in
+/// KV-cache prefill that turns a 30-second summary into a 5+ minute one,
+/// which is the timeout the user originally hit. Longer is fine on hosted
+/// API providers, but their costs/latency favor truncation too.
+const MAX_TRANSCRIPT_CHARS: usize = 22_000;
+
+/// When we truncate, this string is inserted between the kept head and tail
+/// so the model knows it is looking at an excerpt and shouldn't invent
+/// content for the missing middle.
+const TRUNCATION_MARKER: &str = "\n[…truncated for length…]\n";
+
+/// Default cap on summary completion tokens when the user-config value is
+/// pathologically low. Picks the larger of `config.max_tokens` and this so
+/// the JSON schema can always materialize fully.
+const MIN_SUMMARY_OUTPUT_TOKENS: u32 = 1_024;
+
 /// Structured meeting summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingSummary {
@@ -35,12 +60,16 @@ pub trait SummarizationProvider: Send + Sync {
 /// LLM-based summarization provider (local GGUF or OpenAI-compatible API).
 pub struct LlmSummarizationProvider {
     client: LlmClient,
+    /// Output token budget for the summary itself. Sourced from
+    /// `LlmConfig.max_tokens` and bounded below by [`MIN_SUMMARY_OUTPUT_TOKENS`].
+    max_output_tokens: u32,
 }
 
 impl LlmSummarizationProvider {
     pub async fn new(config: &gravai_config::LlmConfig) -> Result<Self, String> {
         Ok(Self {
             client: LlmClient::new(config).await?,
+            max_output_tokens: config.max_tokens.max(MIN_SUMMARY_OUTPUT_TOKENS),
         })
     }
 }
@@ -51,13 +80,24 @@ impl SummarizationProvider for LlmSummarizationProvider {
         transcript: &str,
         _prompt_template: Option<&str>,
     ) -> Result<MeetingSummary, gravai_core::GravaiError> {
+        let original_len = transcript.len();
+        let trimmed = truncate_transcript(transcript, MAX_TRANSCRIPT_CHARS);
+        if trimmed.len() < original_len {
+            warn!(
+                "Transcript truncated for summarization: {} -> {} chars (cap: {})",
+                original_len,
+                trimmed.len(),
+                MAX_TRANSCRIPT_CHARS
+            );
+        }
+
         let context = serde_json::json!({
-            "utterances": parse_transcript_lines(transcript),
+            "utterances": parse_transcript_lines(&trimmed),
         });
 
         let system_prompt = prompts::DEFAULT_SUMMARY_SYSTEM.to_string();
         let user_prompt = prompts::render_prompt(prompts::DEFAULT_SUMMARY_USER, &context)
-            .unwrap_or_else(|_| transcript.to_string());
+            .unwrap_or_else(|_| trimmed.to_string());
 
         let messages = vec![
             serde_json::json!({"role": "system", "content": system_prompt}),
@@ -65,23 +105,104 @@ impl SummarizationProvider for LlmSummarizationProvider {
         ];
 
         info!(
-            "Generating meeting summary ({} chars transcript)",
-            transcript.len()
+            "Generating meeting summary ({} chars transcript, max_tokens={})",
+            trimmed.len(),
+            self.max_output_tokens
         );
 
         let response = self
             .client
-            .chat(&messages, 1000, 0.3)
+            .chat(&messages, self.max_output_tokens, 0.3)
             .await
             .map_err(|e| gravai_core::GravaiError::Provider(format!("Summary LLM: {e}")))?;
 
-        // Try to parse JSON response
         parse_summary_response(&response)
     }
 
     fn name(&self) -> &str {
         "llm"
     }
+}
+
+/// Trim a transcript to at most `max_chars`, keeping the beginning and end
+/// (which is where introductions and conclusions live in most meetings) and
+/// inserting a clear marker in the middle. Splits on UTF-8 char boundaries
+/// and on newlines so we don't cut a sentence in half.
+pub(crate) fn truncate_transcript(transcript: &str, max_chars: usize) -> String {
+    if transcript.len() <= max_chars {
+        return transcript.to_string();
+    }
+
+    // Reserve some space for the marker; split the rest 60/40 head/tail.
+    let usable = max_chars.saturating_sub(TRUNCATION_MARKER.len());
+    let head_budget = (usable * 60) / 100;
+    let tail_budget = usable - head_budget;
+
+    let head = take_head_chars(transcript, head_budget);
+    let tail = take_tail_chars(transcript, tail_budget);
+
+    format!("{head}{TRUNCATION_MARKER}{tail}")
+}
+
+/// Take up to `n` characters from the start of `s`, preferring to end on a
+/// newline so we don't truncate mid-utterance.
+fn take_head_chars(s: &str, n: usize) -> &str {
+    if s.len() <= n {
+        return s;
+    }
+    let mut end = floor_char_boundary(s, n);
+    if let Some(nl) = s[..end].rfind('\n') {
+        // Prefer the last full line within the budget, but only if it leaves
+        // us with at least half of the budget (otherwise we'd throw away too
+        // much content for a marginal alignment win).
+        if nl >= n / 2 {
+            end = nl;
+        }
+    }
+    &s[..end]
+}
+
+/// Take up to `n` characters from the end of `s`, preferring to start on a
+/// newline so we don't begin mid-utterance.
+fn take_tail_chars(s: &str, n: usize) -> &str {
+    if s.len() <= n {
+        return s;
+    }
+    let target = s.len().saturating_sub(n);
+    let mut start = ceil_char_boundary(s, target);
+    if let Some(nl) = s[start..].find('\n') {
+        let candidate = start + nl + 1;
+        if candidate <= s.len() && (s.len() - candidate) >= n / 2 {
+            start = candidate;
+        }
+    }
+    &s[start..]
+}
+
+/// `str::floor_char_boundary` polyfill (still nightly-only on stable as of
+/// today). Returns the largest valid char boundary `<= idx`.
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// `str::ceil_char_boundary` polyfill. Returns the smallest valid char
+/// boundary `>= idx`.
+fn ceil_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut i = idx;
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 fn parse_summary_response(response: &str) -> Result<MeetingSummary, gravai_core::GravaiError> {
@@ -254,5 +375,37 @@ mod tests {
             r#"{"tldr":"a {fake} brace","key_decisions":[],"action_items":[],"open_questions":[]}"#;
         let s = parse_summary_response(r).unwrap();
         assert_eq!(s.tldr, "a {fake} brace");
+    }
+
+    #[test]
+    fn truncate_passes_through_short_input() {
+        let s = "short transcript";
+        assert_eq!(truncate_transcript(s, 1024), s);
+    }
+
+    #[test]
+    fn truncate_keeps_head_and_tail_with_marker() {
+        // Build a transcript that's clearly bigger than the cap.
+        let line = "[00:00:01] mic: hello there this is a sample line\n";
+        let big: String = line.repeat(2000);
+        let cap = 4_000;
+        let out = truncate_transcript(&big, cap);
+        assert!(out.len() <= cap + TRUNCATION_MARKER.len());
+        assert!(out.contains(TRUNCATION_MARKER.trim()));
+        // Head and tail both come from the original lines.
+        assert!(out.starts_with("[00:00:01] mic:"));
+        assert!(out.trim_end().ends_with("sample line"));
+    }
+
+    #[test]
+    fn truncate_respects_utf8_boundaries() {
+        // A multi-byte char near the truncation point shouldn't panic.
+        let head: String = "ééé\n".repeat(500);
+        let tail: String = "ààà\n".repeat(500);
+        let big = format!("{head}{tail}");
+        let out = truncate_transcript(&big, 1_500);
+        // Output is still valid UTF-8 (implicit by being a String) and
+        // contains the marker.
+        assert!(out.contains(TRUNCATION_MARKER.trim()));
     }
 }

@@ -16,6 +16,7 @@
   let vuMic = $state(0);
   let vuSys = $state(0);
   let summaryLoading = $state(false);
+  let summaryError = $state<string | null>(null);
   let sentimentData = $state<any>(null);
 
   // Device selection
@@ -163,11 +164,16 @@
     const sid = $lastSessionIdStore || $currentSessionId;
     if (!sid) { log("No session to summarize"); return; }
     summaryLoading = true;
+    summaryError = null;
     log("Generating summary...");
     try {
       liveSummary.set(await invoke("summarize_session", { sessionId: sid }));
       log("Summary generated");
-    } catch (e) { log(`Summary error: ${e}`); }
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : (e?.message ?? "Summary failed");
+      summaryError = msg;
+      log(`Summary error: ${msg}`);
+    }
     summaryLoading = false;
   }
 
@@ -558,10 +564,28 @@
             {#if summaryLoading}<Icon name="spinner" size={12}/> Generating...{:else}Generate Summary{/if}
           </button>
         </summary>
+        <LlmStatusBanner />
+        {#if summaryError}
+          <div class="summary-error">
+            <div class="summary-error-line">
+              <Icon name="alert-triangle" size={13}/>
+              <span class="summary-error-msg">Summary failed: {summaryError}</span>
+              <button class="btn btn-xs btn-ghost" onclick={() => summaryError = null} aria-label="Dismiss">
+                <Icon name="x-circle" size={12}/>
+              </button>
+            </div>
+            <div class="summary-error-hint">
+              Check the LLM provider in Settings — for local models make sure the model is downloaded;
+              for API providers verify the base URL and API key.
+            </div>
+          </div>
+        {/if}
         {#if $liveSummary}
           <div class="summary-content">
-            <h4>TL;DR</h4>
-            <p>{$liveSummary.tldr}</p>
+            {#if $liveSummary.tldr}
+              <h4>TL;DR</h4>
+              <p>{$liveSummary.tldr}</p>
+            {/if}
             {#if $liveSummary.key_decisions?.length}
               <h4>Key Decisions</h4>
               <ul>{#each $liveSummary.key_decisions as d}<li>{d}</li>{/each}</ul>
@@ -574,8 +598,11 @@
               <h4>Open Questions</h4>
               <ul>{#each $liveSummary.open_questions as q}<li>{q}</li>{/each}</ul>
             {/if}
+            {#if !$liveSummary.tldr && !$liveSummary.key_decisions?.length && !$liveSummary.action_items?.length && !$liveSummary.open_questions?.length}
+              <div class="empty-state">The model returned an empty summary. Try regenerating or switch to a larger model.</div>
+            {/if}
           </div>
-        {:else}
+        {:else if !summaryError}
           <div class="empty-state">Click "Generate Summary" to create a meeting brief.</div>
         {/if}
       </details>
@@ -700,6 +727,21 @@
     color: var(--accent);
   }
   .sentiment-count { font-size: 10px; color: var(--text-tertiary); margin-left: auto; }
+  .summary-error {
+    padding: 8px 14px 10px;
+    background: color-mix(in srgb, var(--danger) 6%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--danger) 25%, var(--border-subtle));
+  }
+  .summary-error-line {
+    display: flex; align-items: center; gap: 6px;
+    color: var(--danger);
+    font-size: 12px; font-weight: 500;
+  }
+  .summary-error-msg { flex: 1; }
+  .summary-error-hint {
+    font-size: 11px; color: var(--text-tertiary); line-height: 1.4;
+    margin-top: 4px; padding-left: 19px;
+  }
   .session-title-row {
     display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
   }

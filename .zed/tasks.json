@@ -1,0 +1,205 @@
+// Project-local Zed tasks for Gravai.
+// Run via the command palette → "task: spawn" (default ⌘⇧P) or `task::Spawn`.
+[
+  // ── Development ──────────────────────────────────────────────
+  {
+    "label": "dev",
+    "command": "make",
+    "args": ["dev"],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "tags": ["gravai", "dev"]
+  },
+  {
+    "label": "run-release",
+    "command": "make",
+    "args": ["run-release"],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "tags": ["gravai", "build"]
+  },
+
+  // ── Build ────────────────────────────────────────────────────
+  {
+    "label": "build",
+    "command": "make",
+    "args": ["build"],
+    "reveal": "always",
+    "tags": ["gravai", "build"]
+  },
+  {
+    "label": "build-release",
+    "command": "make",
+    "args": ["build-release"],
+    "reveal": "always",
+    "tags": ["gravai", "build"]
+  },
+  {
+    "label": "bundle",
+    "command": "make",
+    "args": ["bundle"],
+    "reveal": "always",
+    "tags": ["gravai", "build"]
+  },
+  {
+    "label": "bundle-app (signed, no DMG)",
+    "command": "make",
+    "args": ["bundle-app"],
+    "reveal": "always",
+    "tags": ["gravai", "build"]
+  },
+  {
+    "label": "sign",
+    "command": "make",
+    "args": ["sign"],
+    "reveal": "always",
+    "tags": ["gravai", "build"]
+  },
+
+  // ── Quality ──────────────────────────────────────────────────
+  {
+    "label": "check (pre-push)",
+    "command": "make",
+    "args": ["check"],
+    "reveal": "always",
+    "tags": ["gravai", "quality"]
+  },
+  {
+    "label": "check-verbose",
+    "command": "make",
+    "args": ["check-verbose"],
+    "reveal": "always",
+    "tags": ["gravai", "quality"]
+  },
+  {
+    "label": "lint",
+    "command": "make",
+    "args": ["lint"],
+    "reveal": "always",
+    "tags": ["gravai", "quality"]
+  },
+  {
+    "label": "fmt",
+    "command": "make",
+    "args": ["fmt"],
+    "reveal": "always",
+    "tags": ["gravai", "quality"]
+  },
+  {
+    "label": "typecheck",
+    "command": "make",
+    "args": ["typecheck"],
+    "reveal": "always",
+    "tags": ["gravai", "quality"]
+  },
+  {
+    "label": "clippy",
+    "command": "make",
+    "args": ["clippy"],
+    "reveal": "always",
+    "tags": ["gravai", "quality"]
+  },
+  {
+    "label": "clippy-fix",
+    "command": "make",
+    "args": ["clippy-fix"],
+    "reveal": "always",
+    "tags": ["gravai", "quality"]
+  },
+
+  // ── Tests ────────────────────────────────────────────────────
+  {
+    "label": "test (workspace)",
+    "command": "make",
+    "args": ["test"],
+    "reveal": "always",
+    "tags": ["gravai", "test"]
+  },
+  {
+    "label": "test symbol at cursor",
+    "command": "cargo",
+    "args": ["test", "--workspace", "--lib", "$ZED_SYMBOL"],
+    "reveal": "always",
+    "tags": ["rust-test"]
+  },
+
+  // ── Setup / Dependencies ─────────────────────────────────────
+  {
+    "label": "install",
+    "command": "make",
+    "args": ["install"],
+    "reveal": "always",
+    "tags": ["gravai", "setup"]
+  },
+  {
+    "label": "update-deps",
+    "command": "make",
+    "args": ["update-deps"],
+    "reveal": "always",
+    "tags": ["gravai", "setup"]
+  },
+  {
+    "label": "setup",
+    "command": "make",
+    "args": ["setup"],
+    "reveal": "always",
+    "tags": ["gravai", "setup"]
+  },
+
+  // ── Cleanup ──────────────────────────────────────────────────
+  {
+    "label": "clean (build artifacts)",
+    "command": "make",
+    "args": ["clean"],
+    "reveal": "always",
+    "tags": ["gravai", "clean"]
+  },
+  {
+    "label": "clean-data (~/.gravai)",
+    "command": "make",
+    "args": ["clean-data"],
+    "reveal": "always",
+    "tags": ["gravai", "clean"]
+  },
+  {
+    "label": "reset (clean + clean-data)",
+    "command": "make",
+    "args": ["reset"],
+    "reveal": "always",
+    "tags": ["gravai", "clean"]
+  },
+
+  // ── Versioning ───────────────────────────────────────────────
+  {
+    "label": "version (auto patch+1)",
+    "command": "make",
+    "args": ["version"],
+    "reveal": "always",
+    "tags": ["gravai", "release"]
+  },
+
+  // ── Utility ──────────────────────────────────────────────────
+  {
+    "label": "icons (regenerate)",
+    "command": "make",
+    "args": ["icons"],
+    "reveal": "always",
+    "tags": ["gravai", "util"]
+  },
+  {
+    "label": "stats",
+    "command": "make",
+    "args": ["stats"],
+    "reveal": "always",
+    "tags": ["gravai", "util"]
+  },
+  {
+    "label": "loc",
+    "command": "make",
+    "args": ["loc"],
+    "reveal": "always",
+    "tags": ["gravai", "util"]
+  }
+]

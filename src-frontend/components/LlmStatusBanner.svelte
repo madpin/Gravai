@@ -30,10 +30,12 @@
     $llmStatus.state === "loading"
     || $llmStatus.state === "first_run"
     || $llmStatus.state === "progress"
+    || $llmStatus.state === "summarizing"
     || $llmStatus.state === "error",
   );
 
   let isFirstRun = $derived($llmStatus.state === "first_run");
+  let isSummarizing = $derived($llmStatus.state === "summarizing");
   let isError = $derived($llmStatus.state === "error");
   let model = $derived($llmStatus.model_id ?? "local model");
 
@@ -79,6 +81,8 @@
           Local LLM error
         {:else if isFirstRun}
           Preparing local model: <code>{model}</code>
+        {:else if isSummarizing}
+          Summarizing with: <code>{model}</code>
         {:else}
           Loading local model: <code>{model}</code>
         {/if}

@@ -47,11 +47,12 @@
   let lastLog = $derived($activityLogs[$activityLogs.length - 1] || "");
   let warn = $derived(snap && (snap.cpu_pct > 60 || snap.memory_pct > 80));
 
-  // Local LLM status indicator — show only while loading or on error.
+  // Local LLM status indicator — show only while loading, summarizing, or on error.
   let llmBusy = $derived(
     $llmStatus.state === "loading"
     || $llmStatus.state === "first_run"
     || $llmStatus.state === "progress"
+    || $llmStatus.state === "summarizing"
     || $llmStatus.state === "error",
   );
   let llmPct = $derived(
@@ -117,6 +118,8 @@
         <Icon name={$llmStatus.state === "error" ? "alert-triangle" : "spinner"} size={11}/>
         {#if $llmStatus.state === "first_run"}
           Preparing {$llmStatus.model_id ?? "model"}
+        {:else if $llmStatus.state === "summarizing"}
+          Summarizing {$llmStatus.model_id ?? ""}
         {:else if $llmStatus.state === "error"}
           LLM error
         {:else}
