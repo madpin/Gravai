@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 /// A profile bundles multiple settings into a switchable context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Profile {
     pub id: String,
     pub name: String,
@@ -19,6 +20,8 @@ pub struct Profile {
     pub diarization_enabled: Option<bool>,
     pub sentiment_enabled: Option<bool>,
     pub echo_suppression_enabled: Option<bool>,
+    /// Per-utterance LLM transcript correction toggle.
+    pub correction_enabled: Option<bool>,
     /// LLM overrides
     pub llm_provider: Option<String>,
     pub llm_model: Option<String>,
@@ -41,6 +44,7 @@ impl Default for Profile {
             diarization_enabled: None,
             sentiment_enabled: None,
             echo_suppression_enabled: None,
+            correction_enabled: None,
             llm_provider: None,
             llm_model: None,
             llm_local_model: None,

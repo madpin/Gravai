@@ -92,6 +92,9 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             if let Some(enabled) = profile.echo_suppression_enabled {
                 config.features.echo_suppression.enabled = enabled;
             }
+            if let Some(enabled) = profile.correction_enabled {
+                config.correction.enabled = enabled;
+            }
             info!(
                 "Applied profile '{}' overrides (model: {})",
                 profile.name, config.transcription.model
