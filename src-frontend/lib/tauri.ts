@@ -1,4 +1,6 @@
 // Tauri API wrappers
+import { writeText as writeClipboardText } from "@tauri-apps/plugin-clipboard-manager";
+
 const tauriCore = (window as any).__TAURI__?.core;
 const tauriEvent = (window as any).__TAURI__?.event;
 
@@ -26,6 +28,31 @@ export function sourceIconName(source: string): string {
   if (source === "microphone" || source === "mic") return "microphone";
   if (source === "system_audio" || source === "system" || source === "sys") return "monitor";
   return "speaker";
+}
+
+// navigator.clipboard is blocked in Tauri's WebView (non-HTTPS context).
+// Fall back to the textarea+execCommand approach which works in any WebView.
+export async function copyToClipboard(text: string): Promise<void> {
+  try {
+    await writeClipboardText(text);
+    return;
+  } catch {}
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // fall through to execCommand fallback
+    }
+  }
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+  document.body.appendChild(el);
+  el.focus();
+  el.select();
+  if (!document.execCommand("copy")) throw new Error("execCommand copy failed");
+  document.body.removeChild(el);
 }
 
 export function fmtDuration(s: number): string {

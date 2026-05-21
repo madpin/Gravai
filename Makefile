@@ -1,7 +1,7 @@
 # Gravai — Audio Capture & AI Meeting Intelligence
 # ================================================
 
-.PHONY: help dev build run release clean check check-verbose test lint fmt typecheck install setup reset version --force force
+.PHONY: help dev build run release clean check check-verbose test lint fmt typecheck install setup reset version --force force deploy
 
 # Skip pre-flight `make check` when: FORCE=1, or extra goal `force` / `--force` (GNU Make: `make version --force`; Apple make: `make version force`)
 VERSION_SKIP_CHECK := $(if $(FORCE),1,$(filter --force force,$(MAKECMDGOALS)))
@@ -69,6 +69,9 @@ sign: ## Sign the built .app with cert-based requirements so TCC permissions per
 	else \
 		echo "❌ No .app found — run make bundle-app first"; \
 	fi
+
+deploy: ## Build, sign, and install Gravai.app into /Applications (then launch it). Override parallelism with JOBS=N. Logs to /tmp/gravai-deploy-*.log.
+	@JOBS=$(if $(JOBS),$(JOBS),4) ./scripts/deploy.sh
 
 # ── Quality ──────────────────────────────────────────────────
 
@@ -178,11 +181,13 @@ version: ## Bump version: make version V=1.2.3  (omit V → patch+1; skip check:
 	else \
 		echo "Bumping version to $(V)..."; \
 		perl -i -pe 's/^version = ".*"/version = "$(V)"/' Cargo.toml; \
+		perl -i -pe 's/"version": ".*"/"version": "$(V)"/' package.json; \
 		perl -i -pe 's/"version": ".*"/"version": "$(V)"/' src-tauri/tauri.conf.json; \
 		perl -i -pe 's/v\d+\.\d+\.\d+/v$(V)/g' src-frontend/components/StatusBar.svelte; \
 		cargo update --workspace --quiet; \
 		echo "✅ Version updated to $(V) in:"; \
 		echo "   Cargo.toml (workspace)"; \
+		echo "   package.json"; \
 		echo "   src-tauri/tauri.conf.json"; \
 		echo "   src-frontend/components/StatusBar.svelte"; \
 		echo "   Cargo.lock"; \

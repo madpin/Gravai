@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke, fmtDuration } from "../lib/tauri";
+  import { invoke, fmtDuration, copyToClipboard } from "../lib/tauri";
   import TranscriptView from "../components/TranscriptView.svelte";
   import AudioPlayer from "../components/AudioPlayer.svelte";
   import Icon from "../components/Icon.svelte";
@@ -157,7 +157,7 @@
     if (!selectedId) return;
     try {
       const md: string = await invoke("export_markdown", { sessionId: selectedId });
-      await navigator.clipboard.writeText(md);
+      await copyToClipboard(md);
       copiedMd = true;
       setTimeout(() => { copiedMd = false; }, 1500);
     } catch (e) {

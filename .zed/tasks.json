@@ -57,6 +57,15 @@
     "reveal": "always",
     "tags": ["gravai", "build"]
   },
+  {
+    "label": "deploy (install to /Applications)",
+    "command": "make",
+    "args": ["deploy"],
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "tags": ["gravai", "build"]
+  },
 
   // ── Quality ──────────────────────────────────────────────────
   {

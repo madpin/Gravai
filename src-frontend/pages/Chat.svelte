@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "../lib/tauri";
+  import { invoke, copyToClipboard } from "../lib/tauri";
   import { save } from "@tauri-apps/plugin-dialog";
   import Icon from "../components/Icon.svelte";
   import LlmStatusBanner from "../components/LlmStatusBanner.svelte";
@@ -107,7 +107,7 @@
   }
 
   async function copyMessage(content: string, idx: number) {
-    await navigator.clipboard.writeText(content);
+    await copyToClipboard(content);
     copyFeedback = idx;
     setTimeout(() => { copyFeedback = null; }, 1500);
   }
