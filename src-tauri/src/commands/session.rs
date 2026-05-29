@@ -1,6 +1,6 @@
 //! Session lifecycle commands: start, pause, resume, stop.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gravai_audio::capture::{AudioCaptureManager, AudioChunk, VolumeCallback};
@@ -18,6 +18,24 @@ static CAPTURE_STOP: std::sync::OnceLock<std::sync::Mutex<Option<Arc<AtomicBool>
 
 fn get_capture_stop() -> &'static std::sync::Mutex<Option<Arc<AtomicBool>>> {
     CAPTURE_STOP.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+// Process-wide shared database handle. Opening SQLite is expensive
+// (file lock, PRAGMA setup, migration check), and previously every
+// utterance insert / sentiment update / correction update opened a
+// fresh connection inside the audio pipeline's async task. We now
+// open once and share an Arc across all hot paths.
+static DB: std::sync::OnceLock<Arc<gravai_storage::Database>> = std::sync::OnceLock::new();
+
+fn shared_db() -> Result<Arc<gravai_storage::Database>, String> {
+    if let Some(db) = DB.get() {
+        return Ok(db.clone());
+    }
+    let path = gravai_config::data_dir().join("gravai.db");
+    let opened = gravai_storage::Database::open(&path).map_err(|e| e.to_string())?;
+    let arc = Arc::new(opened);
+    // If another thread initialized first, prefer the existing one.
+    Ok(DB.get_or_init(|| arc).clone())
 }
 
 /// Atomic guard that ensures only one `start_session` runs at a time.
@@ -141,8 +159,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
 
     // Store session in DB early — pipelines may insert utterances before this block was reached
     {
-        let db_path = gravai_config::data_dir().join("gravai.db");
-        if let Ok(db) = gravai_storage::Database::open(&db_path) {
+        if let Ok(db) = shared_db() {
             let record = gravai_storage::SessionRecord {
                 id: session_id.clone(),
                 started_at: session.started_at.to_rfc3339(),
@@ -182,8 +199,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             match &title {
                 Some(t) => {
                     info!("Calendar found: \"{t}\" ({:.1}s)", elapsed.as_secs_f64());
-                    let db_path = gravai_config::data_dir().join("gravai.db");
-                    if let Ok(db) = gravai_storage::Database::open(&db_path) {
+                    if let Ok(db) = shared_db() {
                         let _ = db.rename_session(&cal_sid, t);
                     }
                     cal_bus.publish(GravaiEvent::SessionStartProgress {
@@ -263,7 +279,25 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     let _capture_thread = std::thread::spawn(move || {
         let mut capture = AudioCaptureManager::new(capture_config);
 
+        // Throttle VolumeLevel publishes to 4 Hz per source. The underlying
+        // capture callback fires at 10 Hz per source; emitting all of those
+        // floods the Tauri IPC bridge (~48K events over a 40-minute session)
+        // and forces the frontend VU meter to re-layout 20x/sec. The silence
+        // detector in lib.rs uses these as a liveness signal with 10s/60s
+        // thresholds, so 4 Hz is still well above what it needs.
+        let last_publish: Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+            Arc::new(Mutex::new(std::collections::HashMap::new()));
         let volume_cb: VolumeCallback = Arc::new(move |source: &str, db: f64| {
+            const PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+            let now = std::time::Instant::now();
+            let mut map = last_publish.lock().unwrap();
+            if let Some(prev) = map.get(source) {
+                if now.duration_since(*prev) < PUBLISH_INTERVAL {
+                    return;
+                }
+            }
+            map.insert(source.to_string(), now);
+            drop(map);
             bus.publish(GravaiEvent::VolumeLevel {
                 source: source.to_string(),
                 db,
@@ -428,23 +462,53 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         } else {
             None
         };
-    let pending_correction_ids: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
-    let correction_generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-    let correction_batch_size = config.correction.batch_size;
-    let correction_debounce = config.correction.debounce_seconds;
+    // Spawn the correction actor (one task per session) that owns the pending
+    // batch and the debounce timer. The writer task (below) sends utterance
+    // ids into this channel — no per-utterance task spawn.
+    let correction_tx: Option<tokio::sync::mpsc::UnboundedSender<i64>> =
+        if let Some(provider) = correction_provider.as_ref() {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<i64>();
+            let provider = provider.clone();
+            let event_bus_actor = state.event_bus.clone();
+            let sid_actor = session_id.clone();
+            let batch_size = config.correction.batch_size;
+            let debounce = config.correction.debounce_seconds;
+            let timeout = config.correction.timeout_seconds;
+            let handle = tokio::spawn(run_correction_actor(
+                rx,
+                provider,
+                event_bus_actor,
+                sid_actor,
+                batch_size,
+                debounce,
+                timeout,
+            ));
+            session.add_task(handle).await;
+            Some(tx)
+        } else {
+            None
+        };
 
-    // Callback that writes utterances to DB and publishes events
-    let event_bus = state.event_bus.clone();
-    let sid = session_id.clone();
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let on_utterance: pipeline::OnUtterance = Arc::new(move |utterance| {
-        let timestamp = utterance.timestamp.to_rfc3339();
-
-        // Write to database
-        if let Ok(db) = gravai_storage::Database::open(&db_path) {
+    // Single per-session writer task: drains `utt_rx` serially and does the
+    // DB insert + sentiment + correction send. The on_utterance closure just
+    // calls `utt_tx.send(...)` and returns — so the pipeline's async worker
+    // is freed immediately AND insert order is deterministic (equal to send
+    // order, which equals the pipeline's emit order). Without this, two
+    // concurrent `tokio::spawn`s would race for the DB mutex and a later
+    // utterance could win a lower row id, displaying out of order on the
+    // frontend (which iterates by id).
+    let (utt_tx, mut utt_rx) =
+        tokio::sync::mpsc::unbounded_channel::<gravai_audio::pipeline::Utterance>();
+    let writer_event_bus = state.event_bus.clone();
+    let writer_sid = session_id.clone();
+    let writer_sentiment = sentiment_engine.clone();
+    let writer_correction_tx = correction_tx.clone();
+    let writer_handle = tokio::spawn(async move {
+        while let Some(utterance) = utt_rx.recv().await {
+            let timestamp = utterance.timestamp.to_rfc3339();
             let record = gravai_storage::UtteranceRecord {
                 id: 0,
-                session_id: sid.clone(),
+                session_id: writer_sid.clone(),
                 timestamp: timestamp.clone(),
                 source: utterance.source.clone(),
                 speaker: utterance.speaker.clone(),
@@ -460,110 +524,83 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 correction_provider: None,
                 corrected_at: None,
             };
-            match db.insert_utterance(&record) {
-                Ok(id) => {
-                    event_bus.publish(GravaiEvent::TranscriptUpdated {
-                        session_id: sid.clone(),
-                        utterance_id: id,
-                        source: utterance.source.clone(),
-                        speaker: utterance.speaker.clone(),
-                        text: utterance.text.clone(),
-                        timestamp,
-                    });
 
-                    // Run sentiment on system audio only (async, non-blocking)
-                    if let Some(engine) = sentiment_engine.as_ref().filter(|_| {
-                        utterance.source == "system_audio" || utterance.source == "system"
-                    }) {
-                        let engine = engine.clone();
-                        let text = utterance.text.clone();
-                        let db_path_clone = db_path.clone();
-                        tokio::spawn(async move {
-                            let result =
-                                tokio::task::spawn_blocking(move || engine.analyze(&text)).await;
-                            if let Ok(sentiment) = result {
-                                let emotions_json = sentiment
-                                    .emotions
-                                    .as_ref()
-                                    .and_then(|e| serde_json::to_string(e).ok());
-                                if let Ok(db) = gravai_storage::Database::open(&db_path_clone) {
-                                    let _ = db.update_utterance_sentiment(
-                                        id,
-                                        &sentiment.label,
-                                        sentiment.score,
-                                        emotions_json.as_deref(),
-                                    );
-                                }
-                            }
-                        });
-                    }
+            // SQLite calls are blocking syscalls — run on the blocking pool
+            // so this async worker doesn't hold a worker thread.
+            let insert_result = tokio::task::spawn_blocking(move || {
+                let db = shared_db().map_err(|e| format!("shared_db: {e}"))?;
+                db.insert_utterance(&record)
+                    .map_err(|e| format!("insert_utterance: {e}"))
+            })
+            .await;
 
-                    // Run LLM correction if enabled (async, debounced batch)
-                    if let Some(provider) = correction_provider.as_ref() {
-                        let gen = {
-                            let mut locked = pending_correction_ids.lock().unwrap();
-                            locked.push(id);
-                            correction_generation.fetch_add(1, Ordering::SeqCst) + 1
-                        };
-                        let should_trigger_now = {
-                            pending_correction_ids.lock().unwrap().len() >= correction_batch_size
-                        };
-
-                        if should_trigger_now {
-                            // Batch is full — trigger immediately
-                            let batch: Vec<i64> = {
-                                let mut locked = pending_correction_ids.lock().unwrap();
-                                locked.drain(..).collect()
-                            };
-                            let provider_clone = provider.clone();
-                            let db_path_clone = db_path.clone();
-                            let event_bus_clone = event_bus.clone();
-                            let sid_clone = sid.clone();
-                            tokio::spawn(async move {
-                                run_correction_task(
-                                    batch,
-                                    provider_clone,
-                                    db_path_clone,
-                                    event_bus_clone,
-                                    sid_clone,
-                                )
-                                .await;
-                            });
-                        } else {
-                            // Debounce: sleep, then fire if still the latest generation
-                            let debounce = correction_debounce;
-                            let pending_clone = pending_correction_ids.clone();
-                            let generation_clone = correction_generation.clone();
-                            let provider_clone = provider.clone();
-                            let db_path_clone = db_path.clone();
-                            let event_bus_clone = event_bus.clone();
-                            let sid_clone = sid.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_secs(debounce)).await;
-                                // Only proceed if no newer utterance has arrived
-                                if generation_clone.load(Ordering::SeqCst) == gen {
-                                    let batch: Vec<i64> = {
-                                        let mut locked = pending_clone.lock().unwrap();
-                                        locked.drain(..).collect()
-                                    };
-                                    if !batch.is_empty() {
-                                        run_correction_task(
-                                            batch,
-                                            provider_clone,
-                                            db_path_clone,
-                                            event_bus_clone,
-                                            sid_clone,
-                                        )
-                                        .await;
-                                    }
-                                }
-                            });
-                        }
-                    }
+            let id = match insert_result {
+                Ok(Ok(id)) => id,
+                Ok(Err(e)) => {
+                    error!("Insert utterance: {e}");
+                    continue;
                 }
-                Err(e) => error!("Insert utterance: {e}"),
+                Err(join_err) => {
+                    error!("Insert utterance task panicked: {join_err}");
+                    continue;
+                }
+            };
+
+            writer_event_bus.publish(GravaiEvent::TranscriptUpdated {
+                session_id: writer_sid.clone(),
+                utterance_id: id,
+                source: utterance.source.clone(),
+                speaker: utterance.speaker.clone(),
+                text: utterance.text.clone(),
+                timestamp,
+            });
+
+            // Sentiment on system audio only — fire-and-forget, uses shared DB.
+            if let Some(engine) = writer_sentiment
+                .as_ref()
+                .filter(|_| utterance.source == "system_audio" || utterance.source == "system")
+            {
+                let engine = engine.clone();
+                let text = utterance.text.clone();
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || engine.analyze(&text)).await;
+                    if let Ok(sentiment) = result {
+                        let emotions_json = sentiment
+                            .emotions
+                            .as_ref()
+                            .and_then(|e| serde_json::to_string(e).ok());
+                        let label = sentiment.label.clone();
+                        let score = sentiment.score;
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Ok(db) = shared_db() {
+                                let _ = db.update_utterance_sentiment(
+                                    id,
+                                    &label,
+                                    score,
+                                    emotions_json.as_deref(),
+                                );
+                            }
+                        })
+                        .await;
+                    }
+                });
+            }
+
+            // Hand the id to the correction actor; debouncing + batching
+            // happens there, so we never spawn per-utterance debounce tasks.
+            if let Some(tx) = &writer_correction_tx {
+                let _ = tx.send(id);
             }
         }
+    });
+    session.add_task(writer_handle).await;
+
+    // The pipeline calls this synchronously from a tokio worker (see
+    // crates/gravai-audio/src/pipeline.rs). All it does now is enqueue
+    // the utterance for the writer task — the pipeline worker returns
+    // immediately and never touches blocking I/O.
+    let on_utterance: pipeline::OnUtterance = Arc::new(move |utterance| {
+        let _ = utt_tx.send(utterance);
     });
 
     emit_progress("Starting transcription pipelines...");
@@ -621,8 +658,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                     .unwrap_or_else(|| gravai_config::data_dir().join("exports"));
                 let _ = std::fs::create_dir_all(&export_dir);
 
-                let db_path = gravai_config::data_dir().join("gravai.db");
-                if let Ok(db) = gravai_storage::Database::open(&db_path) {
+                if let Ok(db) = shared_db() {
                     if let Ok(utterances) = db.get_utterances(&save_sid) {
                         if !utterances.is_empty() {
                             let bookmarks = db.list_bookmarks(&save_sid).unwrap_or_default();
@@ -772,8 +808,7 @@ pub async fn stop_session(state: State<'_, Arc<AppState>>) -> Result<serde_json:
     }
 
     // Update session record in DB
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    if let Ok(db) = gravai_storage::Database::open(&db_path) {
+    if let Ok(db) = shared_db() {
         if let Err(e) = db.update_session_state(
             &session.id,
             "stopped",
@@ -804,8 +839,7 @@ pub async fn stop_session(state: State<'_, Arc<AppState>>) -> Result<serde_json:
 /// Get transcript for a session.
 #[tauri::command]
 pub async fn get_transcript(session_id: String) -> Result<serde_json::Value, String> {
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let db = shared_db()?;
     let utterances = db.get_utterances(&session_id).map_err(|e| e.to_string())?;
     serde_json::to_value(&utterances).map_err(|e| e.to_string())
 }
@@ -816,8 +850,7 @@ pub async fn get_transcript_since(
     session_id: String,
     after_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let db = shared_db()?;
     let utterances = db
         .get_utterances_since(&session_id, after_id)
         .map_err(|e| e.to_string())?;
@@ -827,8 +860,7 @@ pub async fn get_transcript_since(
 /// Search utterances across all sessions.
 #[tauri::command]
 pub async fn search_utterances(query: String) -> Result<serde_json::Value, String> {
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let db = shared_db()?;
     let results = db.search_utterances(&query).map_err(|e| e.to_string())?;
     serde_json::to_value(&results).map_err(|e| e.to_string())
 }
@@ -845,8 +877,7 @@ pub async fn rename_speaker_in_session(
     if new_speaker.is_empty() {
         return Err("Speaker name cannot be empty".into());
     }
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let db = shared_db()?;
     let count = db
         .rename_speaker_in_session(&session_id, &old_speaker, &new_speaker)
         .map_err(|e| e.to_string())?;
@@ -856,8 +887,7 @@ pub async fn rename_speaker_in_session(
 /// Return distinct speaker names from all sessions for autocomplete suggestions.
 #[tauri::command]
 pub async fn get_speaker_suggestions() -> Result<serde_json::Value, String> {
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let db = shared_db()?;
     let speakers = db.get_distinct_speakers().map_err(|e| e.to_string())?;
     serde_json::to_value(&speakers).map_err(|e| e.to_string())
 }
@@ -865,8 +895,7 @@ pub async fn get_speaker_suggestions() -> Result<serde_json::Value, String> {
 /// List all past sessions.
 #[tauri::command]
 pub async fn list_sessions() -> Result<serde_json::Value, String> {
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let db = shared_db()?;
     let sessions = db.list_sessions().map_err(|e| e.to_string())?;
     serde_json::to_value(&sessions).map_err(|e| e.to_string())
 }
@@ -882,41 +911,132 @@ pub async fn detect_meetings() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn rename_session(session_id: String, title: String) -> Result<(), String> {
     let title = title.trim().to_string();
-    let db_path = gravai_config::data_dir().join("gravai.db");
-    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    let db = shared_db()?;
     db.rename_session(&session_id, &title)
         .map_err(|e| e.to_string())
 }
 
+/// One-per-session actor that owns the correction batch + debounce timer.
+/// Receives utterance ids on an unbounded channel; fires a correction task
+/// when the batch fills OR when `debounce_secs` elapse with no new ids.
+/// Replaces the previous per-utterance `tokio::spawn(debounce)` storm.
+async fn run_correction_actor(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<i64>,
+    provider: Arc<gravai_intelligence::TranscriptCorrectionProvider>,
+    event_bus: gravai_core::EventBus,
+    session_id: String,
+    batch_size: usize,
+    debounce_secs: u64,
+    timeout_secs: u64,
+) {
+    let mut pending: Vec<i64> = Vec::new();
+    let debounce = std::time::Duration::from_secs(debounce_secs);
+
+    loop {
+        if pending.is_empty() {
+            // Idle — block on the next id (no timer running).
+            match rx.recv().await {
+                Some(id) => pending.push(id),
+                None => return,
+            }
+            if pending.len() >= batch_size {
+                let batch = std::mem::take(&mut pending);
+                spawn_correction(
+                    batch,
+                    provider.clone(),
+                    event_bus.clone(),
+                    session_id.clone(),
+                    timeout_secs,
+                );
+            }
+        } else {
+            // Have pending ids — race the next id against the debounce timer.
+            let sleep = tokio::time::sleep(debounce);
+            tokio::select! {
+                maybe_id = rx.recv() => {
+                    match maybe_id {
+                        Some(id) => {
+                            pending.push(id);
+                            if pending.len() >= batch_size {
+                                let batch = std::mem::take(&mut pending);
+                                spawn_correction(
+                                    batch,
+                                    provider.clone(),
+                                    event_bus.clone(),
+                                    session_id.clone(),
+                                    timeout_secs,
+                                );
+                            }
+                        }
+                        None => {
+                            // Sender dropped — flush and exit.
+                            let batch = std::mem::take(&mut pending);
+                            spawn_correction(
+                                batch,
+                                provider.clone(),
+                                event_bus.clone(),
+                                session_id.clone(),
+                                timeout_secs,
+                            );
+                            return;
+                        }
+                    }
+                }
+                _ = sleep => {
+                    let batch = std::mem::take(&mut pending);
+                    spawn_correction(
+                        batch,
+                        provider.clone(),
+                        event_bus.clone(),
+                        session_id.clone(),
+                        timeout_secs,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn spawn_correction(
+    batch: Vec<i64>,
+    provider: Arc<gravai_intelligence::TranscriptCorrectionProvider>,
+    event_bus: gravai_core::EventBus,
+    session_id: String,
+    timeout_secs: u64,
+) {
+    if batch.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        run_correction_task(batch, provider, event_bus, session_id, timeout_secs).await;
+    });
+}
+
 /// Async task that corrects a batch of utterances via LLM and updates the DB.
+/// Wraps `provider.correct(...)` in a timeout so a hung LLM never pins tasks.
 async fn run_correction_task(
     utterance_ids: Vec<i64>,
     provider: Arc<gravai_intelligence::TranscriptCorrectionProvider>,
-    db_path: std::path::PathBuf,
     event_bus: gravai_core::EventBus,
     session_id: String,
+    timeout_secs: u64,
 ) {
     use tracing::{info, warn};
 
-    // Mark utterances as pending
-    if let Ok(db) = gravai_storage::Database::open(&db_path) {
-        let _ = db.mark_utterances_correction_pending(&utterance_ids);
-    } else {
-        return;
-    }
-
-    // Load knowledge entries and utterance records
-    let (knowledge, utterances) = match gravai_storage::Database::open(&db_path) {
-        Ok(db) => {
-            let knowledge = db.list_knowledge_entries(true).unwrap_or_default();
-            let utterances = db.get_utterances_by_ids(&utterance_ids).unwrap_or_default();
-            (knowledge, utterances)
-        }
+    let db = match shared_db() {
+        Ok(db) => db,
         Err(e) => {
-            warn!("Correction: failed to open DB: {e}");
+            warn!("Correction: shared_db unavailable: {e}");
             return;
         }
     };
+
+    // Mark utterances as pending.
+    let _ = db.mark_utterances_correction_pending(&utterance_ids);
+
+    // Load knowledge entries and utterance records.
+    let knowledge = db.list_knowledge_entries(true).unwrap_or_default();
+    let utterances = db.get_utterances_by_ids(&utterance_ids).unwrap_or_default();
 
     if utterances.is_empty() {
         return;
@@ -928,15 +1048,12 @@ async fn run_correction_task(
         session_id
     );
 
-    match provider.correct(&utterances, &knowledge).await {
-        Ok(corrections) => {
-            let db = match gravai_storage::Database::open(&db_path) {
-                Ok(db) => db,
-                Err(e) => {
-                    warn!("Correction: failed to open DB for update: {e}");
-                    return;
-                }
-            };
+    let correct_fut = provider.correct(&utterances, &knowledge);
+    let timeout = std::time::Duration::from_secs(timeout_secs.max(1));
+    let result = tokio::time::timeout(timeout, correct_fut).await;
+
+    match result {
+        Ok(Ok(corrections)) => {
             // Resolve every utterance in the batch. Ids the LLM echoed back get
             // their corrected text; ids it omitted (very common with chatty
             // models like Gemma) are marked `done` with the original text so
@@ -962,14 +1079,20 @@ async fn run_correction_task(
                 });
             }
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!("Correction task failed: {e}");
-            // Mark as error without touching corrected_text — writing "" would make the
-            // frontend render blank text instead of the original ASR transcript.
-            if let Ok(db) = gravai_storage::Database::open(&db_path) {
-                for id in &utterance_ids {
-                    let _ = db.mark_utterance_correction_error(*id, &provider.provider_name);
-                }
+            for id in &utterance_ids {
+                let _ = db.mark_utterance_correction_error(*id, &provider.provider_name);
+            }
+        }
+        Err(_elapsed) => {
+            warn!(
+                "Correction task timed out after {}s on batch of {} utterances",
+                timeout.as_secs(),
+                utterance_ids.len()
+            );
+            for id in &utterance_ids {
+                let _ = db.mark_utterance_correction_error(*id, &provider.provider_name);
             }
         }
     }

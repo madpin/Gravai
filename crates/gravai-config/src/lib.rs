@@ -317,6 +317,11 @@ impl CorrectionConfig {
         if self.debounce_seconds < 5 {
             self.debounce_seconds = 8;
         }
+        // Configs saved before timeout_seconds existed default-deserialize to
+        // 0, which would time out instantly. Bump those to the new default.
+        if self.timeout_seconds == 0 {
+            self.timeout_seconds = 60;
+        }
     }
 }
 
@@ -455,6 +460,10 @@ pub struct CorrectionConfig {
     pub batch_size: usize,
     /// Seconds to wait after the last utterance before triggering correction (debounce trigger).
     pub debounce_seconds: u64,
+    /// Maximum seconds to wait for one LLM correction call before giving up.
+    /// Prevents a hung local model from piling up correction tasks in the
+    /// tokio runtime — which was the root cause of long-session freezes.
+    pub timeout_seconds: u64,
     /// Override LLM model for corrections (None = use llm.model).
     pub model: Option<String>,
     /// Custom system prompt for correction (None = use built-in default).
@@ -467,6 +476,7 @@ impl Default for CorrectionConfig {
             enabled: false,
             batch_size: 4,
             debounce_seconds: 8,
+            timeout_seconds: 60,
             model: None,
             custom_prompt: None,
         }

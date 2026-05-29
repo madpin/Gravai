@@ -2,6 +2,7 @@
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 
 use crate::migrations;
 
@@ -88,17 +89,32 @@ pub struct SummaryRecord {
 }
 
 /// Main database handle.
+///
+/// `Connection` is `Send` but not `Sync`, so we wrap it in an internal
+/// `Mutex` to make `Arc<Database>` shareable across threads. Locks are
+/// held only for the duration of each statement (or query iteration),
+/// which is short enough that contention is negligible for the access
+/// patterns in this app (≤ 1 write per utterance, infrequent reads).
 pub struct Database {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl Database {
     /// Open (or create) the database at the given path, running migrations.
     pub fn open(path: &std::path::Path) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA busy_timeout=5000;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA cache_size=-20000;",
+        )?;
         migrations::run_migrations(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Open an in-memory database (for testing).
@@ -106,13 +122,16 @@ impl Database {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         migrations::run_migrations(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     // -- Sessions --
 
     pub fn create_session(&self, session: &SessionRecord) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO sessions (id, started_at, ended_at, duration_seconds, title, meeting_app, state)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -135,7 +154,8 @@ impl Database {
         ended_at: Option<&str>,
         duration_seconds: Option<f64>,
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "UPDATE sessions SET state = ?1, ended_at = ?2, duration_seconds = ?3 WHERE id = ?4",
             params![state, ended_at, duration_seconds, session_id],
         )?;
@@ -143,7 +163,8 @@ impl Database {
     }
 
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, started_at, ended_at, duration_seconds, title, meeting_app, state
              FROM sessions WHERE id = ?1",
         )?;
@@ -166,7 +187,8 @@ impl Database {
     }
 
     pub fn list_sessions(&self) -> Result<Vec<SessionRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, started_at, ended_at, duration_seconds, title, meeting_app, state
              FROM sessions ORDER BY started_at DESC",
         )?;
@@ -185,15 +207,15 @@ impl Database {
     }
 
     pub fn delete_session(&self, session_id: &str) -> Result<bool, rusqlite::Error> {
-        let count = self
-            .conn
-            .execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
         Ok(count > 0)
     }
 
     /// Rename a session — sets the `title` column for the given session ID.
     pub fn rename_session(&self, session_id: &str, title: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "UPDATE sessions SET title = ?1 WHERE id = ?2",
             params![title, session_id],
         )?;
@@ -208,15 +230,17 @@ impl Database {
         offset_ms: i64,
         note: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO session_bookmarks (session_id, offset_ms, note) VALUES (?1, ?2, ?3)",
             params![session_id, offset_ms, note],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn list_bookmarks(&self, session_id: &str) -> Result<Vec<BookmarkRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, session_id, offset_ms, note, created_at
              FROM session_bookmarks WHERE session_id = ?1 ORDER BY offset_ms ASC",
         )?;
@@ -233,9 +257,8 @@ impl Database {
     }
 
     pub fn delete_bookmark(&self, id: i64) -> Result<bool, rusqlite::Error> {
-        let count = self
-            .conn
-            .execute("DELETE FROM session_bookmarks WHERE id = ?1", params![id])?;
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute("DELETE FROM session_bookmarks WHERE id = ?1", params![id])?;
         Ok(count > 0)
     }
 
@@ -253,11 +276,12 @@ impl Database {
         open_questions_json: Option<&str>,
         provider: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "DELETE FROM session_summaries WHERE session_id = ?1",
             params![session_id],
         )?;
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO session_summaries
                 (session_id, tldr, key_decisions, action_items, open_questions, provider)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -270,7 +294,7 @@ impl Database {
                 provider,
             ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     /// Fetch the latest summary for a session, if any.
@@ -278,7 +302,8 @@ impl Database {
         &self,
         session_id: &str,
     ) -> Result<Option<SummaryRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, session_id, tldr, key_decisions, action_items, open_questions, created_at, provider
              FROM session_summaries WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
         )?;
@@ -302,7 +327,8 @@ impl Database {
     // -- Utterances --
 
     pub fn insert_utterance(&self, u: &UtteranceRecord) -> Result<i64, rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO utterances (session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
@@ -316,14 +342,15 @@ impl Database {
                 u.end_ms,
             ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn get_utterances(
         &self,
         session_id: &str,
     ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
                     sentiment_label, sentiment_score, emotions_json,
                     corrected_text, correction_status, correction_provider, corrected_at
@@ -358,7 +385,8 @@ impl Database {
         session_id: &str,
         after_id: i64,
     ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
                     sentiment_label, sentiment_score, emotions_json,
                     corrected_text, correction_status, correction_provider, corrected_at
@@ -389,7 +417,8 @@ impl Database {
 
     /// Full-text search across all utterances.
     pub fn search_utterances(&self, query: &str) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT u.id, u.session_id, u.timestamp, u.source, u.speaker, u.text, u.confidence, u.start_ms, u.end_ms
              FROM utterances u
              JOIN utterances_fts fts ON u.id = fts.rowid
@@ -427,7 +456,8 @@ impl Database {
         provider: &str,
         status: &str,
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "UPDATE utterances SET corrected_text = ?1, correction_provider = ?2, \
              correction_status = ?3, corrected_at = datetime('now') WHERE id = ?4",
             params![corrected_text, provider, status, id],
@@ -442,7 +472,8 @@ impl Database {
         id: i64,
         provider: &str,
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "UPDATE utterances SET correction_status = 'error', correction_provider = ?1, \
              corrected_at = datetime('now') WHERE id = ?2",
             params![provider, id],
@@ -452,8 +483,9 @@ impl Database {
 
     /// Mark utterances as pending correction.
     pub fn mark_utterances_correction_pending(&self, ids: &[i64]) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
         for id in ids {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE utterances SET correction_status = 'pending' WHERE id = ?1",
                 params![id],
             )?;
@@ -488,7 +520,8 @@ impl Database {
              FROM utterances WHERE id IN ({}) ORDER BY id ASC",
             placeholders
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
         let params: Vec<&dyn rusqlite::types::ToSql> = ids
             .iter()
             .map(|id| id as &dyn rusqlite::types::ToSql)
@@ -524,7 +557,8 @@ impl Database {
         score: f64,
         emotions_json: Option<&str>,
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "UPDATE utterances SET sentiment_label = ?1, sentiment_score = ?2, emotions_json = ?3 WHERE id = ?4",
             params![label, score, emotions_json, id],
         )?;
@@ -536,7 +570,8 @@ impl Database {
         &self,
         session_id: &str,
     ) -> Result<Vec<UtteranceRecord>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, session_id, timestamp, source, speaker, text, confidence, start_ms, end_ms,
                     sentiment_label, sentiment_score, emotions_json,
                     corrected_text, correction_status, correction_provider, corrected_at
@@ -575,7 +610,8 @@ impl Database {
         old_speaker: &str,
         new_speaker: &str,
     ) -> Result<usize, rusqlite::Error> {
-        let count = self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute(
             "UPDATE utterances SET speaker = ?1 WHERE session_id = ?2 AND speaker = ?3",
             params![new_speaker, session_id, old_speaker],
         )?;
@@ -584,7 +620,8 @@ impl Database {
 
     /// Return all distinct non-null, non-empty speaker names across all sessions.
     pub fn get_distinct_speakers(&self) -> Result<Vec<String>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT DISTINCT speaker FROM utterances \
              WHERE speaker IS NOT NULL AND speaker != '' \
              ORDER BY speaker ASC",
@@ -602,7 +639,8 @@ impl Database {
         vector: &[f32],
     ) -> Result<(), rusqlite::Error> {
         let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO embeddings (utterance_id, session_id, vector, dimension) VALUES (?1, ?2, ?3, ?4)",
             params![utterance_id, session_id, blob, vector.len() as i32],
         )?;
@@ -617,7 +655,8 @@ impl Database {
     ) -> Result<Vec<(UtteranceRecord, f64)>, rusqlite::Error> {
         // Load all embeddings and compute cosine similarity in Rust
         // (SQLite doesn't have native vector operations)
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT e.utterance_id, e.vector, u.id, u.session_id, u.timestamp, u.source, u.speaker, u.text, u.confidence, u.start_ms, u.end_ms
              FROM embeddings e JOIN utterances u ON e.utterance_id = u.id",
         )?;
@@ -694,7 +733,8 @@ impl Database {
 
         let params: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(&sql)?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params.as_slice(), |row| {
             Ok(SessionRecord {
                 id: row.get(0)?,
@@ -717,7 +757,8 @@ impl Database {
         title: Option<&str>,
     ) -> Result<String, rusqlite::Error> {
         let id = uuid::Uuid::new_v4().to_string();
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO chat_conversations (id, title, session_id) VALUES (?1, ?2, ?3)",
             params![id, title, session_id],
         )?;
@@ -725,7 +766,8 @@ impl Database {
     }
 
     pub fn list_conversations(&self) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, title, session_id, created_at, updated_at \
              FROM chat_conversations ORDER BY updated_at DESC LIMIT 100",
         )?;
@@ -742,13 +784,14 @@ impl Database {
     }
 
     pub fn delete_conversation(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM chat_conversations WHERE id = ?1", params![id])?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM chat_conversations WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn rename_conversation(&self, id: &str, title: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "UPDATE chat_conversations SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
             params![title, id],
         )?;
@@ -765,24 +808,26 @@ impl Database {
         content: &str,
         citations: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO chat_messages (conversation_id, session_id, role, content, citations) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![conversation_id, session_id, role, content, citations],
         )?;
         if let Some(cid) = conversation_id {
-            let _ = self.conn.execute(
+            let _ = conn.execute(
                 "UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?1",
                 params![cid],
             );
         }
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     // -- Knowledge entries --
 
     pub fn insert_knowledge_entry(&self, entry: &KnowledgeEntry) -> Result<i64, rusqlite::Error> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT INTO knowledge_entries (category, name, aliases, context, active) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -793,11 +838,12 @@ impl Database {
                 entry.active as i64
             ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn update_knowledge_entry(&self, entry: &KnowledgeEntry) -> Result<bool, rusqlite::Error> {
-        let count = self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute(
             "UPDATE knowledge_entries SET category = ?1, name = ?2, aliases = ?3, \
              context = ?4, active = ?5, updated_at = datetime('now') WHERE id = ?6",
             params![
@@ -823,7 +869,8 @@ impl Database {
             "SELECT id, category, name, aliases, context, active, created_at, updated_at \
              FROM knowledge_entries ORDER BY category, name"
         };
-        let mut stmt = self.conn.prepare(sql)?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map([], |row| {
             Ok(KnowledgeEntry {
                 id: row.get(0)?,
@@ -840,9 +887,8 @@ impl Database {
     }
 
     pub fn delete_knowledge_entry(&self, id: i64) -> Result<bool, rusqlite::Error> {
-        let count = self
-            .conn
-            .execute("DELETE FROM knowledge_entries WHERE id = ?1", params![id])?;
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute("DELETE FROM knowledge_entries WHERE id = ?1", params![id])?;
         Ok(count > 0)
     }
 
@@ -873,7 +919,8 @@ impl Database {
                 )
             };
         let params: Vec<&dyn rusqlite::types::ToSql> = param.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(sql)?;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map(params.as_slice(), |row| {
             let citations_str: Option<String> = row.get(2)?;
             Ok(serde_json::json!({
@@ -1071,5 +1118,63 @@ mod tests {
         db.insert_bookmark("s4", 1000, Some("test")).unwrap();
         assert!(db.delete_session("s4").unwrap());
         assert!(db.list_bookmarks("s4").unwrap().is_empty());
+    }
+
+    #[test]
+    fn shared_arc_concurrent_inserts() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let db = Arc::new(Database::open_in_memory().unwrap());
+
+        db.create_session(&SessionRecord {
+            id: "sc".into(),
+            started_at: "2026-04-06T12:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            title: None,
+            meeting_app: None,
+            state: "recording".into(),
+        })
+        .unwrap();
+
+        let handles: Vec<_> = (0..4)
+            .map(|t| {
+                let db = db.clone();
+                thread::spawn(move || {
+                    for i in 0..25 {
+                        db.insert_utterance(&UtteranceRecord {
+                            id: 0,
+                            session_id: "sc".into(),
+                            timestamp: "2026-04-06T12:00:00Z".into(),
+                            source: "microphone".into(),
+                            speaker: None,
+                            text: format!("thread {t} chunk {i} concurrency check"),
+                            confidence: None,
+                            start_ms: None,
+                            end_ms: None,
+                            sentiment_label: None,
+                            sentiment_score: None,
+                            emotions_json: None,
+                            corrected_text: None,
+                            correction_status: None,
+                            correction_provider: None,
+                            corrected_at: None,
+                        })
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let all = db.get_utterances("sc").unwrap();
+        assert_eq!(all.len(), 100);
+
+        // FTS5 triggers still fire under the shared connection.
+        let hits = db.search_utterances("concurrency").unwrap();
+        assert_eq!(hits.len(), 100);
     }
 }
