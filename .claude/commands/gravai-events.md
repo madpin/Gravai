@@ -130,9 +130,11 @@ onDestroy(() => unlisten());
 
 ## Silence Monitor
 A secondary consumer of `VolumeLevel` events in `lib.rs`:
-- Records `last_audio_time` on every `VolumeLevel` event
+- Tracks per-source `last_audio_time` / `has_been_active` on every `VolumeLevel` event (audio counts when `db > -50.0`)
 - Background task runs every 2s during `Recording` state
-- If `now - last_audio_time > 10s` → emits `"gravai:silence-warning"` to frontend
+- When **both** mic and system audio have been active and are now silent for 30s → emits `"gravai:silence-countdown"` `{ active: true }` (armed once until audio resumes)
+- When audio resumes on either source → emits `"gravai:silence-countdown"` `{ active: false }`
+- Frontend runs a 60s cancellable countdown and auto-stops the session if it elapses
 
 ## Automation Trigger
 `MeetingDetected` events are also handled synchronously in the bridge to evaluate automations:

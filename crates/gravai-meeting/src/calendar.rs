@@ -41,6 +41,81 @@ pub fn get_current_events(_lead_time_seconds: u32) -> Vec<CalendarEvent> {
     Vec::new()
 }
 
+// ── Authorization ───────────────────────────────────────────────────────────
+
+/// The current macOS calendar authorization status, as a stable lowercase token.
+///
+/// One of: `not_determined`, `restricted`, `denied`, `full_access`, `write_only`,
+/// `unknown`. On non-macOS builds always returns `unsupported`.
+#[cfg(target_os = "macos")]
+pub fn authorization_status() -> String {
+    use objc2_event_kit::{EKEntityType, EKEventStore};
+    let status = unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) };
+    // EKAuthorizationStatus is a newtype over NSInteger, not a Rust enum.
+    match status.0 {
+        0 => "not_determined",
+        1 => "restricted",
+        2 => "denied",
+        3 => "full_access",
+        4 => "write_only",
+        _ => "unknown",
+    }
+    .to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn authorization_status() -> String {
+    "unsupported".to_string()
+}
+
+/// Prompt the user for calendar access via EventKit and return the resulting
+/// [`authorization_status`].
+///
+/// This only shows the native permission dialog when the status is
+/// `not_determined`. Once the user has explicitly denied access, macOS will not
+/// prompt again — the caller must send the user to System Settings in that case.
+///
+/// Blocks the calling thread until the user responds (or a 2-minute timeout), so
+/// it must be run on a blocking task, never the async runtime.
+#[cfg(target_os = "macos")]
+pub fn request_access() -> Result<String, String> {
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2::AllocAnyThread;
+    use objc2_event_kit::{EKEntityType, EKEventStore};
+    use objc2_foundation::NSError;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (tx, rx) = mpsc::channel::<bool>();
+
+    unsafe {
+        let store = EKEventStore::init(EKEventStore::alloc());
+        // The completion handler fires on an arbitrary background queue.
+        let handler = RcBlock::new(move |granted: Bool, _err: *mut NSError| {
+            let _ = tx.send(granted.as_bool());
+        });
+        // `requestAccessToEntityType:completion:` is deprecated in macOS 14 in
+        // favour of `requestFullAccessToEventsWithCompletion:`, but the latter is
+        // macOS 14+ only and this app targets macOS 13. The deprecated call still
+        // works on 13/14/15 and presents the same prompt.
+        #[allow(deprecated)]
+        store.requestAccessToEntityType_completion(EKEntityType::Event, RcBlock::as_ptr(&handler));
+
+        match rx.recv_timeout(Duration::from_secs(120)) {
+            Ok(granted) => info!("Calendar access request resolved: granted={granted}"),
+            Err(_) => return Err("Timed out waiting for calendar permission response".to_string()),
+        }
+    }
+
+    Ok(authorization_status())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_access() -> Result<String, String> {
+    Ok("unsupported".to_string())
+}
+
 // ── EventKit (native, fast) ─────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]

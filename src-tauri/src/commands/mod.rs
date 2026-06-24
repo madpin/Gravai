@@ -137,6 +137,28 @@ pub async fn open_privacy_settings(permission: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Current macOS calendar authorization status.
+///
+/// Returns one of: `not_determined`, `restricted`, `denied`, `full_access`,
+/// `write_only`, `unknown` (or `unsupported` off macOS).
+#[tauri::command]
+pub async fn get_calendar_authorization() -> Result<String, String> {
+    Ok(gravai_meeting::calendar::authorization_status())
+}
+
+/// Re-request calendar access from macOS.
+///
+/// Shows the native permission prompt only when access has never been decided
+/// (`not_determined`). If the user previously denied access, macOS won't prompt
+/// again — the frontend should fall back to opening System Settings. Returns the
+/// resulting authorization status.
+#[tauri::command]
+pub async fn request_calendar_access() -> Result<String, String> {
+    tokio::task::spawn_blocking(gravai_meeting::calendar::request_access)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Return the current app version from Cargo.toml (compiled in).
 #[tauri::command]
 pub async fn get_app_version() -> String {

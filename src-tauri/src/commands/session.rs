@@ -283,8 +283,8 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         // capture callback fires at 10 Hz per source; emitting all of those
         // floods the Tauri IPC bridge (~48K events over a 40-minute session)
         // and forces the frontend VU meter to re-layout 20x/sec. The silence
-        // detector in lib.rs uses these as a liveness signal with 10s/60s
-        // thresholds, so 4 Hz is still well above what it needs.
+        // detector in lib.rs uses these as a liveness signal (10 s global,
+        // 60 s when both mic and system are silent), so 4 Hz is plenty.
         let last_publish: Arc<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
             Arc::new(Mutex::new(std::collections::HashMap::new()));
         let volume_cb: VolumeCallback = Arc::new(move |source: &str, db: f64| {

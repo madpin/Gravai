@@ -24,6 +24,7 @@
     if (typeof trigger === "string") {
       const map: Record<string, string> = {
         meeting_detected: "Any meeting app detected",
+        audio_silent: "Mic & system audio go silent",
         session_started: "Session started",
         session_ended: "Session ended",
         calendar_event_starting: "Calendar event starting",

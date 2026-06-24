@@ -241,24 +241,6 @@
     });
     unlisteners.push(ut);
 
-    // Silence alerts come in two flavours:
-    // - scope: "all" — global silence (no audio anywhere); fires after 10 s.
-    // - scope: "source" — a specific source went silent while another keeps
-    //   producing audio (common: mic active but selected SCK app stopped
-    //   emitting). Fires after 60 s of silence on that source. We log it and
-    //   surface it loudly because the user otherwise has no visible cue.
-    const us = await listen("gravai:silence-alert", (e: any) => {
-      const d = e.payload;
-      const message = d?.message || "No audio detected for 10+ seconds";
-      log(`⚠️ ${message}`);
-      addAlert({
-        level: "warning",
-        message,
-        dismissable: true,
-      });
-    });
-    unlisteners.push(us);
-
     const ue = await listen("gravai:error", (e: any) => {
       const d = e.payload;
       const msg = d?.message || "Unknown error";
@@ -272,7 +254,7 @@
           actions: [{ label: "Go to Models", handler: () => currentPage.set("models") }],
           dismissable: true,
         });
-      } else if (msg.includes("closed") || msg.includes("Recording continues")) {
+      } else if (msg.includes("closed")) {
         addAlert({
           level: "warning",
           message: msg,

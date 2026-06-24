@@ -17,6 +17,9 @@ pub enum AutomationTrigger {
     MeetingAppEnded {
         app_name: String,
     },
+    /// Microphone and system audio have both been silent for a while.
+    /// Evaluated by the silence monitor in `lib.rs`, not the standard engine.
+    AudioSilent,
     SessionStarted,
     SessionEnded,
     CalendarEventStarting,
@@ -102,10 +105,20 @@ pub fn builtin_automations() -> Vec<Automation> {
         Automation {
             id: "zoom-auto-stop".into(),
             name: "Stop recording when Zoom meeting ends".into(),
-            enabled: false,
+            enabled: true,
             trigger: AutomationTrigger::MeetingAppEnded {
                 app_name: "Zoom".into(),
             },
+            conditions: vec![AutomationCondition::ActiveSession],
+            actions: vec![AutomationAction::StopRecording],
+            last_run: None,
+            run_count: 0,
+        },
+        Automation {
+            id: "silence-auto-stop".into(),
+            name: "Stop recording when mic and system audio go silent".into(),
+            enabled: true,
+            trigger: AutomationTrigger::AudioSilent,
             conditions: vec![AutomationCondition::ActiveSession],
             actions: vec![AutomationAction::StopRecording],
             last_run: None,
@@ -126,10 +139,17 @@ pub fn builtin_automations() -> Vec<Automation> {
     ]
 }
 
+/// Bumped when a builtin's default `enabled` state changes, so existing
+/// stores get the new defaults applied exactly once (see `load`).
+const CURRENT_DEFAULTS_VERSION: u32 = 1;
+
 /// Automation store.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AutomationStore {
     pub automations: HashMap<String, Automation>,
+    /// Tracks which round of default-enabled migrations has been applied.
+    #[serde(default)]
+    pub defaults_version: u32,
 }
 
 impl AutomationStore {
@@ -148,6 +168,14 @@ impl AutomationStore {
         // (handles the case where new builtins are added after first run).
         for a in builtin_automations() {
             store.automations.entry(a.id.clone()).or_insert(a);
+        }
+        // One-time migration: `or_insert` never overwrites an existing entry, so
+        // builtins that shipped disabled and later became default-on won't flip
+        // for current users. Force-enable them exactly once (guarded by
+        // `defaults_version`) so a user who deliberately disables them afterwards
+        // is respected.
+        if store.apply_default_migrations() {
+            let _ = store.save();
         }
         store
     }
@@ -216,5 +244,71 @@ impl AutomationStore {
             a.last_run = Some(chrono::Utc::now().to_rfc3339());
             a.run_count += 1;
         }
+    }
+
+    /// Apply the one-time default-enabled migration to an in-memory store.
+    /// Returns true if anything changed (caller decides whether to persist).
+    /// Extracted from `load` so it can be unit-tested without disk I/O.
+    fn apply_default_migrations(&mut self) -> bool {
+        if self.defaults_version >= CURRENT_DEFAULTS_VERSION {
+            return false;
+        }
+        for id in ["zoom-auto-stop", "silence-auto-stop"] {
+            self.set_enabled(id, true);
+        }
+        self.defaults_version = CURRENT_DEFAULTS_VERSION;
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_stop_builtins_default_on() {
+        let builtins = builtin_automations();
+        for id in ["zoom-auto-stop", "silence-auto-stop"] {
+            let a = builtins
+                .iter()
+                .find(|a| a.id == id)
+                .expect("builtin exists");
+            assert!(a.enabled, "{id} should ship default-on");
+        }
+    }
+
+    #[test]
+    fn silence_builtin_uses_audio_silent_trigger() {
+        let a = builtin_automations()
+            .into_iter()
+            .find(|a| a.id == "silence-auto-stop")
+            .unwrap();
+        assert_eq!(a.trigger, AutomationTrigger::AudioSilent);
+        assert!(matches!(
+            a.actions.as_slice(),
+            [AutomationAction::StopRecording]
+        ));
+    }
+
+    #[test]
+    fn migration_force_enables_legacy_disabled_auto_stop_once() {
+        // Simulate an existing store where zoom-auto-stop was left disabled and
+        // the new field is absent (defaults_version = 0).
+        let mut store = AutomationStore::default();
+        for a in builtin_automations() {
+            store.automations.entry(a.id.clone()).or_insert(a);
+        }
+        store.set_enabled("zoom-auto-stop", false);
+        store.defaults_version = 0;
+
+        assert!(store.apply_default_migrations());
+        assert!(store.automations["zoom-auto-stop"].enabled);
+        assert!(store.automations["silence-auto-stop"].enabled);
+        assert_eq!(store.defaults_version, CURRENT_DEFAULTS_VERSION);
+
+        // Migration is one-time: a later user-disable is respected.
+        store.set_enabled("zoom-auto-stop", false);
+        assert!(!store.apply_default_migrations());
+        assert!(!store.automations["zoom-auto-stop"].enabled);
     }
 }

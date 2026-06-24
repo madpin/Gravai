@@ -43,6 +43,9 @@ fn make_tray_icon() -> tauri::image::Image<'static> {
 /// `currently_recording` is the live recording state at the time of the call.
 fn run_automation_actions(
     handle: &tauri::AppHandle,
+    // Short noun-phrase shown in the auto-stop countdown banner (e.g.
+    // "Zoom meeting ended"). Only used by the `StopRecording` action.
+    reason: &str,
     actions: &[gravai_config::automations::AutomationAction],
     currently_recording: bool,
 ) {
@@ -57,8 +60,13 @@ fn run_automation_actions(
             }
             AutomationAction::StopRecording => {
                 if currently_recording {
-                    tracing::info!("Automation: stopping recording");
-                    let _ = handle.emit("gravai:stop-session", ());
+                    // Don't stop immediately — start a cancellable countdown so
+                    // the user can intervene before the recording ends.
+                    tracing::info!("Automation: arming auto-stop countdown");
+                    let _ = handle.emit(
+                        "gravai:auto-stop-countdown",
+                        serde_json::json!({ "reason": reason }),
+                    );
                 }
             }
             AutomationAction::ShowNotification { message } => {
@@ -312,35 +320,51 @@ pub fn run() {
 
             // ── Silence monitoring ──────────────────────────────────────
             //
-            // We track silence both globally (no audio on any source) AND
-            // per-source. The per-source check is essential because a
-            // common failure mode is: mic keeps producing audio while the
-            // selected SCK app stops emitting (paused video, ended call,
-            // etc.) and SCK silently delivers zero buffers. Without
-            // per-source tracking the global silence detector never fires
-            // and the user has no idea their system audio is gone.
-            //
-            // - Global: 10 s threshold, fires once until any audio resumes.
-            // - Per-source: 60 s threshold, only fires for sources that
-            //   have actually been active before going silent (so a user
-            //   recording dictation only doesn't get nagged about
-            //   never-active system audio).
+            // When *both* microphone and system audio have been active and
+            // are now silent for 30 s, we emit a `gravai:silence-countdown`
+            // start signal. The frontend then runs a 60 s cancellable
+            // countdown and auto-stops the recording if it elapses. As soon
+            // as audio resumes on either source we emit a cancel signal.
+            // A muted mic alone does not arm the countdown while system audio
+            // is still present (both sources must have been active first).
             #[derive(Default)]
             struct SourceSilenceState {
                 last_audio_time: Option<std::time::Instant>,
                 has_been_active: bool,
-                alerted: bool,
+            }
+
+            const COMBINED_SILENCE_SOURCES: [&str; 2] = ["microphone", "system_audio"];
+
+            fn combined_silence_elapsed(
+                map: &std::collections::HashMap<String, SourceSilenceState>,
+                threshold_secs: u64,
+            ) -> Option<u64> {
+                let mut min_elapsed: Option<u64> = None;
+                for source in COMBINED_SILENCE_SOURCES {
+                    let state = map.get(source)?;
+                    if !state.has_been_active {
+                        return None;
+                    }
+                    let t = state.last_audio_time?;
+                    let elapsed = t.elapsed().as_secs();
+                    if elapsed < threshold_secs {
+                        return None;
+                    }
+                    min_elapsed = Some(min_elapsed.map_or(elapsed, |m| m.min(elapsed)));
+                }
+                min_elapsed
             }
 
             let is_recording = Arc::new(AtomicBool::new(false));
-            let global_last_audio = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
-            let global_alerted = Arc::new(AtomicBool::new(false));
+            // Set true once the 30 s combined-silence countdown is armed; reset
+            // when audio resumes (or the session restarts). Prevents re-arming
+            // until audio is heard again, so the user is never nagged twice.
+            let countdown_active = Arc::new(AtomicBool::new(false));
             let per_source: Arc<std::sync::Mutex<std::collections::HashMap<String, SourceSilenceState>>> =
                 Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
             let is_recording_silence = is_recording.clone();
-            let global_last_audio_for_task = global_last_audio.clone();
-            let global_alerted_for_task = global_alerted.clone();
+            let countdown_active_for_task = countdown_active.clone();
             let per_source_for_task = per_source.clone();
             let handle_for_silence = handle.clone();
 
@@ -353,85 +377,47 @@ pub fn run() {
                         continue;
                     }
 
-                    // Global silence (any audio at all from any source)
-                    let global_elapsed = global_last_audio_for_task
-                        .lock()
-                        .unwrap()
-                        .elapsed()
-                        .as_secs();
-                    if global_elapsed >= 10 && !global_alerted_for_task.load(Ordering::Relaxed) {
-                        global_alerted_for_task.store(true, Ordering::Relaxed);
-                        let _ = handle_for_silence.emit(
-                            "gravai:silence-alert",
-                            serde_json::json!({
-                                "scope": "all",
-                                "source": null,
-                                "message": "No audio detected on mic or system for 10+ seconds",
-                                "elapsed": global_elapsed,
-                            }),
-                        );
-                        #[cfg(target_os = "macos")]
-                        {
-                            use tauri_plugin_notification::NotificationExt;
-                            let _ = handle_for_silence
-                                .notification()
-                                .builder()
-                                .title("Gravai — Silence Detected")
-                                .body(
-                                    "No audio detected for 10+ seconds. \
-                                     Check your microphone and system audio.",
+                    // Combined silence: mic and system both active before, both
+                    // silent for 30+ s. Arm the cancellable auto-stop countdown,
+                    // but only if the "silence auto-stop" automation is enabled.
+                    if !countdown_active_for_task.load(Ordering::Relaxed) {
+                        let map = per_source_for_task.lock().unwrap();
+                        if let Some(elapsed) = combined_silence_elapsed(&map, 30) {
+                            drop(map);
+                            // Gate on the automation toggle. When enabled this
+                            // loads once per arming (we set `countdown_active`
+                            // below and stop re-entering); when disabled it
+                            // re-reads each tick during sustained silence — the
+                            // rare non-default case, so acceptable.
+                            let enabled = !gravai_config::automations::AutomationStore::load()
+                                .find_by_trigger(
+                                    &gravai_config::automations::AutomationTrigger::AudioSilent,
                                 )
-                                .show();
-                        }
-                    }
-
-                    // Per-source silence (one source dropped while another keeps going)
-                    let mut alerts: Vec<(String, u64)> = Vec::new();
-                    {
-                        let mut map = per_source_for_task.lock().unwrap();
-                        for (source, state) in map.iter_mut() {
-                            if !state.has_been_active || state.alerted {
+                                .is_empty();
+                            if !enabled {
                                 continue;
                             }
-                            let Some(t) = state.last_audio_time else { continue };
-                            let elapsed = t.elapsed().as_secs();
-                            if elapsed >= 60 {
-                                state.alerted = true;
-                                alerts.push((source.clone(), elapsed));
+                            countdown_active_for_task.store(true, Ordering::Relaxed);
+                            let _ = handle_for_silence.emit(
+                                "gravai:silence-countdown",
+                                serde_json::json!({
+                                    "active": true,
+                                    "elapsed": elapsed,
+                                }),
+                            );
+                            #[cfg(target_os = "macos")]
+                            {
+                                use tauri_plugin_notification::NotificationExt;
+                                let _ = handle_for_silence
+                                    .notification()
+                                    .builder()
+                                    .title("Gravai — Mic and system silent")
+                                    .body(
+                                        "No audio for 30s. Recording will auto-stop \
+                                         in 1 minute unless audio resumes.",
+                                    )
+                                    .show();
                             }
-                        }
-                    }
-                    for (source, elapsed) in alerts {
-                        let pretty = match source.as_str() {
-                            "microphone" => "Microphone",
-                            "system_audio" => "System audio",
-                            other => other,
-                        };
-                        let hint = if source == "system_audio" {
-                            " — the selected app may have stopped playing audio. Recording continues; pick a different app or switch to All Apps if needed."
-                        } else {
-                            " — check your microphone or input device. Recording continues."
-                        };
-                        let message =
-                            format!("{pretty} went silent for {elapsed}s{hint}");
-                        let _ = handle_for_silence.emit(
-                            "gravai:silence-alert",
-                            serde_json::json!({
-                                "scope": "source",
-                                "source": source,
-                                "message": message,
-                                "elapsed": elapsed,
-                            }),
-                        );
-                        #[cfg(target_os = "macos")]
-                        {
-                            use tauri_plugin_notification::NotificationExt;
-                            let _ = handle_for_silence
-                                .notification()
-                                .builder()
-                                .title(format!("Gravai — {pretty} silent"))
-                                .body(message.clone())
-                                .show();
                         }
                     }
                 }
@@ -452,9 +438,6 @@ pub fn run() {
                                     // the captured app stops playing.
                                     if *db > -50.0 {
                                         let now = std::time::Instant::now();
-                                        // Global silence reset
-                                        *global_last_audio.lock().unwrap() = now;
-                                        global_alerted.store(false, Ordering::Relaxed);
                                         // Per-source silence reset
                                         let mut map = per_source.lock().unwrap();
                                         let entry = map
@@ -462,7 +445,15 @@ pub fn run() {
                                             .or_default();
                                         entry.last_audio_time = Some(now);
                                         entry.has_been_active = true;
-                                        entry.alerted = false;
+                                        drop(map);
+                                        // Audio resumed — disarm the auto-stop
+                                        // countdown if it was running.
+                                        if countdown_active.swap(false, Ordering::Relaxed) {
+                                            let _ = handle.emit(
+                                                "gravai:silence-countdown",
+                                                serde_json::json!({ "active": false }),
+                                            );
+                                        }
                                     } else {
                                         // Even silent samples count as "the
                                         // source exists" — we just don't
@@ -489,9 +480,7 @@ pub fn run() {
                                         // Reset all silence trackers at session
                                         // start so previous-session state never
                                         // leaks into the new one.
-                                        let now = std::time::Instant::now();
-                                        *global_last_audio.lock().unwrap() = now;
-                                        global_alerted.store(false, Ordering::Relaxed);
+                                        countdown_active.store(false, Ordering::Relaxed);
                                         per_source.lock().unwrap().clear();
                                     }
                                     // Update tray tooltip and dynamic menu items
@@ -516,7 +505,7 @@ pub fn run() {
                                     // Fire any automations triggered by this meeting app
                                     let store = gravai_config::automations::AutomationStore::load();
                                     for automation in store.find_for_meeting_detected(app_name) {
-                                        run_automation_actions(&handle, &automation.actions, is_recording.load(Ordering::Relaxed));
+                                        run_automation_actions(&handle, &automation.name, &automation.actions, is_recording.load(Ordering::Relaxed));
                                     }
                                     (
                                         "gravai:meeting",
@@ -526,8 +515,9 @@ pub fn run() {
                                 GravaiEvent::MeetingEnded { app_name } => {
                                     // Fire any automations triggered by this meeting ending
                                     let store = gravai_config::automations::AutomationStore::load();
+                                    let reason = format!("{app_name} meeting ended");
                                     for automation in store.find_for_meeting_ended(app_name) {
-                                        run_automation_actions(&handle, &automation.actions, is_recording.load(Ordering::Relaxed));
+                                        run_automation_actions(&handle, &reason, &automation.actions, is_recording.load(Ordering::Relaxed));
                                     }
                                     (
                                         "gravai:meeting-ended",
@@ -681,6 +671,8 @@ pub fn run() {
             commands::save_realtime_transcript,
             // Permissions
             commands::open_privacy_settings,
+            commands::get_calendar_authorization,
+            commands::request_calendar_access,
             // Updates
             commands::get_app_version,
             commands::check_for_update,

@@ -21,6 +21,11 @@
   let updateInfo = $state<any>(null);
   let unlistenUpdate: (() => void) | null = null;
 
+  // Calendar access state
+  let calAuth = $state("");
+  let calBusy = $state(false);
+  let calMsg = $state("");
+
   // Transcript correction state
   let corrEnabled = $state(false);
   let corrModel = $state("");
@@ -36,6 +41,7 @@
     await loadPerf();
     await loadUpdatesConfig();
     await loadCorrectionConfig();
+    await loadCalendarAuth();
     try { currentVersion = await invoke("get_app_version"); } catch (_) {}
     // Listen for auto-check result fired at startup
     const { listen } = await import("../lib/tauri");
@@ -86,6 +92,43 @@
   }
 
   function goTo(page: string) { currentPage.set(page); }
+
+  async function loadCalendarAuth() {
+    try { calAuth = await invoke("get_calendar_authorization"); } catch (_) { calAuth = ""; }
+  }
+
+  // Re-authorize calendar access. If access was never decided, this triggers the
+  // native macOS prompt; otherwise (denied/restricted) macOS won't re-prompt, so
+  // we send the user to System Settings.
+  async function reauthorizeCalendar() {
+    calBusy = true;
+    calMsg = "";
+    try {
+      if (calAuth === "denied" || calAuth === "restricted" || calAuth === "write_only") {
+        await invoke("open_privacy_settings", { permission: "calendar" });
+        calMsg = "Enable Gravai under Calendars, then click Refresh.";
+      } else {
+        calAuth = await invoke("request_calendar_access");
+        if (calAuth !== "full_access") {
+          await invoke("open_privacy_settings", { permission: "calendar" });
+          calMsg = "Enable Gravai under Calendars, then click Refresh.";
+        }
+      }
+    } catch (e: any) {
+      calMsg = `Error: ${e}`;
+    }
+    calBusy = false;
+  }
+
+  const CAL_STATUS: Record<string, { label: string; dot: string }> = {
+    full_access: { label: "Granted", dot: "ok" },
+    write_only: { label: "Write-only (read access needed)", dot: "warn" },
+    not_determined: { label: "Not yet authorized", dot: "warn" },
+    denied: { label: "Denied", dot: "error" },
+    restricted: { label: "Restricted by system policy", dot: "error" },
+    unknown: { label: "Unknown", dot: "warn" },
+    unsupported: { label: "Not supported on this platform", dot: "warn" },
+  };
 
   async function loadUpdatesConfig() {
     try {
@@ -222,6 +265,37 @@
         <span class="msg">{perfInfo.rss_mb.toFixed(0)} MB / {perfInfo.total_memory_gb.toFixed(0)} GB ({perfInfo.memory_pct.toFixed(1)}%)</span>
       </div>
     {/if}
+  </div>
+</div>
+
+<!-- Calendar Access -->
+<div class="card">
+  <div class="card-header">Calendar Access</div>
+  <div class="settings-grid">
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">
+          <span class="cal-status">
+            <span class="dot {CAL_STATUS[calAuth]?.dot ?? 'warn'}"></span>
+            {CAL_STATUS[calAuth]?.label ?? "Checking…"}
+          </span>
+        </span>
+        <span class="setting-desc">
+          Gravai reads your calendar to auto-name recording sessions from the meeting you're in.
+          If session names stopped matching your meetings, macOS may have revoked access (this can
+          happen when the app is updated or re-signed). Re-authorize to restore it.
+        </span>
+        {#if calMsg}<span class="cal-msg">{calMsg}</span>{/if}
+      </div>
+      <div class="banner-actions">
+        <button class="btn btn-xs btn-ghost" onclick={loadCalendarAuth} disabled={calBusy}>Refresh</button>
+        {#if calAuth !== "full_access"}
+          <button class="btn btn-xs btn-accent" onclick={reauthorizeCalendar} disabled={calBusy}>
+            {calBusy ? "Working…" : "Re-authorize"}
+          </button>
+        {/if}
+      </div>
+    </div>
   </div>
 </div>
 
@@ -401,6 +475,14 @@
   .update-dot-error { background: var(--danger); }
   .update-status-ok { color: var(--success); }
   .update-status-error { color: var(--danger); }
+
+  /* Calendar access */
+  .cal-status { display: inline-flex; align-items: center; gap: 7px; }
+  .cal-status .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .cal-status .dot.ok { background: var(--success); }
+  .cal-status .dot.warn { background: var(--warning); }
+  .cal-status .dot.error { background: var(--danger); }
+  .cal-msg { font-size: 11px; color: var(--text-tertiary); margin-top: 6px; }
 
   /* Transcript correction */
   .corr-fields {

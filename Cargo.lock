@@ -3065,6 +3065,7 @@ dependencies = [
 name = "gravai-meeting"
 version = "1.0.44"
 dependencies = [
+ "block2",
  "chrono",
  "gravai-config",
  "gravai-core",

@@ -126,8 +126,10 @@ Event-driven automation rules.
 ```rust
 pub enum AutomationTrigger {
     MeetingDetected, MeetingAppDetected { app_name: String },
-    MeetingAppEnded, SessionStarted, SessionEnded,
-    CalendarEventStarting, TimeOfDay { time: String },
+    MeetingAppEnded { app_name: String },
+    AudioSilent,  // mic+system both silent; evaluated by the silence monitor in lib.rs
+    SessionStarted, SessionEnded,
+    CalendarEventStarting, TimeOfDay { hour: u8, minute: u8 },
     AppForegrounded { app_name: String },
 }
 pub enum AutomationCondition {
