@@ -303,6 +303,29 @@ pub fn run() {
                 app.manage(tray_items);
             }
 
+            // ── Clamp restored window size to current monitor ─────────────
+            //
+            // `tauri_plugin_window_state` restores the previously saved size,
+            // which can be larger than the current screen (e.g. it was last
+            // used on a bigger external display). Shrink it to fit the active
+            // monitor's work area so the window never starts off-screen.
+            if let Some(main_window) = app.get_webview_window("main") {
+                if let Ok(Some(monitor)) = main_window.current_monitor() {
+                    let work = monitor.work_area();
+                    if let Ok(size) = main_window.outer_size() {
+                        let max_w = work.size.width;
+                        let max_h = work.size.height;
+                        if size.width > max_w || size.height > max_h {
+                            let new_w = size.width.min(max_w);
+                            let new_h = size.height.min(max_h);
+                            let _ = main_window
+                                .set_size(tauri::PhysicalSize::new(new_w, new_h));
+                            let _ = main_window.center();
+                        }
+                    }
+                }
+            }
+
             // ── Close-to-tray ─────────────────────────────────────────────
             if let Some(main_window) = app.get_webview_window("main") {
                 let win_clone = main_window.clone();
