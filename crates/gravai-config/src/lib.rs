@@ -94,7 +94,7 @@ pub struct RecordingConfig {
     pub enabled: bool,
     /// Recording sample rate in Hz
     pub sample_rate: u32,
-    /// Bits per sample for recording
+    /// Bits per sample for recording (16 or 24; other values fall back to 16)
     pub bit_depth: u16,
     /// Number of channels (1 = mono, 2 = stereo)
     pub channels: u16,
@@ -104,6 +104,8 @@ pub struct RecordingConfig {
     pub aac_bitrate_kbps: u32,
     /// Custom output folder (None = default ~/.gravai/sessions/)
     pub output_folder: Option<String>,
+    /// Compress raw WAV tracks to `playback.m4a` and delete them on stop
+    pub auto_compress: bool,
 }
 
 impl Default for RecordingConfig {
@@ -111,11 +113,12 @@ impl Default for RecordingConfig {
         Self {
             enabled: true,
             sample_rate: 48_000,
-            bit_depth: 24,
+            bit_depth: 16,
             channels: 2,
             export_format: "m4a-aac".into(),
             aac_bitrate_kbps: 192,
             output_folder: None,
+            auto_compress: true,
         }
     }
 }
@@ -587,6 +590,19 @@ mod tests {
         let parsed: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.version, CONFIG_VERSION);
         assert_eq!(parsed.audio.recording.sample_rate, 48_000);
+        assert_eq!(parsed.audio.recording.bit_depth, 16);
+        assert!(parsed.audio.recording.auto_compress);
+    }
+
+    #[test]
+    fn missing_auto_compress_uses_default() {
+        let mut json = serde_json::to_value(AppConfig::default()).unwrap();
+        json["audio"]["recording"]
+            .as_object_mut()
+            .unwrap()
+            .remove("auto_compress");
+        let parsed: AppConfig = serde_json::from_value(json).unwrap();
+        assert!(parsed.audio.recording.auto_compress);
     }
 
     #[test]

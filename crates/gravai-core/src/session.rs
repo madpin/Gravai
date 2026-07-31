@@ -52,6 +52,7 @@ pub struct Session {
     state: AtomicU8,
     pub config: gravai_config::AppConfig,
     pub session_dir: PathBuf,
+    pub recording_dir: PathBuf,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub recorded_files: Mutex<Vec<PathBuf>>,
 }
@@ -59,12 +60,20 @@ pub struct Session {
 impl Session {
     pub fn new(id: String, config: gravai_config::AppConfig) -> Self {
         let session_dir = gravai_config::sessions_dir().join(&id);
+        let recording_dir = config
+            .audio
+            .recording
+            .output_folder
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| session_dir.clone());
         Self {
             id,
             started_at: chrono::Utc::now(),
             state: AtomicU8::new(SessionState::Idle as u8),
             config,
             session_dir,
+            recording_dir,
             tasks: Mutex::new(Vec::new()),
             recorded_files: Mutex::new(Vec::new()),
         }

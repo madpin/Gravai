@@ -78,6 +78,25 @@ pub async fn get_session_audio_path(session_id: String) -> Result<String, String
     {
         return Ok(playback_wav.display().to_string());
     }
+    let compact_dir = session_dir.clone();
+    match tokio::task::spawn_blocking(move || {
+        gravai_audio::encoder::compact_session(&compact_dir, 128, false)
+    })
+    .await
+    {
+        Ok(Ok(_))
+            if playback_m4a.exists()
+                && std::fs::metadata(&playback_m4a)
+                    .map(|metadata| metadata.len() > 100)
+                    .unwrap_or(false) =>
+        {
+            return Ok(playback_m4a.display().to_string());
+        }
+        Ok(Err(error)) => tracing::warn!("Compact playback generation failed: {error}"),
+        Err(error) => tracing::warn!("Compact playback task failed: {error}"),
+        _ => {}
+    }
+
     // Clean up any broken playback files
     let _ = std::fs::remove_file(&playback_m4a);
     let _ = std::fs::remove_file(&playback_wav);

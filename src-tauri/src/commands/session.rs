@@ -229,18 +229,13 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     let session_title: Option<String> = None;
 
     // Determine output directory (custom folder or default)
-    let output_dir = config
-        .audio
-        .recording
-        .output_folder
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| session.session_dir.clone());
+    let output_dir = session.recording_dir.clone();
 
     // Set up multi-track recorder (if recording is enabled)
     let recording_enabled = config.audio.recording.enabled;
     let recorder = if recording_enabled {
-        let mut rec = MultiTrackRecorder::new(&output_dir).map_err(|e| format!("Recorder: {e}"))?;
+        let mut rec = MultiTrackRecorder::new(&output_dir, config.audio.recording.bit_depth)
+            .map_err(|e| format!("Recorder: {e}"))?;
 
         if config.audio.microphone.enabled {
             rec.add_track("mic")
@@ -805,6 +800,26 @@ pub async fn stop_session(state: State<'_, Arc<AppState>>) -> Result<serde_json:
     if let Some(stop_flag) = get_capture_stop().lock().unwrap().take() {
         stop_flag.store(true, Ordering::SeqCst);
         info!("Signaled capture thread to release audio resources");
+    }
+
+    let rec_cfg = &session.config.audio.recording;
+    if rec_cfg.enabled && rec_cfg.auto_compress {
+        let dir = session.recording_dir.clone();
+        let sid = session.id.clone();
+        let bitrate = rec_cfg.aac_bitrate_kbps;
+        tokio::task::spawn_blocking(move || {
+            match gravai_audio::encoder::compact_session(&dir, bitrate, true) {
+                Ok(Some(result)) => info!(
+                    "Session {sid} compacted: freed {:.1} MB across {} WAV(s)",
+                    result.freed_bytes as f64 / 1_048_576.0,
+                    result.removed
+                ),
+                Ok(None) => info!("Session {sid}: no raw audio to compact"),
+                Err(error) => {
+                    warn!("Session {sid} auto-compact failed (raw WAVs kept): {error}")
+                }
+            }
+        });
     }
 
     // Update session record in DB
