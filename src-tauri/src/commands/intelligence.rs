@@ -117,7 +117,7 @@ pub async fn summarize_session(
                 );
                 return Err(format!(
                     "Local LLM '{model_id}' did not finish loading in {ENGINE_LOAD_BUDGET_SECS}s. \
-                     Try a smaller model in Settings (e.g. qwen3-1.7b or gemma-4-e2b), \
+                     Try a smaller model in Settings (e.g. qwen3-1.7b or qwen3-4b), \
                      or check the logs for download/quantization errors."
                 ));
             }
@@ -220,7 +220,7 @@ pub async fn summarize_session(
             return Err(format!(
                 "Summary generation timed out after {mins} minutes on a {transcript_len}-char transcript. \
                  The transcript may still be too long for the selected model — try switching to \
-                 a smaller, faster model (qwen3-1.7b or gemma-4-e2b) in Settings → AI, \
+                 a smaller, faster model (qwen3-1.7b or qwen3-4b) in Settings → AI, \
                  or use an API provider for very long meetings."
             ));
         }
@@ -369,7 +369,7 @@ pub async fn export_session_audio(
     } else {
         // Default: merge all tracks into one export
         let output = session_dir.join(format!("export.{}", fmt.extension()));
-        gravai_audio::encoder::merge_and_export(&session_dir, &output, fmt, 192)?;
+        gravai_audio::encoder::export_session_timeline(&session_dir, &output, fmt, 192)?;
         Ok(output.display().to_string())
     }
 }

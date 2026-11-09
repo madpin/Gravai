@@ -36,24 +36,18 @@ pub async fn get_storage_info() -> Result<serde_json::Value, String> {
         let mut audio_files = Vec::new();
         let mut session_audio_bytes: u64 = 0;
 
-        if session_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&session_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Some(ext) = path.extension() {
-                        let ext = ext.to_string_lossy().to_lowercase();
-                        if ["wav", "aiff", "caf", "m4a", "mp3", "flac"].contains(&ext.as_str()) {
-                            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                            audio_files.push(AudioFileInfo {
-                                name: entry.file_name().to_string_lossy().to_string(),
-                                size_bytes: size,
-                                path: path.display().to_string(),
-                            });
-                            session_audio_bytes += size;
-                        }
-                    }
-                }
-            }
+        for path in session_audio_files(&session_dir)? {
+            let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+            audio_files.push(AudioFileInfo {
+                name: path
+                    .strip_prefix(&session_dir)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+                size_bytes: size,
+                path: path.display().to_string(),
+            });
+            session_audio_bytes += size;
         }
 
         let utterance_count = db.get_utterances(&s.id).map(|u| u.len()).unwrap_or(0);
@@ -89,16 +83,10 @@ pub async fn delete_session_audio(session_id: String) -> Result<String, String> 
     }
 
     let mut deleted = 0u64;
-    if let Ok(entries) = std::fs::read_dir(&session_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                if std::fs::remove_file(&path).is_ok() {
-                    deleted += size;
-                }
-            }
-        }
+    for path in session_audio_files(&session_dir)? {
+        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        deleted += size;
     }
     // Remove empty directory
     let _ = std::fs::remove_dir(&session_dir);
@@ -185,4 +173,29 @@ pub async fn save_realtime_transcript(session_id: String) -> Result<String, Stri
     std::fs::write(&path, &md).map_err(|e| format!("Write: {e}"))?;
 
     Ok(path.display().to_string())
+}
+
+// Audio may be in the original directory or in later capture segments.
+fn session_audio_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut files = Vec::new();
+    if !dir.exists() {
+        return Ok(files);
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if kind.is_dir() {
+            files.extend(session_audio_files(&path)?);
+        } else if kind.is_file()
+            && path.extension().is_some_and(|ext| {
+                ["wav", "aiff", "caf", "m4a", "mp3", "flac"]
+                    .iter()
+                    .any(|audio| ext.eq_ignore_ascii_case(audio))
+            })
+        {
+            files.push(path);
+        }
+    }
+    Ok(files)
 }

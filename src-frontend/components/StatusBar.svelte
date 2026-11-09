@@ -35,16 +35,17 @@
   }
 
   // ── Auto-stop countdown ────────────────────────────────────────────────
-  // A single cancellable 60s countdown that, if it elapses, stops the session.
+  // A single cancellable countdown that, if it elapses, stops the session.
   // Lives here (always-mounted) rather than in Recording.svelte so it fires
   // regardless of the active tab. Two trigger sources with different cancel
   // rules:
-  //   • silence  (`gravai:silence-countdown` active:true) — also cancelled when
-  //     audio resumes (backend emits active:false).
-  //   • auto-stop (`gravai:auto-stop-countdown`, e.g. a meeting-end automation)
-  //     — cancellable only by the user.
+  //   • silence  (`gravai:silence-countdown` active:true) — 60s, also cancelled
+  //     when audio resumes (backend emits active:false).
+  //   • auto-stop (`gravai:auto-stop-countdown`, e.g. Zoom meeting ended) —
+  //     10s, cancellable only by the user.
   // The visible banner renders via the global `alerts` store (AlertBar).
-  const AUTO_STOP_COUNTDOWN_SECS = 60;
+  const SILENCE_AUTO_STOP_SECS = 60;
+  const MEETING_END_AUTO_STOP_SECS = 10;
   let countdownInterval: number | null = null;
   let countdownAlertId: string | null = null;
   let countdownLabel = "";
@@ -61,7 +62,7 @@
     countdownCancelOnAudio = false;
   }
 
-  function startAutoStopCountdown(label: string, cancelOnAudio: boolean) {
+  function startAutoStopCountdown(label: string, cancelOnAudio: boolean, seconds: number) {
     if (!get(isRecording)) return; // nothing to stop
     if (countdownAlertId) {
       // A countdown is already running. A firm (user-only) countdown outranks a
@@ -72,7 +73,7 @@
     }
     countdownLabel = label;
     countdownCancelOnAudio = cancelOnAudio;
-    let remaining = AUTO_STOP_COUNTDOWN_SECS;
+    let remaining = seconds;
     countdownAlertId = addAlert({
       level: "warning",
       message: countdownMessage(remaining),
@@ -102,13 +103,20 @@
     // Silence countdown: arm on active:true; on active:false (audio resumed)
     // cancel only if the running countdown is the silence one.
     unlisteners.push(await listen("gravai:silence-countdown", (e: any) => {
-      if (e.payload?.active) startAutoStopCountdown("No audio on mic or system", true);
+      if (e.payload?.active) startAutoStopCountdown("No audio on mic or system", true, SILENCE_AUTO_STOP_SECS);
       else if (countdownCancelOnAudio) clearAutoStopCountdown();
     }));
-    // Automation-driven auto-stop (e.g. meeting ended): user-cancel only.
+    // Automation-driven auto-stop (e.g. Zoom meeting ended): user-cancel only.
     unlisteners.push(await listen("gravai:auto-stop-countdown", (e: any) => {
-      startAutoStopCountdown(e.payload?.reason || "Automation triggered", false);
+      const secs = Number(e.payload?.seconds);
+      startAutoStopCountdown(
+        e.payload?.reason || "Automation triggered",
+        false,
+        Number.isFinite(secs) && secs > 0 ? secs : MEETING_END_AUTO_STOP_SECS,
+      );
     }));
+    // Catch a meeting that was already open when the window started listening.
+    try { await invoke("sync_meeting_automations"); } catch (_) {}
   });
 
   // Tear down the countdown if the session ends by any route or the user pauses

@@ -54,8 +54,11 @@ pub const CONFIG_VERSION: u32 = 1;
 #[serde(default)]
 pub struct MicrophoneConfig {
     pub enabled: bool,
-    /// -1 = system default
+    /// -1 = system default. Ignored when `device_name` is set.
     pub device_index: i32,
+    /// Stable device name. Empty means the system default input.
+    #[serde(default)]
+    pub device_name: String,
 }
 
 impl Default for MicrophoneConfig {
@@ -63,6 +66,7 @@ impl Default for MicrophoneConfig {
         Self {
             enabled: true,
             device_index: -1,
+            device_name: String::new(),
         }
     }
 }
@@ -194,7 +198,17 @@ impl Default for SileroVadConfig {
         Self {
             threshold: 0.5,
             min_utterance_seconds: 0.3,
-            max_utterance_seconds: 30.0,
+            // Short enough that one Whisper pass finishes before the next
+            // speaker starts. A 30s chunk keeps the CPU busy for the rest of a call.
+            max_utterance_seconds: 12.0,
+        }
+    }
+}
+
+impl SileroVadConfig {
+    pub fn migrate(&mut self) {
+        if (self.max_utterance_seconds - 30.0).abs() < 0.01 {
+            self.max_utterance_seconds = 12.0;
         }
     }
 }
@@ -268,7 +282,7 @@ impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             provider: "local".into(),
-            local_model: "gemma-4-e2b".into(),
+            local_model: "qwen3-4b".into(),
             base_url: String::new(),
             model: String::new(),
             api_key: None,
@@ -286,11 +300,10 @@ impl LlmConfig {
                 self.base_url.clear();
                 // Best-effort model name mapping
                 self.local_model = match self.model.as_str() {
-                    m if m.contains("gemma") => "gemma-4-e2b",
                     m if m.contains("phi") => "phi3-mini-q4",
                     m if m.contains("mistral") => "mistral-7b-q4",
                     m if m.contains("qwen") => "qwen3-8b",
-                    _ => "gemma-4-e2b",
+                    _ => "qwen3-4b",
                 }
                 .into();
             }
@@ -303,6 +316,16 @@ impl LlmConfig {
                 // Unknown provider — assume API
                 self.provider = "api".into();
             }
+        }
+        // Gemma loads full Hugging Face weights and then quantizes. Existing
+        // configs that still point at it are moved to the GGUF default.
+        if self.local_model.contains("gemma") {
+            self.local_model = "qwen3-4b".into();
+        }
+        // Leftover Ollama model name. Unused while provider is local, and it
+        // still showed up as a Gemma model in saved config.
+        if self.provider == "local" && self.model.to_lowercase().contains("gemma") {
+            self.model.clear();
         }
     }
 }
@@ -351,6 +374,9 @@ impl Default for DiarizationConfig {
 #[serde(default)]
 pub struct MeetingDetectionConfig {
     pub enabled: bool,
+    /// Look up the current calendar event to name the session.
+    /// This can take 10–60s on large calendars, so it is optional.
+    pub calendar_naming: bool,
     pub lead_time_seconds: u32,
     pub idle_timeout_seconds: u32,
     pub allowed_apps: Vec<String>,
@@ -360,10 +386,24 @@ impl Default for MeetingDetectionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            calendar_naming: true,
             lead_time_seconds: 0,
             idle_timeout_seconds: 30,
             allowed_apps: Vec::new(),
         }
+    }
+}
+
+/// Emotion labels on remote speech. Off skips loading and running the model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SentimentConfig {
+    pub enabled: bool,
+}
+
+impl Default for SentimentConfig {
+    fn default() -> Self {
+        Self { enabled: false }
     }
 }
 
@@ -374,6 +414,7 @@ pub struct FeaturesConfig {
     pub echo_suppression: EchoSuppressionConfig,
     pub diarization: DiarizationConfig,
     pub meeting_detection: MeetingDetectionConfig,
+    pub sentiment: SentimentConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -423,12 +464,17 @@ pub struct EmbeddingConfig {
     ///          "gemma-embed"  (nomic-embed-text-v1.5, ~274 MB, balanced multilingual),
     ///          "bge-m3"       (BGE-M3, ~572 MB, best multilingual quality)
     pub model: String,
+    /// Build embeddings when a session is opened in Archive.
+    /// Turn off to skip that work; semantic search only sees sessions
+    /// indexed while this was on.
+    pub auto_index: bool,
 }
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             model: "bag-of-words".into(),
+            auto_index: true,
         }
     }
 }
@@ -550,6 +596,7 @@ pub fn load_config() -> AppConfig {
                 Ok(mut config) => {
                     config.llm.migrate();
                     config.correction.migrate();
+                    config.vad.silero.migrate();
                     // Persist migration so the file on disk is updated
                     let _ = save_config(&config);
                     tracing::info!("Config loaded from {}", path.display());
@@ -592,6 +639,42 @@ mod tests {
         assert_eq!(parsed.audio.recording.sample_rate, 48_000);
         assert_eq!(parsed.audio.recording.bit_depth, 16);
         assert!(parsed.audio.recording.auto_compress);
+        assert!(parsed.features.meeting_detection.calendar_naming);
+        assert!(!parsed.features.sentiment.enabled);
+        assert!(parsed.embedding.auto_index);
+    }
+
+    #[test]
+    fn missing_optional_work_flags_use_defaults() {
+        let mut json = serde_json::to_value(AppConfig::default()).unwrap();
+        json["features"]["meeting_detection"]
+            .as_object_mut()
+            .unwrap()
+            .remove("calendar_naming");
+        json["features"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sentiment");
+        json["embedding"]
+            .as_object_mut()
+            .unwrap()
+            .remove("auto_index");
+        let parsed: AppConfig = serde_json::from_value(json).unwrap();
+        assert!(parsed.features.meeting_detection.calendar_naming);
+        assert!(!parsed.features.sentiment.enabled);
+        assert!(parsed.embedding.auto_index);
+    }
+
+    #[test]
+    fn old_thirty_second_utterance_cap_shrinks() {
+        let mut config = AppConfig::default();
+        config.vad.silero.max_utterance_seconds = 30.0;
+        config.vad.silero.migrate();
+        assert!((config.vad.silero.max_utterance_seconds - 12.0).abs() < 0.01);
+
+        config.vad.silero.max_utterance_seconds = 20.0;
+        config.vad.silero.migrate();
+        assert!((config.vad.silero.max_utterance_seconds - 20.0).abs() < 0.01);
     }
 
     #[test]

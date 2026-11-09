@@ -162,6 +162,25 @@ impl Database {
         Ok(())
     }
 
+    /// Reopen a stopped session and invalidate its summary in one transaction.
+    /// Transcript rows, speaker edits, bookmarks and original metadata are retained.
+    pub fn reopen_session(&self, session_id: &str, duration: f64) -> Result<(), rusqlite::Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE sessions SET state = 'recording', ended_at = NULL, duration_seconds = ?2 WHERE id = ?1 AND state = 'stopped'",
+            params![session_id, duration],
+        )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        tx.commit()
+    }
+
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -958,6 +977,44 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reopening_preserves_session_and_bookmarks_but_invalidates_summary() {
+        let db = Database::open_in_memory().unwrap();
+        db.create_session(&SessionRecord {
+            id: "continued".into(),
+            started_at: "2026-01-01T12:00:00Z".into(),
+            ended_at: Some("2026-01-01T12:01:00Z".into()),
+            duration_seconds: Some(60.0),
+            title: Some("Original title".into()),
+            meeting_app: Some("Zoom".into()),
+            state: "stopped".into(),
+        })
+        .unwrap();
+        db.insert_bookmark("continued", 30_000, Some("Keep this"))
+            .unwrap();
+        db.upsert_session_summary("continued", Some("Old summary"), None, None, None, None)
+            .unwrap();
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO utterances (session_id, timestamp, source, speaker, text) VALUES ('continued', '2026-01-01T12:00:10Z', 'microphone', 'Alice', 'Keep this transcript')", [],
+        ).unwrap();
+        db.reopen_session("continued", 60.0).unwrap();
+        let record = db.get_session("continued").unwrap().unwrap();
+        assert_eq!(record.state, "recording");
+        let transcript = db.get_utterances("continued").unwrap();
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(transcript[0].text, "Keep this transcript");
+        assert_eq!(transcript[0].speaker.as_deref(), Some("Alice"));
+        assert_eq!(record.title.as_deref(), Some("Original title"));
+        assert_eq!(record.started_at, "2026-01-01T12:00:00Z");
+        assert_eq!(record.duration_seconds, Some(60.0));
+        assert!(record.ended_at.is_none());
+        assert!(db.get_session_summary("continued").unwrap().is_none());
+        assert_eq!(db.list_bookmarks("continued").unwrap()[0].offset_ms, 30_000);
+        assert!(db.reopen_session("continued", 60.0).is_err());
+        assert!(db.reopen_session("missing", 60.0).is_err());
+        assert_eq!(db.list_sessions().unwrap().len(), 1);
+    }
 
     #[test]
     fn create_and_query_session() {

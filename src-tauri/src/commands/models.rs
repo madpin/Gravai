@@ -49,20 +49,9 @@ const LLM_GGUF_IDS: &[&str] = &[
     "mistral-7b-q4",
 ];
 
-/// HF-ISQ models — loaded from HuggingFace, quantized on-the-fly, cached as UQFF.
-/// (id, description, note_if_not_cached)
-const LLM_HF_ISQ_IDS: &[(&str, &str, &str)] = &[
-    (
-        "gemma-4-e2b",
-        "Gemma 4 E2B — fast, ~3 GB RAM (auto-downloads from HuggingFace)",
-        "First use downloads ~2 GB and quantizes locally. Cached for instant reload after that.",
-    ),
-    (
-        "gemma-4-e4b",
-        "Gemma 4 E4B — balanced quality, ~5 GB RAM (auto-downloads from HuggingFace)",
-        "First use downloads ~5 GB and quantizes locally. Cached for instant reload after that.",
-    ),
-];
+/// Hugging Face models quantized on first launch. Empty: Gemma used this path
+/// and the multi-gigabyte download was unreliable. Local models are GGUF only.
+const LLM_HF_ISQ_IDS: &[(&str, &str, &str)] = &[];
 
 // ── AI catalog (sentiment, diarization, embeddings, GGUF LLMs) ────────────────
 
@@ -111,7 +100,7 @@ fn ai_model_info(model_id: &str) -> Option<AiModelInfo> {
                     Some("https://huggingface.co/Xenova/nomic-embed-text-v1/resolve/main/tokenizer.json"),
                 ),
             ],
-            description: "EmbeddingGemma (nomic-embed-text-v1.5) — balanced multilingual, 768-dim (274 MB)",
+            description: "nomic-embed-text-v1.5 — balanced multilingual, 768-dim (274 MB)",
             approx_size: 274_000_000,
             note: None,
         }),

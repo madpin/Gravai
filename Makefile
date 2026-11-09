@@ -6,9 +6,12 @@
 # Skip pre-flight `make check` when: FORCE=1, or extra goal `force` / `--force` (GNU Make: `make version --force`; Apple make: `make version force`)
 VERSION_SKIP_CHECK := $(if $(FORCE),1,$(filter --force force,$(MAKECMDGOALS)))
 
-# mistral.rs Metal shader precompilation requires full Xcode.app (not just CLT).
-# Setting to 0 defers shader compilation to runtime — works with Command Line Tools only.
-export MISTRALRS_METAL_PRECOMPILE ?= 0
+# Bake Metal shaders into the binary. A value of 0 compiles them on every
+# model load (multi-minute "Warming up" even when the GGUF is already on disk).
+# `=` overrides a leaked 0 in the environment. macOS-only: skip the iOS/tvOS
+# metallibs, which this app never loads.
+export MISTRALRS_METAL_PRECOMPILE = 1
+export MISTRALRS_METAL_PLATFORMS ?= macos
 
 # Default target
 help: ## Show this help

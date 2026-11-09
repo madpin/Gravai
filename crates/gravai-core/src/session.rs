@@ -53,6 +53,9 @@ pub struct Session {
     pub config: gravai_config::AppConfig,
     pub session_dir: PathBuf,
     pub recording_dir: PathBuf,
+    /// Recorded time before this capture, excluding gaps between recordings.
+    pub previous_duration_seconds: f64,
+    capture_started_at: std::time::Instant,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub recorded_files: Mutex<Vec<PathBuf>>,
 }
@@ -74,6 +77,8 @@ impl Session {
             config,
             session_dir,
             recording_dir,
+            previous_duration_seconds: 0.0,
+            capture_started_at: std::time::Instant::now(),
             tasks: Mutex::new(Vec::new()),
             recorded_files: Mutex::new(Vec::new()),
         }
@@ -110,10 +115,9 @@ impl Session {
         }
     }
 
-    /// Record the duration in seconds since session started.
+    /// Total captured duration, excluding gaps between stopped recordings.
     pub fn duration_seconds(&self) -> f64 {
-        let now = chrono::Utc::now();
-        (now - self.started_at).num_milliseconds() as f64 / 1000.0
+        self.previous_duration_seconds + self.capture_started_at.elapsed().as_secs_f64()
     }
 }
 
@@ -150,6 +154,14 @@ mod tests {
         session.set_state(SessionState::Stopped);
         assert_eq!(session.state(), SessionState::Stopped);
         assert!(!session.is_active());
+    }
+
+    #[test]
+    fn continued_duration_excludes_gap_since_original_start() {
+        let mut session = Session::new("continued".into(), gravai_config::AppConfig::default());
+        session.started_at = chrono::Utc::now() - chrono::Duration::days(7);
+        session.previous_duration_seconds = 120.0;
+        assert!((120.0..121.0).contains(&session.duration_seconds()));
     }
 
     #[test]

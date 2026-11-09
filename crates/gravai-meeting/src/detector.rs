@@ -329,23 +329,37 @@ impl MeetingDetector {
 }
 
 /// Run the meeting detection loop, emitting events when meetings are detected.
-pub async fn run_detection_loop(
+///
+/// `is_enabled` is checked every poll. Turning meeting detection off in
+/// Settings stops the `ps` / `lsof` scan on the next tick, and turning it
+/// back on resumes the scan without restarting the app.
+pub async fn run_detection_loop<F, Fut>(
+    mut is_enabled: F,
     config: gravai_config::MeetingDetectionConfig,
     event_bus: gravai_core::EventBus,
     active: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) {
-    if !config.enabled {
-        debug!("Meeting detection disabled");
-        return;
-    }
-
+) where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
     let mut detector = MeetingDetector::new(&config);
-    info!(
-        "Meeting detection started (poll interval: {:?})",
-        detector.poll_interval()
-    );
+    let interval = detector.poll_interval();
+    info!("Meeting detection loop started (poll interval: {interval:?})");
+    let mut was_enabled = false;
 
     while active.load(std::sync::atomic::Ordering::Relaxed) {
+        if !is_enabled().await {
+            if was_enabled {
+                debug!("Meeting detection paused");
+                was_enabled = false;
+            }
+            tokio::time::sleep(interval).await;
+            continue;
+        }
+        if !was_enabled {
+            info!("Meeting detection scanning");
+            was_enabled = true;
+        }
         let (new_meetings, ended) = detector.poll();
         for meeting in new_meetings {
             let window_title = if meeting.app_name == "Zoom" {

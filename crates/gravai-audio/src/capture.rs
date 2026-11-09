@@ -42,6 +42,68 @@ pub fn rms_db(samples: &[f32]) -> f64 {
     }
 }
 
+/// Match a saved microphone name against the current input list.
+pub fn find_named_input(names: &[impl AsRef<str>], wanted: &str) -> Option<usize> {
+    if wanted.is_empty() {
+        return None;
+    }
+    names.iter().position(|name| name.as_ref() == wanted)
+}
+
+fn resolve_input_device(
+    host: &cpal::Host,
+    mic: &gravai_config::MicrophoneConfig,
+) -> Result<(cpal::Device, String), String> {
+    if !mic.device_name.is_empty() {
+        let wanted = mic.device_name.clone();
+        let device = host
+            .input_devices()
+            .map_err(|e| e.to_string())?
+            .find(|device| device.name().ok().as_deref() == Some(wanted.as_str()))
+            .ok_or_else(|| format!("Microphone \"{wanted}\" is not connected"))?;
+        return Ok((device, wanted));
+    }
+    if mic.device_index >= 0 {
+        let index = mic.device_index as usize;
+        let device = host
+            .input_devices()
+            .map_err(|e| e.to_string())?
+            .nth(index)
+            .ok_or_else(|| format!("Microphone index {index} is not connected"))?;
+        let name = device.name().unwrap_or_else(|_| format!("Device {index}"));
+        return Ok((device, name));
+    }
+    let device = host
+        .default_input_device()
+        .ok_or("No default input device")?;
+    let name = device.name().unwrap_or_else(|_| "Default".into());
+    Ok((device, name))
+}
+
+/// Change channel count without changing the sample rate.
+fn remix(interleaved: &[f32], in_ch: u16, out_ch: u16) -> Vec<f32> {
+    if in_ch == 0 || out_ch == 0 || in_ch == out_ch {
+        return interleaved.to_vec();
+    }
+    let in_ch = in_ch as usize;
+    let out_ch = out_ch as usize;
+    let frames = interleaved.len() / in_ch;
+    let mut output = Vec::with_capacity(frames * out_ch);
+    for frame in 0..frames {
+        let base = frame * in_ch;
+        if out_ch == 1 {
+            let sum: f32 = interleaved[base..base + in_ch].iter().sum();
+            output.push(sum / in_ch as f32);
+        } else {
+            for channel in 0..out_ch {
+                let src = if channel < in_ch { channel } else { 0 };
+                output.push(interleaved[base + src]);
+            }
+        }
+    }
+    output
+}
+
 /// Information about an audio device.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioDeviceInfo {
@@ -72,6 +134,19 @@ pub struct AudioCaptureManager {
     _mic_stream: Option<cpal::Stream>,
     _sys_capture: Option<Box<dyn std::any::Any + Send>>,
 
+    // Kept across mic swaps so the recording and transcription tasks
+    // keep reading the same channels.
+    mic_hq_tx: Option<mpsc::Sender<AudioChunk>>,
+    mic_lq_tx: Option<mpsc::Sender<Vec<f32>>>,
+    /// Format of the first mic opened this session. Later devices are
+    /// adapted to it so the WAV header stays valid.
+    mic_locked_rate: Option<u32>,
+    mic_locked_channels: Option<u16>,
+    active_mic_name: Option<String>,
+    /// Set when the device disappears. Cleared while we are swapping on purpose.
+    mic_fault: Arc<AtomicBool>,
+    mic_switching: Arc<AtomicBool>,
+
     // Track actual capture rates for resampler configuration
     pub mic_sample_rate: Option<u32>,
     pub mic_channels: Option<u16>,
@@ -92,6 +167,13 @@ impl AudioCaptureManager {
             on_volume: None,
             _mic_stream: None,
             _sys_capture: None,
+            mic_hq_tx: None,
+            mic_lq_tx: None,
+            mic_locked_rate: None,
+            mic_locked_channels: None,
+            active_mic_name: None,
+            mic_fault: Arc::new(AtomicBool::new(false)),
+            mic_switching: Arc::new(AtomicBool::new(false)),
             mic_sample_rate: None,
             mic_channels: None,
             sys_sample_rate: None,
@@ -141,19 +223,64 @@ impl AudioCaptureManager {
         self.paused.store(false, Ordering::SeqCst);
     }
 
-    fn start_mic(&mut self) -> Result<(), String> {
-        let host = cpal::default_host();
-        let device = if self.config.audio.microphone.device_index < 0 {
-            host.default_input_device()
-                .ok_or("No default input device")?
-        } else {
-            host.input_devices()
-                .map_err(|e| e.to_string())?
-                .nth(self.config.audio.microphone.device_index as usize)
-                .ok_or("Device index out of range")?
-        };
+    pub fn active_mic_name(&self) -> Option<&str> {
+        self.active_mic_name.as_deref()
+    }
 
-        let dev_name = device.name().unwrap_or_default();
+    /// True once since the last check if the open mic disappeared.
+    pub fn take_mic_fault(&self) -> bool {
+        self.mic_fault.swap(false, Ordering::Relaxed)
+    }
+
+    pub fn mark_mic_missing(&self) {
+        self.mic_fault.store(true, Ordering::Relaxed);
+    }
+
+    /// Next `restart_mic` follows the system default input.
+    pub fn use_default_mic(&mut self) {
+        self.config.audio.microphone.device_name.clear();
+        self.config.audio.microphone.device_index = -1;
+    }
+
+    pub fn pin_mic_name(&mut self, name: String) {
+        self.config.audio.microphone.device_name = name;
+        self.config.audio.microphone.device_index = -1;
+    }
+
+    pub fn follows_default(&self) -> bool {
+        self.config.audio.microphone.device_name.is_empty()
+            && self.config.audio.microphone.device_index < 0
+    }
+
+    pub fn default_input_name() -> Option<String> {
+        cpal::default_host().default_input_device()?.name().ok()
+    }
+
+    /// Point the live mic stream at another input. Empty `device_name` uses
+    /// the system default. Recording and transcription keep their channels.
+    pub fn switch_mic(&mut self, device_name: String) -> Result<String, String> {
+        self.config.audio.microphone.device_name = device_name;
+        self.config.audio.microphone.device_index = -1;
+        self.restart_mic()
+    }
+
+    /// Reopen the mic described by the current config.
+    pub fn restart_mic(&mut self) -> Result<String, String> {
+        self.mic_switching.store(true, Ordering::Relaxed);
+        self._mic_stream = None;
+        let result = self.open_mic_stream();
+        self.mic_switching.store(false, Ordering::Relaxed);
+        result
+    }
+
+    fn start_mic(&mut self) -> Result<(), String> {
+        self.open_mic_stream().map(|_| ())
+    }
+
+    fn open_mic_stream(&mut self) -> Result<String, String> {
+        let host = cpal::default_host();
+        let (device, dev_name) = resolve_input_device(&host, &self.config.audio.microphone)?;
+
         let supported = device
             .default_input_config()
             .map_err(|e| format!("No supported config: {e}"))?;
@@ -162,6 +289,12 @@ impl AudioCaptureManager {
         let channels = supported.channels();
         self.mic_sample_rate = Some(sample_rate);
         self.mic_channels = Some(channels);
+        if self.mic_locked_rate.is_none() {
+            self.mic_locked_rate = Some(sample_rate);
+            self.mic_locked_channels = Some(channels);
+        }
+        let locked_rate = self.mic_locked_rate.unwrap_or(sample_rate);
+        let locked_channels = self.mic_locked_channels.unwrap_or(channels);
 
         info!("Mic: {} @ {}Hz {}ch", dev_name, sample_rate, channels);
 
@@ -171,13 +304,26 @@ impl AudioCaptureManager {
             buffer_size: cpal::BufferSize::Fixed(1024),
         };
 
-        // HQ channel for recording
-        let (hq_tx, hq_rx) = mpsc::channel::<AudioChunk>(512);
-        self.mic_hq_rx = Some(hq_rx);
-
-        // LQ channel for transcription (16kHz mono) — resampling happens here
-        let (lq_tx, lq_rx) = mpsc::channel::<Vec<f32>>(512);
-        self.mic_lq_rx = Some(lq_rx);
+        // Create the session channels once. A later swap reuses the senders
+        // so the recorder and transcriber do not have to be restarted.
+        if self.mic_hq_tx.is_none() {
+            let (hq_tx, hq_rx) = mpsc::channel::<AudioChunk>(512);
+            self.mic_hq_tx = Some(hq_tx);
+            self.mic_hq_rx = Some(hq_rx);
+        }
+        if self.mic_lq_tx.is_none() {
+            let (lq_tx, lq_rx) = mpsc::channel::<Vec<f32>>(512);
+            self.mic_lq_tx = Some(lq_tx);
+            self.mic_lq_rx = Some(lq_rx);
+        }
+        let hq_tx = self
+            .mic_hq_tx
+            .clone()
+            .ok_or("Microphone recording channel is closed")?;
+        let lq_tx = self
+            .mic_lq_tx
+            .clone()
+            .ok_or("Microphone transcription channel is closed")?;
 
         let recording = self.recording.clone();
         let paused = self.paused.clone();
@@ -185,8 +331,9 @@ impl AudioCaptureManager {
         let mut volume_sample_counter = 0u64;
         let volume_interval_samples = (sample_rate as f64 * VOLUME_INTERVAL) as u64;
 
-        // Create resampler for this source
-        let mut resampler = if sample_rate != 16000 || channels != 1 {
+        // Transcription is always 16 kHz mono. The recording track stays at
+        // the format of the first mic so a swap does not rewrite the WAV header.
+        let mut lq_resampler = if sample_rate != 16000 || channels != 1 {
             Some(crate::resampler::AudioResampler::new(
                 sample_rate,
                 channels,
@@ -196,6 +343,20 @@ impl AudioCaptureManager {
         } else {
             None
         };
+        let mut hq_resampler = if sample_rate != locked_rate {
+            Some(crate::resampler::AudioResampler::new(
+                sample_rate,
+                channels,
+                locked_rate,
+                locked_channels,
+            )?)
+        } else {
+            None
+        };
+
+        let fault = self.mic_fault.clone();
+        let switching = self.mic_switching.clone();
+        fault.store(false, Ordering::Relaxed);
 
         let stream = device
             .build_input_stream(
@@ -205,23 +366,26 @@ impl AudioCaptureManager {
                         return;
                     }
 
-                    // Send HQ chunk
-                    let _ = hq_tx.try_send(AudioChunk {
-                        samples: data.to_vec(),
-                        sample_rate,
-                        channels,
-                    });
+                    let hq_samples = match &mut hq_resampler {
+                        Some(resampler) => resampler.process(data),
+                        None => remix(data, channels, locked_channels),
+                    };
+                    if !hq_samples.is_empty() {
+                        let _ = hq_tx.try_send(AudioChunk {
+                            samples: hq_samples,
+                            sample_rate: locked_rate,
+                            channels: locked_channels,
+                        });
+                    }
 
-                    // Send LQ (16kHz mono) chunk
-                    let mono_16k = match &mut resampler {
-                        Some(r) => r.process(data),
+                    let mono_16k = match &mut lq_resampler {
+                        Some(resampler) => resampler.process(data),
                         None => data.to_vec(),
                     };
                     if !mono_16k.is_empty() {
                         let _ = lq_tx.try_send(mono_16k);
                     }
 
-                    // Volume callback
                     volume_sample_counter += data.len() as u64 / channels as u64;
                     if volume_sample_counter >= volume_interval_samples {
                         volume_sample_counter = 0;
@@ -231,7 +395,11 @@ impl AudioCaptureManager {
                     }
                 },
                 move |err| {
+                    if switching.load(Ordering::Relaxed) {
+                        return;
+                    }
                     error!("Mic stream error: {err}");
+                    fault.store(true, Ordering::Relaxed);
                 },
                 None,
             )
@@ -239,8 +407,9 @@ impl AudioCaptureManager {
 
         stream.play().map_err(|e| format!("Play mic: {e}"))?;
         self._mic_stream = Some(stream);
+        self.active_mic_name = Some(dev_name.clone());
         info!("Microphone capture started");
-        Ok(())
+        Ok(dev_name)
     }
 
     fn start_sys(&mut self) -> Result<(), String> {
@@ -364,5 +533,30 @@ impl AudioCaptureManager {
 
         debug!("Found {} audio devices", devices.len());
         devices
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_input_ignores_a_blank_choice() {
+        assert_eq!(find_named_input(&["MacBook Pro Microphone"], ""), None);
+    }
+
+    #[test]
+    fn named_input_finds_the_device_after_the_list_shifts() {
+        let names = ["MacBook Pro Microphone", "Logitech BRIO"];
+        assert_eq!(find_named_input(&names, "Logitech BRIO"), Some(1));
+        let shifted = ["Logitech BRIO"];
+        assert_eq!(find_named_input(&shifted, "Logitech BRIO"), Some(0));
+        assert_eq!(find_named_input(&shifted, "MacBook Pro Microphone"), None);
+    }
+
+    #[test]
+    fn remix_mono_to_stereo_duplicates_the_channel() {
+        let stereo = remix(&[0.25, -0.5], 1, 2);
+        assert_eq!(stereo, vec![0.25, 0.25, -0.5, -0.5]);
     }
 }

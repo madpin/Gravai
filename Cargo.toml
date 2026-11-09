@@ -74,7 +74,7 @@ ndarray = "0.16"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 # Transcription
-whisper-rs = "0.14"
+whisper-rs = { version = "0.14", features = ["metal"] }
 
 # Fuzzy matching (echo suppression)
 strsim = "0.11"
@@ -95,4 +95,6 @@ objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMedia
 futures-util = "0.3"
 
 # Local LLM inference (GGUF models via mistral.rs)
-mistralrs = { version = "0.8", default-features = false, features = ["metal", "accelerate"] }
+# 0.9.5 is not published to crates.io (latest there is 0.8.1). The git tag
+# adds Qwen3.5 / Qwen3.6 GGUF (`qwen35`) and Gemma 4 GGUF.
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", tag = "v0.9.5", default-features = false, features = ["metal", "accelerate"] }

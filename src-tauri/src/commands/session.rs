@@ -16,6 +16,39 @@ use tokio::sync::mpsc;
 static CAPTURE_STOP: std::sync::OnceLock<std::sync::Mutex<Option<Arc<AtomicBool>>>> =
     std::sync::OnceLock::new();
 
+struct MicSwitch {
+    device_name: String,
+    reply: std::sync::mpsc::Sender<Result<String, String>>,
+}
+
+static CAPTURE_CMD: std::sync::OnceLock<
+    std::sync::Mutex<Option<std::sync::mpsc::Sender<MicSwitch>>>,
+> = std::sync::OnceLock::new();
+
+fn capture_cmd_slot() -> &'static std::sync::Mutex<Option<std::sync::mpsc::Sender<MicSwitch>>> {
+    CAPTURE_CMD.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Ask the live capture thread to open a different microphone.
+/// Empty `device_name` follows the system default.
+pub(crate) fn request_mic_switch(device_name: String) -> Result<String, String> {
+    let tx = capture_cmd_slot()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .cloned()
+        .ok_or("No active recording")?;
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    tx.send(MicSwitch {
+        device_name,
+        reply: reply_tx,
+    })
+    .map_err(|_| "Capture thread stopped".to_string())?;
+    reply_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "Microphone switch timed out".to_string())?
+}
+
 fn get_capture_stop() -> &'static std::sync::Mutex<Option<Arc<AtomicBool>>> {
     CAPTURE_STOP.get_or_init(|| std::sync::Mutex::new(None))
 }
@@ -26,6 +59,21 @@ fn get_capture_stop() -> &'static std::sync::Mutex<Option<Arc<AtomicBool>>> {
 // fresh connection inside the audio pipeline's async task. We now
 // open once and share an Arc across all hot paths.
 static DB: std::sync::OnceLock<Arc<gravai_storage::Database>> = std::sync::OnceLock::new();
+
+/// True when an enabled automation will stop the recording after this app's meeting ends.
+fn meeting_end_auto_stop_enabled(app_name: &str) -> bool {
+    use gravai_config::automations::{AutomationAction, AutomationStore};
+    let store = AutomationStore::load();
+    store
+        .find_for_meeting_ended(app_name)
+        .iter()
+        .any(|automation| {
+            automation
+                .actions
+                .iter()
+                .any(|action| matches!(action, AutomationAction::StopRecording))
+        })
+}
 
 fn shared_db() -> Result<Arc<gravai_storage::Database>, String> {
     if let Some(db) = DB.get() {
@@ -63,6 +111,22 @@ use tracing::{error, info, warn};
 /// Start a new recording session.
 #[tauri::command]
 pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+    start_session_inner(state, None).await
+}
+
+/// Continue a saved recording without replacing its transcript or audio.
+#[tauri::command]
+pub async fn continue_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<serde_json::Value, String> {
+    start_session_inner(state, Some(session_id)).await
+}
+
+async fn start_session_inner(
+    state: State<'_, Arc<AppState>>,
+    previous_id: Option<String>,
+) -> Result<serde_json::Value, String> {
     // Acquire the start guard — only one start_session may run at a time.
     // This prevents duplicate sessions from concurrent calls (tray + automation,
     // double-click, etc.). The guard auto-resets via Drop on any return path.
@@ -78,6 +142,19 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         }
     }
 
+    let previous = match previous_id {
+        Some(id) => {
+            let record = shared_db()?
+                .get_session(&id)
+                .map_err(|e| e.to_string())?
+                .ok_or("Session not found")?;
+            if record.state != "stopped" {
+                return Err("Only stopped recordings can be continued".into());
+            }
+            Some(record)
+        }
+        None => None,
+    };
     let mut config = state.config.read().await.clone();
 
     // Apply active profile overrides to config before starting
@@ -113,6 +190,24 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             if let Some(enabled) = profile.correction_enabled {
                 config.correction.enabled = enabled;
             }
+            if let Some(enabled) = profile.sentiment_enabled {
+                config.features.sentiment.enabled = enabled;
+            }
+            if let Some(enabled) = profile.meeting_enabled {
+                config.features.meeting_detection.enabled = enabled;
+            }
+            if let Some(ref engine) = profile.vad_engine {
+                config.vad.engine = engine.clone();
+            }
+            if let Some(pause) = profile.vad_pause {
+                config.vad.pause_seconds = pause;
+            }
+            if let Some(min) = profile.vad_min {
+                config.vad.silero.min_utterance_seconds = min;
+            }
+            if let Some(max) = profile.vad_max {
+                config.vad.silero.max_utterance_seconds = max;
+            }
             info!(
                 "Applied profile '{}' overrides (model: {})",
                 profile.name, config.transcription.model
@@ -147,10 +242,67 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     };
 
     emit_progress("Creating session...");
-    let session_id = gravai_core::session::generate_session_id();
-    let session = Arc::new(Session::new(session_id.clone(), config.clone()));
+    let session_id = previous
+        .as_ref()
+        .map(|s| s.id.clone())
+        .unwrap_or_else(gravai_core::session::generate_session_id);
+    let mut session = Session::new(session_id.clone(), config.clone());
+    if let Some(ref record) = previous {
+        session.started_at = chrono::DateTime::parse_from_rfc3339(&record.started_at)
+            .map_err(|e| format!("Invalid session start: {e}"))?
+            .with_timezone(&chrono::Utc);
+        session.previous_duration_seconds = record.duration_seconds.unwrap_or(0.0).max(0.0);
+        // Separate captures preserve old WAVs and compressed audio, even if devices change.
+        session.recording_dir = gravai_audio::encoder::continuation_directory(
+            &session.session_dir,
+            (session.previous_duration_seconds * 1000.0) as u64,
+        )?;
+    }
+    let session = Arc::new(session);
     session.set_state(SessionState::Recording);
 
+    let startup_result = start_capture(
+        &state,
+        session.clone(),
+        config,
+        previous.as_ref(),
+        session_id.clone(),
+        emit_progress,
+    )
+    .await;
+    if startup_result.is_err() {
+        session.set_state(SessionState::Stopped);
+        if let Some(flag) = get_capture_stop().lock().unwrap().take() {
+            flag.store(true, Ordering::SeqCst);
+        }
+        session.abort_tasks().await;
+        if previous.is_some() {
+            let _ = std::fs::remove_dir_all(&session.recording_dir);
+        }
+        if previous.is_none() {
+            if let Ok(db) = shared_db() {
+                let _ = db.update_session_state(
+                    &session_id,
+                    "stopped",
+                    Some(&chrono::Utc::now().to_rfc3339()),
+                    Some(session.duration_seconds()),
+                );
+            }
+        }
+    }
+    startup_result
+}
+
+// Shared capture setup for new recordings and continuations. Lifecycle cleanup
+// stays with the caller so errors release devices and leave saved sessions usable.
+async fn start_capture(
+    state: &AppState,
+    session: Arc<Session>,
+    config: gravai_config::AppConfig,
+    previous: Option<&gravai_storage::SessionRecord>,
+    session_id: String,
+    emit_progress: impl Fn(&str) + Send + Sync,
+) -> Result<serde_json::Value, String> {
     // Check for running meeting apps (fast — just process list scan)
     let meeting_app = {
         let meetings = gravai_meeting::detector::detect_meeting_apps();
@@ -159,7 +311,8 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
 
     // Store session in DB early — pipelines may insert utterances before this block was reached
     {
-        if let Ok(db) = shared_db() {
+        if previous.is_none() {
+            let db = shared_db()?;
             let record = gravai_storage::SessionRecord {
                 id: session_id.clone(),
                 started_at: session.started_at.to_rfc3339(),
@@ -173,14 +326,14 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 error!("Failed to create session record: {e}");
             }
         }
-        // Register session in AppState early so stop_session works during startup
+        // Register the session so background tasks can resolve the current capture
         let mut session_lock = state.session.write().await;
         *session_lock = Some(session.clone());
     }
 
     // Auto-name session from calendar in background (can take 10-15s with large calendars).
     // Updates the DB and emits an event when done — does not block recording start.
-    {
+    if previous.is_none() && config.features.meeting_detection.calendar_naming {
         let cal_sid = session_id.clone();
         let cal_lead = config.features.meeting_detection.lead_time_seconds;
         let cal_meeting_app = meeting_app.clone();
@@ -225,8 +378,10 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
                 }
             }
         });
+    } else {
+        info!("Calendar auto-naming is off");
     }
-    let session_title: Option<String> = None;
+    let session_title = previous.as_ref().and_then(|s| s.title.clone());
 
     // Determine output directory (custom folder or default)
     let output_dir = session.recording_dir.clone();
@@ -270,9 +425,12 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     // Shared flag to signal the capture thread to stop and release resources
     let capture_stop = Arc::new(AtomicBool::new(false));
     let capture_stop_clone = capture_stop.clone();
+    let (mic_cmd_tx, mic_cmd_rx) = std::sync::mpsc::channel::<MicSwitch>();
+    *capture_cmd_slot().lock().unwrap() = Some(mic_cmd_tx);
 
     let _capture_thread = std::thread::spawn(move || {
         let mut capture = AudioCaptureManager::new(capture_config);
+        let loop_bus = bus.clone();
 
         // Throttle VolumeLevel publishes to 4 Hz per source. The underlying
         // capture callback fires at 10 Hz per source; emitting all of those
@@ -301,6 +459,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         capture.set_volume_callback(volume_cb);
 
         if let Err(e) = capture.start() {
+            *capture_cmd_slot().lock().unwrap() = None;
             let _ = result_tx.send(Err(e.to_string()));
             return;
         }
@@ -311,10 +470,78 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         let _ = sys_lq_tx_ch.send(capture.sys_lq_rx.take());
         let _ = result_tx.send(Ok(()));
 
-        // Wait for stop signal, then drop capture to release mic + SCK
+        // Wait for stop, a mic change, or the open device disappearing.
+        let mut last_device_check = std::time::Instant::now();
         while !capture_stop_clone.load(Ordering::Relaxed) {
+            while let Ok(request) = mic_cmd_rx.try_recv() {
+                let result = capture.switch_mic(request.device_name);
+                if result.is_ok() {
+                    if let Ok(ref name) = result {
+                        loop_bus.publish(GravaiEvent::SessionStartProgress {
+                            message: format!("Microphone listening: {name}"),
+                        });
+                    }
+                }
+                let _ = request.reply.send(result);
+            }
+
+            if last_device_check.elapsed() >= std::time::Duration::from_secs(2) {
+                last_device_check = std::time::Instant::now();
+                if capture.follows_default() {
+                    if let Some(default_name) = AudioCaptureManager::default_input_name() {
+                        if capture.active_mic_name() != Some(default_name.as_str()) {
+                            match capture.restart_mic() {
+                                Ok(name) => {
+                                    info!("Default microphone changed: {name}");
+                                    loop_bus.publish(GravaiEvent::SessionStartProgress {
+                                        message: format!("Microphone listening: {name}"),
+                                    });
+                                }
+                                Err(err) => warn!("Could not follow the default microphone: {err}"),
+                            }
+                        }
+                    }
+                } else if let Some(active) = capture.active_mic_name().map(str::to_string) {
+                    let still_there = AudioCaptureManager::list_devices()
+                        .iter()
+                        .any(|device| device.name == active);
+                    if !still_there {
+                        capture.mark_mic_missing();
+                    }
+                }
+            }
+
+            if capture.take_mic_fault() {
+                let lost = capture
+                    .active_mic_name()
+                    .unwrap_or("Microphone")
+                    .to_string();
+                info!("Microphone '{lost}' is gone — opening the default input");
+                capture.use_default_mic();
+                match capture.restart_mic() {
+                    Ok(name) => {
+                        capture.pin_mic_name(name.clone());
+                        info!("Microphone listening: {name}");
+                        loop_bus.publish(GravaiEvent::SessionStartProgress {
+                            message: format!(
+                                "Microphone disconnected. Listening on {name} instead."
+                            ),
+                        });
+                    }
+                    Err(err) => {
+                        warn!("Could not open a replacement microphone: {err}");
+                        loop_bus.publish(GravaiEvent::Error {
+                            message: format!(
+                                "Microphone disconnected. Pick another mic to keep listening. {err}"
+                            ),
+                        });
+                    }
+                }
+            }
+
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
+        *capture_cmd_slot().lock().unwrap() = None;
         capture.stop();
         info!("Audio capture thread exiting — mic and SCK released");
         // capture drops here, releasing all OS audio resources
@@ -350,12 +577,20 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         session.add_task(handle).await;
     }
 
-    emit_progress("Loading AI models (transcription, diarization, sentiment)...");
-    // Load all AI models in parallel (transcription, diarization, sentiment).
-    // These are the main startup bottleneck — loading them concurrently instead
-    // of sequentially cuts startup time significantly.
-    let trans_config = config.transcription.clone();
     let diar_enabled = config.features.diarization.enabled;
+    let sentiment_enabled = config.features.sentiment.enabled;
+    let mut loading = vec!["transcription"];
+    if diar_enabled {
+        loading.push("diarization");
+    }
+    if sentiment_enabled {
+        loading.push("emotion");
+    }
+    emit_progress(&format!("Loading AI models ({})...", loading.join(", ")));
+    // Load only the models this session will use. Emotion detection and
+    // diarization stay unloaded when their switches are off — both add a
+    // noticeable wait at the start of a recording.
+    let trans_config = config.transcription.clone();
     let diar_config = config.features.diarization.clone();
 
     // Warn about missing pyannote model before we start loading
@@ -392,7 +627,10 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         }
     });
 
-    let sentiment_future = tokio::task::spawn_blocking(|| {
+    let sentiment_future = tokio::task::spawn_blocking(move || {
+        if !sentiment_enabled {
+            return None;
+        }
         gravai_intelligence::OnnxSentimentEngine::try_load()
             .map(|e| Arc::new(e) as Arc<dyn gravai_intelligence::SentimentEngine>)
     });
@@ -426,6 +664,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             }
         };
 
+    let echo_enabled = config.features.echo_suppression.enabled;
     let echo_suppressor = Arc::new(tokio::sync::Mutex::new(EchoSuppressor::new(
         config.features.echo_suppression.similarity_threshold,
     )));
@@ -594,7 +833,11 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
     // crates/gravai-audio/src/pipeline.rs). All it does now is enqueue
     // the utterance for the writer task — the pipeline worker returns
     // immediately and never touches blocking I/O.
-    let on_utterance: pipeline::OnUtterance = Arc::new(move |utterance| {
+    let previous_duration_seconds = session.previous_duration_seconds;
+    let on_utterance: pipeline::OnUtterance = Arc::new(move |mut utterance| {
+        let offset = (previous_duration_seconds * 1000.0) as i64;
+        utterance.start_ms += offset;
+        utterance.end_ms += offset;
         let _ = utt_tx.send(utterance);
     });
 
@@ -608,6 +851,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             vad,
             transcriber: transcriber.clone(),
             echo_suppressor: echo_suppressor.clone(),
+            echo_enabled,
             diarizer: None, // mic is always "You"
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),
@@ -625,6 +869,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
             vad,
             transcriber: transcriber.clone(),
             echo_suppressor: echo_suppressor.clone(),
+            echo_enabled,
             diarizer: diarizer.clone(),
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),
@@ -696,38 +941,49 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         session.add_task(handle).await;
     }
 
+    if previous.is_some() {
+        shared_db()?
+            .reopen_session(&session_id, session.previous_duration_seconds)
+            .map_err(|e| e.to_string())?;
+    }
+
     state.event_bus.publish(GravaiEvent::SessionStateChanged {
         state: "recording".into(),
         session_id: Some(session_id.clone()),
     });
 
-    // Spawn meeting-close monitor: if a meeting app was detected at start,
-    // watch for it to disappear and alert the user (do NOT auto-stop).
+    // If a meeting app was open at start, watch for it to close. When an
+    // end-of-meeting automation will stop the recording, that countdown is
+    // the notice — this path used to say "stop manually" at the same time.
     if let Some(ref app_name) = meeting_app {
         let app = app_name.clone();
-        let bus = state.event_bus.clone();
-        let session_ref = session.clone();
-        // Run meeting monitor on a dedicated OS thread (SCK is not Send)
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(10));
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                if !session_ref.is_active() {
-                    break;
+        if meeting_end_auto_stop_enabled(&app) {
+            info!("Meeting app '{app}' will auto-stop via automation when it ends");
+        } else {
+            let bus = state.event_bus.clone();
+            let session_ref = session.clone();
+            // Run meeting monitor on a dedicated OS thread (SCK is not Send)
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    if !session_ref.is_active() {
+                        break;
+                    }
+                    let current = gravai_meeting::detector::detect_meeting_apps();
+                    let still_running = current.iter().any(|m| m.app_name == app);
+                    if !still_running {
+                        info!("Meeting app '{app}' closed while recording — notifying user");
+                        bus.publish(GravaiEvent::Error {
+                            message: format!(
+                                "{app} closed. Recording continues — stop manually when ready."
+                            ),
+                        });
+                        break;
+                    }
                 }
-                let current = gravai_meeting::detector::detect_meeting_apps();
-                let still_running = current.iter().any(|m| m.app_name == app);
-                if !still_running {
-                    info!("Meeting app '{app}' closed while recording — notifying user");
-                    bus.publish(GravaiEvent::Error {
-                        message: format!(
-                            "{app} closed. Recording continues — stop manually when ready."
-                        ),
-                    });
-                    break;
-                }
-            }
-        });
+            });
+        }
     }
 
     info!("Session {session_id} started");
@@ -736,6 +992,7 @@ pub async fn start_session(state: State<'_, Arc<AppState>>) -> Result<serde_json
         "id": session_id,
         "state": "recording",
         "title": session_title,
+        "duration_seconds": session.duration_seconds(),
         "meeting_app": meeting_app,
     }))
 }
@@ -783,6 +1040,8 @@ pub async fn resume_session(state: State<'_, Arc<AppState>>) -> Result<serde_jso
 /// Stop the active recording session.
 #[tauri::command]
 pub async fn stop_session(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+    let _lifecycle_guard = SessionStartGuard::try_acquire()
+        .ok_or("A session is starting or stopping; please try again shortly")?;
     let session = {
         let session_lock = state.session.read().await;
         session_lock.as_ref().ok_or("No active session")?.clone()
@@ -920,6 +1179,123 @@ pub async fn list_sessions() -> Result<serde_json::Value, String> {
 pub async fn detect_meetings() -> Result<serde_json::Value, String> {
     let meetings = gravai_meeting::detector::detect_meeting_apps();
     serde_json::to_value(&meetings).map_err(|e| e.to_string())
+}
+
+/// Apply meeting-start automations for calls already in progress.
+///
+/// The detector emits those events during startup, often before the window
+/// is listening, so a Zoom that is already open would not start a recording.
+#[tauri::command]
+pub async fn sync_meeting_automations(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let recording = state
+        .session
+        .read()
+        .await
+        .as_ref()
+        .is_some_and(|session| session.is_active());
+    if recording {
+        return Ok(());
+    }
+    let store = gravai_config::automations::AutomationStore::load();
+    for meeting in gravai_meeting::detector::detect_meeting_apps() {
+        let runs: Vec<_> = store
+            .meeting_start_automations(&meeting.app_name)
+            .into_iter()
+            .cloned()
+            .collect();
+        crate::fire_automations(&app, &runs, false, "");
+    }
+    Ok(())
+}
+
+/// Run session-ended automations. Also honors the export setting on the
+/// active config, which is the same markdown write.
+pub fn run_session_ended_automations(session_id: &str) {
+    use gravai_config::automations::{AutomationAction, AutomationStore, AutomationTrigger};
+
+    let store = AutomationStore::load();
+    let export_rules: Vec<_> = store
+        .automations
+        .values()
+        .filter(|automation| {
+            automation.enabled
+                && automation.trigger == AutomationTrigger::SessionEnded
+                && automation.conditions_hold(false)
+                && automation.actions.iter().any(|action| {
+                    matches!(
+                        action,
+                        AutomationAction::RunExport { format } if format == "markdown"
+                    )
+                })
+        })
+        .cloned()
+        .collect();
+    let config_wants_export = gravai_config::load_config().export.auto_export_transcript;
+    if export_rules.is_empty() && !config_wants_export {
+        return;
+    }
+    match export_session_markdown(session_id) {
+        Ok(path) => info!("Exported transcript to {}", path.display()),
+        Err(err) => {
+            info!("Transcript export skipped: {err}");
+            return;
+        }
+    }
+    for automation in &export_rules {
+        let mut store = AutomationStore::load();
+        store.record_run(&automation.id);
+        let _ = store.save();
+    }
+}
+
+fn export_session_markdown(session_id: &str) -> Result<std::path::PathBuf, String> {
+    let db = shared_db()?;
+    let utterances = db.get_utterances(session_id).map_err(|e| e.to_string())?;
+    if utterances.is_empty() {
+        return Err("no transcript yet".into());
+    }
+    let config = gravai_config::load_config();
+    let export_dir = config
+        .export
+        .transcript_folder
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| gravai_config::data_dir().join("exports"));
+    std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
+    let bookmarks = db.list_bookmarks(session_id).unwrap_or_default();
+    let session = db.get_session(session_id).ok().flatten();
+    let data = gravai_export::ExportData {
+        session_id: session_id.to_string(),
+        title: session.as_ref().and_then(|row| row.title.clone()),
+        started_at: utterances[0].timestamp.clone(),
+        ended_at: session.as_ref().and_then(|row| row.ended_at.clone()),
+        duration_seconds: session.as_ref().and_then(|row| row.duration_seconds),
+        meeting_app: session.as_ref().and_then(|row| row.meeting_app.clone()),
+        utterances: utterances
+            .iter()
+            .map(|utterance| gravai_export::ExportUtterance {
+                timestamp: utterance.timestamp.clone(),
+                source: utterance.source.clone(),
+                speaker: utterance.speaker.clone(),
+                text: utterance.text.clone(),
+            })
+            .collect(),
+        bookmarks: bookmarks
+            .iter()
+            .map(|bookmark| gravai_export::ExportBookmark {
+                offset_ms: bookmark.offset_ms,
+                note: bookmark.note.clone(),
+            })
+            .collect(),
+        summary: None,
+    };
+    let markdown =
+        gravai_export::markdown::export_markdown(&data, &gravai_export::ExportOptions::default());
+    let path = export_dir.join(format!("{session_id}.md"));
+    std::fs::write(&path, markdown).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 /// Rename a session — updates the `title` column in the sessions table.

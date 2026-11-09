@@ -26,6 +26,14 @@
   let calBusy = $state(false);
   let calMsg = $state("");
 
+  // Optional work that costs CPU or waits on a model. Each switch skips that work.
+  let meetingDetect = $state(true);
+  let calendarNaming = $state(true);
+  let sentimentOn = $state(false);
+  let autoCompress = $state(true);
+  let autoIndex = $state(true);
+  let perfMsg = $state("");
+
   // Transcript correction state
   let corrEnabled = $state(false);
   let corrModel = $state("");
@@ -40,6 +48,7 @@
     await loadRawConfig();
     await loadPerf();
     await loadUpdatesConfig();
+    await loadPerformance();
     await loadCorrectionConfig();
     await loadCalendarAuth();
     try { currentVersion = await invoke("get_app_version"); } catch (_) {}
@@ -139,6 +148,50 @@
 
   async function saveAutoCheck() {
     try { await invoke("update_config", { patch: { updates: { auto_check: autoCheck } } }); } catch (_) {}
+  }
+
+  async function loadPerformance() {
+    try {
+      const cfg: any = await invoke("get_config");
+      meetingDetect = cfg.features?.meeting_detection?.enabled ?? true;
+      calendarNaming = cfg.features?.meeting_detection?.calendar_naming ?? true;
+      sentimentOn = cfg.features?.sentiment?.enabled ?? false;
+      autoCompress = cfg.audio?.recording?.auto_compress ?? true;
+      autoIndex = cfg.embedding?.auto_index ?? true;
+      // The active profile is re-applied at every recording start, so its
+      // explicit switches are what the next session will actually do.
+      const ps: any = await invoke("get_profiles");
+      const active = ps?.active_profile_id ? ps.profiles?.[ps.active_profile_id] : null;
+      if (active?.meeting_enabled != null) meetingDetect = active.meeting_enabled;
+      if (active?.sentiment_enabled != null) sentimentOn = active.sentiment_enabled;
+    } catch (_) {}
+  }
+
+  async function savePerformance() {
+    try {
+      await invoke("update_config", {
+        patch: {
+          features: {
+            meeting_detection: { enabled: meetingDetect, calendar_naming: calendarNaming },
+            sentiment: { enabled: sentimentOn },
+          },
+          audio: { recording: { auto_compress: autoCompress } },
+          embedding: { auto_index: autoIndex },
+        },
+      });
+      const ps: any = await invoke("get_profiles");
+      const id = ps?.active_profile_id;
+      const profile = id ? ps.profiles?.[id] : null;
+      if (profile) {
+        profile.meeting_enabled = meetingDetect;
+        profile.sentiment_enabled = sentimentOn;
+        await invoke("save_profile", { profile });
+      }
+      perfMsg = "Saved.";
+      setTimeout(() => (perfMsg = ""), 1500);
+    } catch (e: any) {
+      perfMsg = `Error: ${e}`;
+    }
   }
 
   async function loadCorrectionConfig() {
@@ -284,6 +337,8 @@
           Gravai reads your calendar to auto-name recording sessions from the meeting you're in.
           If session names stopped matching your meetings, macOS may have revoked access (this can
           happen when the app is updated or re-signed). Re-authorize to restore it.
+          A large calendar can make that lookup take up to a minute — turn it off below if you
+          don't need automatic names.
         </span>
         {#if calMsg}<span class="cal-msg">{calMsg}</span>{/if}
       </div>
@@ -295,6 +350,77 @@
           </button>
         {/if}
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Work the user can turn off -->
+<div class="card">
+  <div class="card-header">
+    Optional work
+    {#if perfMsg}<span class="update-version-badge">{perfMsg}</span>{/if}
+  </div>
+  <div class="settings-grid">
+    <div class="setting-row">
+      <label class="toggle-label" for="meeting-detect">
+        <input class="toggle" type="checkbox" id="meeting-detect" bind:checked={meetingDetect} onchange={(ev) => { meetingDetect = (ev.currentTarget as HTMLInputElement).checked; savePerformance(); }} />
+        <div class="setting-info">
+          <span class="setting-label">Meeting detection</span>
+          <span class="setting-desc">
+            Every few seconds Gravai scans running apps and their network sockets to notice
+            Zoom, Teams, Slack, and similar calls. Turn this off to stop that scan and the
+            "Meeting detected" prompt. Takes effect within a few seconds.
+          </span>
+        </div>
+      </label>
+    </div>
+    <div class="setting-row">
+      <label class="toggle-label" for="calendar-naming">
+        <input class="toggle" type="checkbox" id="calendar-naming" bind:checked={calendarNaming} onchange={(ev) => { calendarNaming = (ev.currentTarget as HTMLInputElement).checked; savePerformance(); }} />
+        <div class="setting-info">
+          <span class="setting-label">Name sessions from the calendar</span>
+          <span class="setting-desc">
+            On each recording start, look up the event you're in and use its title.
+            This runs in the background, but on a large calendar it can sit on CPU for up to a minute.
+          </span>
+        </div>
+      </label>
+    </div>
+    <div class="setting-row">
+      <label class="toggle-label" for="sentiment-on">
+        <input class="toggle" type="checkbox" id="sentiment-on" bind:checked={sentimentOn} onchange={(ev) => { sentimentOn = (ev.currentTarget as HTMLInputElement).checked; savePerformance(); }} />
+        <div class="setting-info">
+          <span class="setting-label">Emotion detection</span>
+          <span class="setting-desc">
+            Loads the go-emotions model when a recording starts and runs it on each remote utterance.
+            Off skips that load and the per-utterance pass. The next recording uses this choice.
+          </span>
+        </div>
+      </label>
+    </div>
+    <div class="setting-row">
+      <label class="toggle-label" for="auto-compress">
+        <input class="toggle" type="checkbox" id="auto-compress" bind:checked={autoCompress} onchange={(ev) => { autoCompress = (ev.currentTarget as HTMLInputElement).checked; savePerformance(); }} />
+        <div class="setting-info">
+          <span class="setting-label">Compress audio when a recording stops</span>
+          <span class="setting-desc">
+            Encodes the raw WAV tracks to AAC and deletes them. Turn off to keep the WAV files
+            and skip that encode.
+          </span>
+        </div>
+      </label>
+    </div>
+    <div class="setting-row">
+      <label class="toggle-label" for="auto-index">
+        <input class="toggle" type="checkbox" id="auto-index" bind:checked={autoIndex} onchange={(ev) => { autoIndex = (ev.currentTarget as HTMLInputElement).checked; savePerformance(); }} />
+        <div class="setting-info">
+          <span class="setting-label">Index sessions for semantic search</span>
+          <span class="setting-desc">
+            Opening a session in Archive embeds its transcript. With a large embedding model
+            that is the slow part. Off leaves search to keyword match until you turn it back on.
+          </span>
+        </div>
+      </label>
     </div>
   </div>
 </div>

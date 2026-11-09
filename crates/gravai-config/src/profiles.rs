@@ -20,6 +20,13 @@ pub struct Profile {
     pub diarization_enabled: Option<bool>,
     pub sentiment_enabled: Option<bool>,
     pub echo_suppression_enabled: Option<bool>,
+    /// Background meeting-app scan. `None` leaves the saved config as-is.
+    pub meeting_enabled: Option<bool>,
+    /// VAD engine override: "webrtc" (light) or "silero" (heavier ONNX model).
+    pub vad_engine: Option<String>,
+    pub vad_pause: Option<f32>,
+    pub vad_min: Option<f32>,
+    pub vad_max: Option<f32>,
     /// Per-utterance LLM transcript correction toggle.
     pub correction_enabled: Option<bool>,
     /// LLM overrides
@@ -44,6 +51,11 @@ impl Default for Profile {
             diarization_enabled: None,
             sentiment_enabled: None,
             echo_suppression_enabled: None,
+            meeting_enabled: None,
+            vad_engine: None,
+            vad_pause: None,
+            vad_min: None,
+            vad_max: None,
             correction_enabled: None,
             llm_provider: None,
             llm_model: None,
@@ -82,7 +94,11 @@ pub fn builtin_profiles() -> Vec<Profile> {
             preset_id: Some("minimal".into()),
             transcription_model: Some("tiny".into()),
             diarization_enabled: Some(false),
+            sentiment_enabled: Some(false),
             echo_suppression_enabled: Some(false),
+            meeting_enabled: Some(false),
+            correction_enabled: Some(false),
+            vad_engine: Some("webrtc".into()),
             ..Default::default()
         },
     ]
@@ -103,6 +119,29 @@ impl ProfileStore {
                 if let Ok(mut store) = serde_json::from_str::<Self>(&content) {
                     let mut migrated = false;
                     for profile in store.profiles.values_mut() {
+                        if profile.vad_max.is_some_and(|max| (max - 30.0).abs() < 0.01) {
+                            profile.vad_max = Some(12.0);
+                            migrated = true;
+                        }
+                        if profile
+                            .llm_local_model
+                            .as_deref()
+                            .is_some_and(|m| m.contains("gemma"))
+                        {
+                            profile.llm_local_model = Some("qwen3-4b".into());
+                            migrated = true;
+                        }
+                        if profile
+                            .llm_model
+                            .as_deref()
+                            .is_some_and(|m| m.to_lowercase().contains("gemma"))
+                        {
+                            profile.llm_model = None;
+                            if profile.llm_local_model.is_none() {
+                                profile.llm_local_model = Some("qwen3-4b".into());
+                            }
+                            migrated = true;
+                        }
                         if let Some(ref p) = profile.llm_provider {
                             let new_p = match p.as_str() {
                                 "ollama" => Some("local"),

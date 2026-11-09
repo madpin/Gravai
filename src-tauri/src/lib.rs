@@ -41,7 +41,7 @@ fn make_tray_icon() -> tauri::image::Image<'static> {
 
 /// Execute a list of automation actions by emitting events to the frontend.
 /// `currently_recording` is the live recording state at the time of the call.
-fn run_automation_actions(
+pub(crate) fn run_automation_actions(
     handle: &tauri::AppHandle,
     // Short noun-phrase shown in the auto-stop countdown banner (e.g.
     // "Zoom meeting ended"). Only used by the `StopRecording` action.
@@ -65,7 +65,13 @@ fn run_automation_actions(
                     tracing::info!("Automation: arming auto-stop countdown");
                     let _ = handle.emit(
                         "gravai:auto-stop-countdown",
-                        serde_json::json!({ "reason": reason }),
+                        serde_json::json!({
+                            "reason": reason,
+                            // Zoom (and any other meeting-end automation) waits
+                            // 10s so the user can keep the recording. Silence
+                            // uses its own 60s countdown.
+                            "seconds": 10,
+                        }),
                     );
                 }
             }
@@ -82,7 +88,18 @@ fn run_automation_actions(
                 }
             }
             AutomationAction::ActivateProfile { profile_id } => {
-                // Profile activation is fire-and-forget via the frontend
+                // Apply before StartRecording. start_session reads the active
+                // profile from disk, and nothing in the window listens for this.
+                let mut store = gravai_config::profiles::ProfileStore::load();
+                if store.activate(profile_id).is_some() {
+                    if let Err(err) = store.save() {
+                        tracing::warn!("Automation: could not save profile {profile_id}: {err}");
+                    } else {
+                        tracing::info!("Automation: activated profile {profile_id}");
+                    }
+                } else {
+                    tracing::warn!("Automation: profile '{profile_id}' not found");
+                }
                 let _ = handle.emit("gravai:automation-activate-profile", profile_id);
             }
             // Other actions (ActivatePreset, RunExport) are handled by the frontend
@@ -93,6 +110,37 @@ fn run_automation_actions(
                 );
             }
         }
+    }
+}
+
+fn mark_automation_ran(id: &str) {
+    let mut store = gravai_config::automations::AutomationStore::load();
+    store.record_run(id);
+    let _ = store.save();
+}
+
+pub(crate) fn fire_automations(
+    handle: &tauri::AppHandle,
+    automations: &[gravai_config::automations::Automation],
+    recording: bool,
+    stop_reason: &str,
+) {
+    use gravai_config::automations::AutomationAction;
+    for automation in automations {
+        if !automation.conditions_hold(recording) {
+            continue;
+        }
+        let reason = if automation
+            .actions
+            .iter()
+            .any(|action| matches!(action, AutomationAction::StopRecording))
+        {
+            stop_reason
+        } else {
+            automation.name.as_str()
+        };
+        run_automation_actions(handle, reason, &automation.actions, recording);
+        mark_automation_ran(&automation.id);
     }
 }
 
@@ -151,9 +199,27 @@ pub fn run() {
     {
         let meeting_bus = app_state.event_bus.clone();
         let meeting_config = config.features.meeting_detection.clone();
+        let meeting_state = app_state.clone();
         let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
         tauri::async_runtime::spawn(async move {
-            gravai_meeting::detector::run_detection_loop(meeting_config, meeting_bus, active).await;
+            gravai_meeting::detector::run_detection_loop(
+                move || {
+                    let meeting_state = meeting_state.clone();
+                    async move {
+                        meeting_state
+                            .config
+                            .read()
+                            .await
+                            .features
+                            .meeting_detection
+                            .enabled
+                    }
+                },
+                meeting_config,
+                meeting_bus,
+                active,
+            )
+            .await;
         });
     }
 
@@ -421,6 +487,7 @@ pub fn run() {
                                 continue;
                             }
                             countdown_active_for_task.store(true, Ordering::Relaxed);
+                            mark_automation_ran("silence-auto-stop");
                             let _ = handle_for_silence.emit(
                                 "gravai:silence-countdown",
                                 serde_json::json!({
@@ -499,6 +566,13 @@ pub fn run() {
                                 GravaiEvent::SessionStateChanged { state, session_id } => {
                                     let recording = state == "recording";
                                     is_recording.store(recording, Ordering::Relaxed);
+                                    if state == "stopped" {
+                                        if let Some(sid) = session_id.clone() {
+                                            std::thread::spawn(move || {
+                                                commands::run_session_ended_automations(&sid);
+                                            });
+                                        }
+                                    }
                                     if recording {
                                         // Reset all silence trackers at session
                                         // start so previous-session state never
@@ -525,23 +599,29 @@ pub fn run() {
                                     )
                                 }
                                 GravaiEvent::MeetingDetected { app_name, window_title } => {
-                                    // Fire any automations triggered by this meeting app
+                                    let recording = is_recording.load(Ordering::Relaxed);
                                     let store = gravai_config::automations::AutomationStore::load();
-                                    for automation in store.find_for_meeting_detected(app_name) {
-                                        run_automation_actions(&handle, &automation.name, &automation.actions, is_recording.load(Ordering::Relaxed));
-                                    }
+                                    let runs: Vec<_> = store
+                                        .meeting_start_automations(app_name)
+                                        .into_iter()
+                                        .cloned()
+                                        .collect();
+                                    fire_automations(&handle, &runs, recording, "");
                                     (
                                         "gravai:meeting",
                                         serde_json::json!({ "app_name": app_name, "window_title": window_title }),
                                     )
                                 }
                                 GravaiEvent::MeetingEnded { app_name } => {
-                                    // Fire any automations triggered by this meeting ending
+                                    let recording = is_recording.load(Ordering::Relaxed);
                                     let store = gravai_config::automations::AutomationStore::load();
+                                    let runs: Vec<_> = store
+                                        .find_for_meeting_ended(app_name)
+                                        .into_iter()
+                                        .cloned()
+                                        .collect();
                                     let reason = format!("{app_name} meeting ended");
-                                    for automation in store.find_for_meeting_ended(app_name) {
-                                        run_automation_actions(&handle, &reason, &automation.actions, is_recording.load(Ordering::Relaxed));
-                                    }
+                                    fire_automations(&handle, &runs, recording, &reason);
                                     (
                                         "gravai:meeting-ended",
                                         serde_json::json!({ "app_name": app_name }),
@@ -623,11 +703,13 @@ pub fn run() {
             commands::get_recent_logs,
             commands::get_health_report,
             commands::list_audio_devices,
+            commands::switch_microphone,
             commands::list_running_apps,
             commands::list_capturable_apps,
             commands::set_source_gain,
             commands::get_session_audio_path,
             commands::start_session,
+            commands::continue_session,
             commands::pause_session,
             commands::resume_session,
             commands::stop_session,
@@ -636,6 +718,7 @@ pub fn run() {
             commands::search_utterances,
             commands::list_sessions,
             commands::detect_meetings,
+            commands::sync_meeting_automations,
             // Phase 3: Intelligence
             commands::summarize_session,
             commands::get_session_summary,

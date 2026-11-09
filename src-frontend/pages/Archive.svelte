@@ -5,7 +5,7 @@
   import AudioPlayer from "../components/AudioPlayer.svelte";
   import Icon from "../components/Icon.svelte";
   import LlmStatusBanner from "../components/LlmStatusBanner.svelte";
-  import { pendingArchiveSessionId } from "../lib/store";
+  import { pendingArchiveSessionId, isRecording, isPaused, currentSessionId, sessionStartTime, lastSessionId, liveUtterances, liveSummary, bookmarkCount, currentPage, clearAlerts } from "../lib/store";
   import { get } from "svelte/store";
 
   let sessions = $state<any[]>([]);
@@ -22,6 +22,31 @@
   let exportFormat = $state("m4a-aac");
   let exportMsg = $state("");
   let bookmarks = $state<any[]>([]);
+
+  let continuing = $state(false);
+  let continueError = $state<string | null>(null);
+
+  async function continueRecording() {
+    if (!selectedId || continuing || $isRecording) return;
+    continuing = true;
+    continueError = null;
+    const previousTranscript = utterances;
+    const previousBookmarkCount = bookmarks.length;
+    try {
+      const result: { id: string; duration_seconds: number } = await invoke("continue_session", { sessionId: selectedId });
+      currentSessionId.set(result.id);
+      lastSessionId.set(result.id);
+      sessionStartTime.set(Date.now() - result.duration_seconds * 1000);
+      liveUtterances.set(previousTranscript);
+      liveSummary.set(null);
+      bookmarkCount.set(previousBookmarkCount);
+      isRecording.set(true);
+      isPaused.set(false);
+      clearAlerts();
+      currentPage.set("recording");
+    } catch (e) { continueError = String(e); }
+    finally { continuing = false; }
+  }
 
   // Audio player state
   let audioPath = $state<string | null>(null);
@@ -61,6 +86,7 @@
 
   async function select(id: string) {
     selectedId = id;
+    continueError = null;
     summary = null;
     summaryError = null;
     searchResults = null;
@@ -84,8 +110,13 @@
       audioError = typeof e === "string" ? e : e?.message ?? "Audio not available";
     }
     audioLoading = false;
-    // Auto-generate embeddings in background
-    invoke("generate_embeddings", { sessionId: id }).catch(() => {});
+    // Embeddings are optional. A neural model makes this the slow part of opening a session.
+    try {
+      const cfg: any = await invoke("get_config");
+      if (cfg?.embedding?.auto_index !== false) {
+        invoke("generate_embeddings", { sessionId: id }).catch(() => {});
+      }
+    } catch (_) {}
   }
 
   function fmtOffsetMs(ms: number): string {
@@ -357,7 +388,7 @@
           <button class="title-edit-btn" onclick={startSessionTitleEdit} title="Rename session" aria-label="Rename session">
             <Icon name="pencil" size={13}/>
           </button>
-          <button class="title-edit-btn delete-btn" onclick={() => showDeleteConfirm = true} title="Delete session" aria-label="Delete session">
+          <button class="title-edit-btn delete-btn" onclick={() => showDeleteConfirm = true} disabled={continuing} title="Delete session" aria-label="Delete session">
             <Icon name="trash" size={13}/>
           </button>
         {/if}
@@ -385,6 +416,11 @@
         </div>
       {/if}
       <div class="archive-actions">
+        <button class="btn btn-xs btn-accent" onclick={continueRecording}
+          disabled={continuing || $isRecording || selectedSession?.state !== "stopped"}
+          title={$isRecording ? "Stop the active recording first" : "Add more audio to this recording"}>
+          <Icon name={continuing ? "spinner" : "record"} size={13}/> {continuing ? "Continuing..." : "Continue Recording"}
+        </button>
         <button class="btn btn-xs btn-accent" onclick={summarize} disabled={summaryLoading}>
           {#if summaryLoading}<Icon name="spinner" size={13}/> Generating...{:else}<Icon name="file-text" size={13}/> Generate Summary{/if}
         </button>
@@ -400,6 +436,8 @@
         <button class="btn btn-xs btn-ghost" onclick={exportAudio}><Icon name="speaker" size={13}/> Export Audio</button>
         {#if exportMsg}<span class="action-msg">{exportMsg}</span>{/if}
       </div>
+
+      {#if continueError}<p class="action-msg" role="alert">Could not continue recording: {continueError}</p>{/if}
 
       <!-- LLM loading progress: surfaces first-run download/quantize so the
            Generate Summary button doesn't look stuck. -->

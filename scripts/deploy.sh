@@ -22,8 +22,16 @@ DEST="/Applications/Gravai.app"
 TS="$(date +%Y%m%d-%H%M%S)"
 LOGFILE="/tmp/gravai-deploy-${TS}.log"
 
-# Disable Metal shader precompilation (works without full Xcode.app)
-export MISTRALRS_METAL_PRECOMPILE="${MISTRALRS_METAL_PRECOMPILE:-0}"
+# Don't let a debug RUSTC_LOG flood the deploy log or change rustc's behavior.
+unset RUSTC_LOG
+
+# Bake Metal shaders into the app. Always 1: a leftover 0 in the environment
+# compiles every kernel again on model load (the multi-minute warmup).
+export MISTRALRS_METAL_PRECOMPILE=1
+export MISTRALRS_METAL_PLATFORMS="${MISTRALRS_METAL_PLATFORMS:-macos}"
+if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
+  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
 export CARGO_BUILD_JOBS="$JOBS"
 if command -v clang >/dev/null 2>&1; then
   CLANG_RT_DIR="$(clang -print-resource-dir 2>/dev/null)/lib/darwin"

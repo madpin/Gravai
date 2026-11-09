@@ -80,8 +80,14 @@ impl AudioResampler {
                             output.push(sum / resampled.len() as f32);
                         }
                     } else {
-                        // Take first channel or interleave
-                        output.extend_from_slice(&resampled[0]);
+                        let frames = resampled[0].len();
+                        let out_ch = self.target_channels as usize;
+                        for i in 0..frames {
+                            for c in 0..out_ch {
+                                let src = if c < resampled.len() { c } else { 0 };
+                                output.push(resampled[src].get(i).copied().unwrap_or(0.0));
+                            }
+                        }
                     }
                 }
                 Err(e) => {

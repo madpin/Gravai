@@ -19,9 +19,11 @@
   let summaryError = $state<string | null>(null);
   let sentimentData = $state<any>(null);
 
-  // Device selection
+  // Device selection. Empty name means the system default input.
   let micDevices = $state<any[]>([]);
-  let selectedMicIndex = $state(-1);
+  let selectedMicName = $state("");
+  let knownMicNames = "";
+  let devicePoll: number | null = null;
   let runningApps = $state<any[]>([]);
   let selectedAppBundleId = $state("");
 
@@ -69,7 +71,7 @@
       await invoke("update_config", {
         patch: {
           audio: {
-            microphone: { enabled: micEnabled, device_index: selectedMicIndex },
+            microphone: { enabled: micEnabled, device_name: selectedMicName, device_index: -1 },
             system_audio: { enabled: sysEnabled, app_bundle_id: selectedAppBundleId }
           }
         }
@@ -180,6 +182,11 @@
   async function checkMeetings() {
     if (get(isRecording)) { dismissAlertsByLevel("meeting"); return; }
     try {
+      const cfg: any = await invoke("get_config");
+      if (cfg?.features?.meeting_detection?.enabled === false) {
+        dismissAlertsByLevel("meeting");
+        return;
+      }
       const meetings: any[] = await invoke("detect_meetings");
       if (meetings.length > 0) {
         const appKey = meetings.map(m => m.app_name).sort().join(",");
@@ -207,12 +214,42 @@
     dismissAlertsByLevel("meeting");
   }
 
+  async function applyMicChoice() {
+    const name = selectedMicName;
+    try {
+      await invoke("update_config", {
+        patch: {
+          audio: {
+            microphone: { enabled: true, device_name: name, device_index: -1 },
+          },
+        },
+      });
+      micEnabled = true;
+      if (get(isRecording)) {
+        const label: string = await invoke("switch_microphone", { deviceName: name });
+        if (name) selectedMicName = label || name;
+        log(`Microphone listening: ${label || "default"}`);
+      } else {
+        log(`Microphone set: ${name || "default"}`);
+      }
+    } catch (e) {
+      log(`Microphone switch failed: ${e}`);
+    }
+  }
+
   async function loadDevices() {
     try {
       const devices: any[] = await invoke("list_audio_devices");
-      micDevices = devices.filter(d => d.device_type === "microphone" || d.device_type === "input");
-      if (micDevices.length === 0) micDevices = devices;
-      log(`${devices.length} audio device(s) found`);
+      const mics = devices.filter(d => d.device_type === "microphone" || d.device_type === "input");
+      const next = mics.length === 0 ? devices : mics;
+      const key = next.map(d => d.name).join("\n");
+      if (key !== knownMicNames) {
+        if (knownMicNames && selectedMicName && !next.some(d => d.name === selectedMicName)) {
+          log(`Microphone “${selectedMicName}” is no longer connected`);
+        }
+        knownMicNames = key;
+      }
+      micDevices = next;
     } catch (_) {}
     // Use SCK to get apps with bundle IDs (needed for per-app audio filtering).
     // Falls back to ps-based list if SCK isn't available.
@@ -254,7 +291,7 @@
           actions: [{ label: "Go to Models", handler: () => currentPage.set("models") }],
           dismissable: true,
         });
-      } else if (msg.includes("closed")) {
+      } else if (msg.includes("closed") || msg.includes("Microphone disconnected")) {
         addAlert({
           level: "warning",
           message: msg,
@@ -300,6 +337,14 @@
         if (msg.startsWith("Meeting detected: ")) {
           sessionTitle = msg.replace("Meeting detected: ", "");
         }
+        const replaced = msg.match(/Listening on (.+) instead\.$/)?.[1];
+        if (replaced) {
+          selectedMicName = replaced;
+          invoke("update_config", {
+            patch: { audio: { microphone: { enabled: true, device_name: replaced, device_index: -1 } } },
+          }).catch(() => {});
+          loadDevices();
+        }
       }
     });
     unlisteners.push(usp);
@@ -323,7 +368,12 @@
       exportRealtimeSave = cfg.export?.realtime_save ?? true;
       micEnabled = cfg.audio?.microphone?.enabled ?? true;
       sysEnabled = cfg.audio?.system_audio?.enabled ?? true;
-      if (cfg.audio?.microphone?.device_index != null) selectedMicIndex = cfg.audio.microphone.device_index;
+      if (cfg.audio?.microphone?.device_name) {
+        selectedMicName = cfg.audio.microphone.device_name;
+      } else if ((cfg.audio?.microphone?.device_index ?? -1) >= 0) {
+        const saved = micDevices.find(d => d.index === cfg.audio.microphone.device_index);
+        selectedMicName = saved?.name ?? "";
+      }
     } catch (_) {}
     try {
       const ps: any = await invoke("get_presets");
@@ -339,9 +389,18 @@
     } catch (_) {}
     checkMeetings();
     meetingPoll = window.setInterval(checkMeetings, 10000);
+    devicePoll = window.setInterval(loadDevices, 3000);
     // If a session was started externally (e.g. by automation) while this page
     // wasn't mounted, resume the timer and transcript poll.
     if (get(isRecording) && !timerInterval) {
+      const sid = get(currentSessionId);
+      if (sid) {
+        try {
+          const sessions: any[] = await invoke("list_sessions");
+          sessionTitle = sessions.find(s => s.id === sid)?.title ?? "";
+        } catch (_) {}
+      }
+      lastUtteranceId = Math.max(0, ...get(liveUtterances).map(u => u.id));
       startTimer();
       startTranscriptPoll();
     }
@@ -351,6 +410,7 @@
   onDestroy(() => {
     stopTimer(); stopTranscriptPoll();
     if (meetingPoll) clearInterval(meetingPoll);
+    if (devicePoll) clearInterval(devicePoll);
     for (const u of unlisteners) u();
   });
 
@@ -454,7 +514,7 @@
             </div>
             <div class="config-tooltip">
               <div class="config-tooltip-row"><Icon name="message-circle" size={11}/> Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
-              <div class="config-tooltip-row"><Icon name="bot" size={11}/> {activeProfile.llm_provider || 'local'} ({activeProfile.llm_provider === 'api' ? (activeProfile.llm_model || 'gpt-4o-mini') : (activeProfile.llm_local_model || 'gemma-4-e2b')})</div>
+              <div class="config-tooltip-row"><Icon name="bot" size={11}/> {activeProfile.llm_provider || 'local'} ({activeProfile.llm_provider === 'api' ? (activeProfile.llm_model || 'gpt-4o-mini') : (activeProfile.llm_local_model || 'qwen3-4b')})</div>
               <div class="config-tooltip-row"><Icon name="users" size={11}/> Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
               {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row"><Icon name="file-text" size={11}/> Auto-export transcript</div>{/if}
               {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row"><Icon name="save" size={11}/> Real-time save</div>{/if}
@@ -477,8 +537,8 @@
       </span>
     </div>
 
-    <!-- Local LLM engine status (loading / first run / error) -->
-    <LlmStatusBanner />
+    <!-- Model load and errors. Summarizing is shown once, inside Summary. -->
+    <LlmStatusBanner scope="status" />
 
     <!-- Export status indicator -->
     {#if exportAutoTranscript || exportAutoAudio || exportRealtimeSave}
@@ -501,10 +561,13 @@
           </div>
           <div class="source-row-bottom">
             <div class="source-device">
-              <select class="select select-sm" bind:value={selectedMicIndex}>
-                <option value={-1}>Default mic</option>
+              <select class="select select-sm" bind:value={selectedMicName} onchange={applyMicChoice}>
+                <option value="">Default mic</option>
+                {#if selectedMicName && !micDevices.some(d => d.name === selectedMicName)}
+                  <option value={selectedMicName}>{selectedMicName} (disconnected)</option>
+                {/if}
                 {#each micDevices as d}
-                  <option value={d.index}>{d.name}</option>
+                  <option value={d.name}>{d.name}</option>
                 {/each}
               </select>
             </div>
@@ -546,7 +609,7 @@
             {#if summaryLoading}<Icon name="spinner" size={12}/> Generating...{:else}Generate Summary{/if}
           </button>
         </summary>
-        <LlmStatusBanner />
+        <LlmStatusBanner scope="summary" />
         {#if summaryError}
           <div class="summary-error">
             <div class="summary-error-line">

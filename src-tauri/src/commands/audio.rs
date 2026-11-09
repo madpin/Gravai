@@ -31,6 +31,23 @@ pub async fn list_capturable_apps() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!(apps))
 }
 
+/// Open a different microphone without stopping the recording.
+/// `device_name` empty follows the system default input.
+#[tauri::command]
+pub async fn switch_microphone(
+    state: State<'_, Arc<AppState>>,
+    device_name: String,
+) -> Result<String, String> {
+    {
+        let mut config = state.config.write().await;
+        config.audio.microphone.device_name = device_name.clone();
+        config.audio.microphone.device_index = -1;
+        config.audio.microphone.enabled = true;
+        gravai_config::save_config(&config).map_err(|e| e.to_string())?;
+    }
+    super::session::request_mic_switch(device_name)
+}
+
 /// Set volume gain for a source.
 #[tauri::command]
 pub async fn set_source_gain(
@@ -59,6 +76,32 @@ pub async fn get_session_audio_path(session_id: String) -> Result<String, String
     let session_dir = gravai_config::sessions_dir().join(&session_id);
     if !session_dir.exists() {
         return Err(format!("Session directory not found: {session_id}"));
+    }
+
+    if session_dir.join("continuations").exists() {
+        return tokio::task::spawn_blocking(move || {
+            let wav = session_dir.join("_playback_timeline.wav");
+            gravai_audio::encoder::export_session_timeline(
+                &session_dir,
+                &wav,
+                gravai_audio::encoder::ExportFormat::Wav,
+                128,
+            )?;
+            let output = session_dir.join("_timeline.m4a");
+            if let Err(error) = gravai_audio::encoder::export_audio(
+                &wav,
+                &output,
+                gravai_audio::encoder::ExportFormat::M4aAac,
+                128,
+            ) {
+                tracing::warn!("Timeline AAC encoding failed; using WAV: {error}");
+                return Ok(wav.display().to_string());
+            }
+            let _ = std::fs::remove_file(wav);
+            Ok(output.display().to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     // If a playback file already exists (M4A or WAV fallback) and is non-empty, return it

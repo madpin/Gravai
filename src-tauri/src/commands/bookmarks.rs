@@ -19,7 +19,7 @@ pub async fn add_bookmark(
         return Err("Session is not active".into());
     }
 
-    let offset_ms = (chrono::Utc::now() - session.started_at).num_milliseconds();
+    let offset_ms = (session.duration_seconds() * 1000.0) as i64;
 
     let db_path = gravai_config::data_dir().join("gravai.db");
     let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;

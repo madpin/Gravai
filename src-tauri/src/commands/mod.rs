@@ -70,6 +70,7 @@ pub async fn update_config(
     *config = serde_json::from_value(merged).map_err(|e| e.to_string())?;
     config.llm.migrate();
     config.correction.migrate();
+    config.vad.silero.migrate();
 
     // Persist to disk
     gravai_config::save_config(&config).map_err(|e| e.to_string())?;

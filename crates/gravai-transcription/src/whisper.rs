@@ -11,7 +11,11 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 use crate::TranscriptionSegment;
 
 pub struct WhisperEngine {
-    ctx: Mutex<WhisperContext>,
+    /// One state for the whole session. Creating a state allocates the KV cache;
+    /// doing that on every utterance is a large part of why a call feels heavy.
+    /// Mic and system audio share it, so only one transcription runs at a time
+    /// and the machine is not decoding two streams at once.
+    state: Mutex<whisper_rs::WhisperState>,
     language: String,
     hallucination_blocklist: Vec<String>,
     hallucination_repeat_blocklist: Vec<String>,
@@ -45,14 +49,22 @@ impl WhisperEngine {
                     config.model, e
                 ))
             })?;
+        let state = ctx.create_state().map_err(|e| {
+            gravai_core::GravaiError::Model(format!(
+                "Failed to create Whisper state for '{}' ({e}).",
+                config.model
+            ))
+        })?;
 
         info!(
-            "Whisper engine loaded: model={}, language={}",
-            config.model, config.language
+            "Whisper engine loaded: model={}, language={}, threads={}",
+            config.model,
+            config.language,
+            whisper_threads()
         );
 
         Ok(Self {
-            ctx: Mutex::new(ctx),
+            state: Mutex::new(state),
             language: config.language.clone(),
             hallucination_blocklist: config
                 .hallucination_blocklist
@@ -81,19 +93,9 @@ impl WhisperEngine {
 
     /// Raw transcription (returns plain text, no segments). Used internally.
     pub fn transcribe_raw(&self, audio: &[f32]) -> Option<String> {
-        let ctx = self.ctx.lock().ok()?;
-
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some(&self.language));
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        params.set_suppress_blank(true);
-        params.set_single_segment(true);
-        params.set_no_context(true);
-
-        let mut state = ctx.create_state().ok()?;
+        let language = self.language.clone();
+        let params = live_params(&language, false);
+        let mut state = self.state.lock().ok()?;
 
         if let Err(e) = state.full(params, audio) {
             debug!("Whisper transcription failed: {e}");
@@ -117,8 +119,12 @@ impl WhisperEngine {
             return None;
         }
 
-        // Hallucination filter
-        if self.is_hallucination(&trimmed) {
+        // Hallucination filter. Field access, not a &self method, so it can
+        // run while the state mutex is held.
+        if self
+            .hallucination_blocklist
+            .contains(&normalize_text(&trimmed))
+        {
             debug!(
                 "Hallucination filtered: {}",
                 &trimmed[..trimmed.len().min(60)]
@@ -135,23 +141,12 @@ impl crate::TranscriptionProvider for WhisperEngine {
         &self,
         audio_16khz_mono: &[f32],
     ) -> Result<Vec<TranscriptionSegment>, gravai_core::GravaiError> {
-        let ctx = self
-            .ctx
+        let language = self.language.clone();
+        let params = live_params(&language, true);
+        let mut state = self
+            .state
             .lock()
             .map_err(|e| gravai_core::GravaiError::Transcription(format!("Lock: {e}")))?;
-
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some(&self.language));
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(true);
-        params.set_suppress_blank(true);
-        params.set_no_context(true);
-
-        let mut state = ctx
-            .create_state()
-            .map_err(|e| gravai_core::GravaiError::Transcription(format!("Create state: {e}")))?;
 
         state
             .full(params, audio_16khz_mono)
@@ -166,7 +161,11 @@ impl crate::TranscriptionProvider for WhisperEngine {
                 Err(_) => continue,
             };
 
-            if text.is_empty() || self.is_hallucination(&text) {
+            if text.is_empty()
+                || self
+                    .hallucination_blocklist
+                    .contains(&normalize_text(&text))
+            {
                 continue;
             }
 
@@ -194,6 +193,37 @@ impl crate::TranscriptionProvider for WhisperEngine {
     fn name(&self) -> &str {
         "whisper"
     }
+}
+
+/// Threads for one live pass. Mic and system already share one state, so this
+/// is the only Whisper work running. Leave the other cores for the call.
+fn whisper_threads() -> std::ffi::c_int {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get() as std::ffi::c_int)
+        .unwrap_or(4);
+    (cores / 2).clamp(2, 4)
+}
+
+fn live_params<'a>(language: &'a str, timestamps: bool) -> FullParams<'a, 'static> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    if language.is_empty() || language.eq_ignore_ascii_case("auto") {
+        params.set_language(None);
+    } else {
+        params.set_language(Some(language));
+    }
+    params.set_n_threads(whisper_threads());
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(timestamps);
+    params.set_suppress_blank(true);
+    // VAD already cut this into one utterance. Skip the segment search.
+    params.set_single_segment(true);
+    params.set_no_context(true);
+    // The default temperature ladder re-decodes noisy meeting audio.
+    params.set_temperature(0.0);
+    params.set_temperature_inc(0.0);
+    params
 }
 
 /// Normalize text for comparison: lowercase + strip punctuation edges.

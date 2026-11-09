@@ -9,7 +9,7 @@
   let aiModels = $state<any[]>([]);
   let embeddingModels = $state<any[]>([]);
   let llmModels = $state<any[]>([]);
-  let activeLlmModel = $state("gemma-4-e2b");
+  let activeLlmModel = $state("qwen3-4b");
   let llmProvider = $state("local");
   let activeEmbeddingModel = $state("bag-of-words");
   let modelsDir = $state("");
@@ -31,6 +31,10 @@
   });
 
   onDestroy(() => { unlistenDownload?.(); });
+
+  function displayModelId(id: string): string {
+    return id === "gemma-embed" ? "nomic-embed" : id;
+  }
 
   async function load() {
     try {
@@ -88,7 +92,7 @@
       const cfg: any = await invoke("get_config");
       activeModel = cfg.transcription?.model || "medium";
       activeEmbeddingModel = cfg.embedding?.model || "bag-of-words";
-      activeLlmModel = cfg.llm?.local_model || "gemma-4-e2b";
+      activeLlmModel = cfg.llm?.local_model || "qwen3-4b";
       llmProvider = cfg.llm?.provider || "local";
     } catch (_) {}
     // Also get active profile name
@@ -371,6 +375,8 @@
   <div class="card-header">Semantic Search Models</div>
   <p class="card-note">
     Used to generate vector embeddings for Ask Gravai and semantic search.
+    Opening a session indexes it automatically — turn that off under Settings → Optional work
+    if a large embedding model makes Archive slow.
     After switching models, re-embed sessions via the Search tab.
     <strong>Bag-of-words</strong> is always available (no download needed).
   </p>
@@ -400,7 +406,7 @@
       <div class="model-row" class:active-model={activeEmbeddingModel === m.id}>
         <div class="model-info">
           <div class="model-name">
-            {m.id}
+            {displayModelId(m.id)}
             {#if activeEmbeddingModel === m.id}
               <span class="card-tag card-tag-active">Active</span>
             {/if}

@@ -64,6 +64,8 @@ pub struct PipelineInput {
     pub vad: Box<dyn VadProvider>,
     pub transcriber: Option<Arc<dyn gravai_transcription::TranscriptionProvider>>,
     pub echo_suppressor: Arc<tokio::sync::Mutex<EchoSuppressor>>,
+    /// When false, skip the cross-source similarity check entirely.
+    pub echo_enabled: bool,
     pub diarizer: Option<Arc<dyn gravai_intelligence::DiarizationProvider>>,
     pub config: PipelineConfig,
     pub on_utterance: OnUtterance,
@@ -82,6 +84,7 @@ pub async fn run_pipeline(input: PipelineInput) {
         mut vad,
         transcriber,
         echo_suppressor,
+        echo_enabled,
         diarizer,
         config: pipeline_config,
         on_utterance,
@@ -134,6 +137,7 @@ pub async fn run_pipeline(input: PipelineInput) {
                     &source,
                     &transcriber,
                     &echo_suppressor,
+                    echo_enabled,
                     &last_text,
                     &diarizer,
                 )
@@ -162,6 +166,7 @@ pub async fn run_pipeline(input: PipelineInput) {
                         &source,
                         &transcriber,
                         &echo_suppressor,
+                        echo_enabled,
                         &last_text,
                         &diarizer,
                     )
@@ -199,6 +204,7 @@ pub async fn run_pipeline(input: PipelineInput) {
             &source,
             &transcriber,
             &echo_suppressor,
+            echo_enabled,
             &last_text,
             &diarizer,
         )
@@ -256,6 +262,7 @@ async fn finalize(
     source: &str,
     transcriber: &Option<Arc<dyn gravai_transcription::TranscriptionProvider>>,
     echo_suppressor: &Arc<tokio::sync::Mutex<EchoSuppressor>>,
+    echo_enabled: bool,
     last_text: &Option<String>,
     diarizer: &Option<Arc<dyn gravai_intelligence::DiarizationProvider>>,
 ) -> Option<FinalizeResult> {
@@ -294,8 +301,8 @@ async fn finalize(
         }
     }
 
-    // Echo suppression
-    {
+    // Echo suppression. Skipped entirely when the user turns it off.
+    if echo_enabled {
         let mut es = echo_suppressor.lock().await;
         if es.is_echo(&text, source) {
             debug!(

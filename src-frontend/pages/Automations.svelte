@@ -20,48 +20,82 @@
     } catch (_) {}
   }
 
+  const AUTOMATION_ORDER = [
+    "auto-meeting-record",
+    "zoom-auto-stop",
+    "silence-auto-stop",
+    "auto-export-on-stop",
+  ];
+
+  let ordered = $derived(
+    Object.entries(automations).sort((a, b) => {
+      const ia = AUTOMATION_ORDER.indexOf(a[0]);
+      const ib = AUTOMATION_ORDER.indexOf(b[0]);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    }),
+  );
+
   function triggerLabel(trigger: any): string {
     if (typeof trigger === "string") {
       const map: Record<string, string> = {
-        meeting_detected: "Any meeting app detected",
-        audio_silent: "Mic & system audio go silent",
-        session_started: "Session started",
-        session_ended: "Session ended",
-        calendar_event_starting: "Calendar event starting",
+        meeting_detected: "A meeting starts",
+        meeting_ended: "The meeting ends",
+        audio_silent: "Mic and system audio stay quiet",
+        session_started: "Recording starts",
+        session_ended: "Recording stops",
+        calendar_event_starting: "A calendar event is starting",
       };
       return map[trigger] ?? trigger.replace(/_/g, " ");
     }
-    if (trigger?.TimeOfDay) return `Time: ${trigger.TimeOfDay.hour}:${String(trigger.TimeOfDay.minute).padStart(2, "0")}`;
-    if (trigger?.AppForegrounded) return `App foregrounded: ${trigger.AppForegrounded.app_name}`;
-    if (trigger?.MeetingAppDetected) return `${trigger.MeetingAppDetected.app_name} meeting starts`;
-    if (trigger?.MeetingAppEnded) return `${trigger.MeetingAppEnded.app_name} meeting ends`;
+    const app =
+      trigger?.meeting_app_detected?.app_name
+      ?? trigger?.MeetingAppDetected?.app_name;
+    if (app && (trigger?.meeting_app_detected || trigger?.MeetingAppDetected)) {
+      return `${app} meeting starts`;
+    }
+    const ended =
+      trigger?.meeting_app_ended?.app_name
+      ?? trigger?.MeetingAppEnded?.app_name;
+    if (ended) return `${ended} meeting ends`;
+    const time = trigger?.time_of_day ?? trigger?.TimeOfDay;
+    if (time) return `Time: ${time.hour}:${String(time.minute).padStart(2, "0")}`;
+    const foreground = trigger?.app_foregrounded?.app_name ?? trigger?.AppForegrounded?.app_name;
+    if (foreground) return `${foreground} comes to the front`;
     return JSON.stringify(trigger);
   }
 
   function actionLabels(actions: any[]): string[] {
     return actions.map(a => {
+      if (a === "start_recording") return "Start recording";
+      if (a === "stop_recording") return "Stop recording";
       if (typeof a === "string") return a.replace(/_/g, " ");
       const key = Object.keys(a)[0];
       if (!key) return "?";
       const val = a[key];
-      if (typeof val === "string") return `${key.replace(/_/g, " ")}: ${val}`;
-      if (val?.profile_id) return `Activate profile: ${val.profile_id}`;
-      if (val?.preset_id) return `Activate preset: ${val.preset_id}`;
+      if (val?.profile_id) {
+        const name = val.profile_id === "meeting" ? "Meeting" : val.profile_id;
+        return `Switch to the ${name} profile`;
+      }
+      if (val?.preset_id) return `Switch to the ${val.preset_id} preset`;
       if (val?.message) return `Notify: ${val.message}`;
-      if (val?.format) return `Export: ${val.format}`;
+      if (val?.format) return `Save a ${val.format} transcript`;
+      if (typeof val === "string") return `${key.replace(/_/g, " ")}: ${val}`;
       return key.replace(/_/g, " ");
     });
   }
 </script>
 
 <div class="page-header"><h2>Automations</h2></div>
-<p class="page-desc">Automations run actions in response to triggers. Enable/disable them as needed.</p>
+<p class="page-desc">Meeting start and meeting end are a pair. Silence is a separate safety net, with its own countdown. Export writes the transcript when a recording stops.</p>
 
 <div class="automation-grid">
-  {#each Object.entries(automations) as [id, a]}
+  {#each ordered as [id, a]}
     <div class="automation-card" class:enabled={a.enabled}>
       <div class="automation-card-top">
-        <div class="automation-name">{a.name}</div>
+        <div class="automation-name">
+          {a.name}
+          {#if a.description}<div class="automation-desc">{a.description}</div>{/if}
+        </div>
         <label class="automation-toggle">
           <input type="checkbox" checked={a.enabled} onchange={() => toggle(id, !a.enabled)} />
           <span class="automation-toggle-track">
@@ -121,6 +155,13 @@
     color: var(--text-primary);
     line-height: 1.3;
     flex: 1;
+  }
+  .automation-desc {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    line-height: 1.4;
   }
   /* Big pill toggle */
   .automation-toggle {

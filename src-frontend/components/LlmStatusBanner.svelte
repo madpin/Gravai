@@ -3,6 +3,11 @@
   import { llmStatus } from "../lib/store";
   import Icon from "./Icon.svelte";
 
+  // "status" is the page-level load/error banner. "summary" is only the
+  // summarizing line, so Recording can show that next to Summary without
+  // repeating the same block above it.
+  let { scope = "all" }: { scope?: "all" | "status" | "summary" } = $props();
+
   // Tick once a second so the elapsed counter and the *interpolated* progress
   // bar both update smoothly between server-side ticks (which arrive ~1 Hz).
   let now = $state(Date.now());
@@ -25,13 +30,15 @@
     return started ? Math.floor((now - started) / 1000) : 0;
   });
 
-  // Visible whenever a load is in progress or has just failed.
-  let visible = $derived(
+  let isLoad = $derived(
     $llmStatus.state === "loading"
     || $llmStatus.state === "first_run"
     || $llmStatus.state === "progress"
-    || $llmStatus.state === "summarizing"
     || $llmStatus.state === "error",
+  );
+  let visible = $derived(
+    (scope !== "summary" && isLoad)
+    || (scope !== "status" && $llmStatus.state === "summarizing"),
   );
 
   let isFirstRun = $derived($llmStatus.state === "first_run");

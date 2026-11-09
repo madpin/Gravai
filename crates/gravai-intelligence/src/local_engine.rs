@@ -3,9 +3,9 @@
 //! Two loading paths:
 //! - **GGUF**: Pre-quantized `.gguf` files (Qwen, Llama, Phi, Mistral).
 //! - **HF-ISQ**: HuggingFace models quantized on-the-fly with UQFF caching (Gemma 4).
-//!   Gemma 4 GGUF architecture is not supported by mistral.rs 0.8.x, but the
-//!   MultimodalModelBuilder + ISQ path works. First load downloads from HF and
-//!   quantizes (~minutes); subsequent loads use the cached UQFF file (~seconds).
+//!   First load downloads from HF and quantizes (~minutes); subsequent loads use
+//!   the cached UQFF file (~seconds). mistral.rs 0.9.5 also loads Qwen3.5 and
+//!   Gemma 4 GGUF, which this crate does not download yet.
 
 use std::sync::Arc;
 
@@ -35,6 +35,13 @@ pub struct LocalLlmEngine {
 impl LocalLlmEngine {
     async fn build_model(source: ModelSource, model_id: &str) -> Result<Self, String> {
         let mid = model_id.to_string();
+        // First-run Gemma downloads are several GB. 10 minutes is not enough on
+        // a typical connection, and dropping the task on timeout used to leave
+        // the Hugging Face file lock held by a detached download.
+        let timeout_secs: u64 = match &source {
+            ModelSource::HfIsq { .. } => 45 * 60,
+            ModelSource::Gguf { .. } => 10 * 60,
+        };
 
         let load_fut = match source {
             ModelSource::Gguf { filename } => {
@@ -52,6 +59,7 @@ impl LocalLlmEngine {
                         .with_prefix_cache_n(Some(16))
                         .build()
                         .await
+                        .map_err(|e| e.to_string())
                 })
             }
             ModelSource::HfIsq { hf_repo } => {
@@ -68,46 +76,30 @@ impl LocalLlmEngine {
                 info!("Loading HF-ISQ LLM: {model_id} ({hf_repo})");
 
                 tokio::task::spawn(async move {
-                    if !cached_shards.is_empty() {
-                        info!(
-                            "Loading from cached UQFF: {} shard(s) for {mid_for_log}",
-                            cached_shards.len()
-                        );
-                        UqffMultimodalModelBuilder::new(&hf_repo, cached_shards)
-                            .into_inner()
-                            .with_max_num_seqs(1)
-                            .with_prefix_cache_n(Some(16))
-                            .build()
-                            .await
-                    } else {
-                        info!("ISQ from HuggingFace (first run — will cache as UQFF)");
-                        MultimodalModelBuilder::new(&hf_repo)
-                            .with_isq(IsqType::Q4K)
-                            .write_uqff(uqff_write_path)
-                            .with_max_num_seqs(1)
-                            .with_prefix_cache_n(Some(16))
-                            .build()
-                            .await
-                    }
+                    load_hf_isq(hf_repo, cached_shards, uqff_write_path, mid_for_log).await
                 })
             }
         };
 
-        // 10 min timeout for HF-ISQ first run, plenty for GGUF too.
-        let model = match tokio::time::timeout(std::time::Duration::from_secs(600), load_fut).await
-        {
-            Ok(join_result) => join_result
-                .map_err(|e| {
-                    format!(
-                        "LLM engine panicked loading {mid}: {e}. \
-                         The model architecture may not be supported."
-                    )
-                })?
-                .map_err(|e| format!("Failed to load LLM {mid}: {e}"))?,
-            Err(_) => {
-                return Err(format!(
-                    "LLM engine timed out loading {model_id} after 600s."
-                ));
+        let model = {
+            let mut load_fut = load_fut;
+            tokio::select! {
+                join_result = &mut load_fut => {
+                    join_result
+                        .map_err(|e| {
+                            format!(
+                                "LLM engine panicked loading {mid}: {e}. \
+                                 The model architecture may not be supported."
+                            )
+                        })?
+                        .map_err(|e| format!("Failed to load LLM {mid}: {e}"))?
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                    load_fut.abort();
+                    return Err(format!(
+                        "LLM engine timed out loading {model_id} after {timeout_secs}s."
+                    ));
+                }
             }
         };
 
@@ -170,6 +162,119 @@ impl LocalLlmEngine {
         }
 
         Ok(content)
+    }
+}
+
+/// Load a Hugging Face model, waiting out a download lock instead of failing.
+///
+/// `hf-hub` gives up on a file lock after 5 seconds. A multi-GB Gemma download
+/// holds that lock the whole time, so a second Gravai (or a retry) used to
+/// surface "Lock acquisition failed" while the first download was still healthy.
+async fn load_hf_isq(
+    hf_repo: String,
+    cached_shards: Vec<std::path::PathBuf>,
+    uqff_write_path: std::path::PathBuf,
+    model_id: String,
+) -> Result<mistralrs::Model, String> {
+    const MAX_ATTEMPTS: u32 = 24;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let result = if cached_shards.is_empty() {
+            if attempt == 1 {
+                info!("ISQ from HuggingFace (first run — will cache as UQFF)");
+            }
+            MultimodalModelBuilder::new(&hf_repo)
+                .with_isq(IsqType::Q4K)
+                .write_uqff(uqff_write_path.clone())
+                .with_max_num_seqs(1)
+                .with_prefix_cache_n(Some(16))
+                .build()
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            if attempt == 1 {
+                info!(
+                    "Loading from cached UQFF: {} shard(s) for {model_id}",
+                    cached_shards.len()
+                );
+            }
+            UqffMultimodalModelBuilder::new(&hf_repo, cached_shards.clone())
+                .into_inner()
+                .with_max_num_seqs(1)
+                .with_prefix_cache_n(Some(16))
+                .build()
+                .await
+                .map_err(|e| e.to_string())
+        };
+
+        match result {
+            Ok(model) => return Ok(model),
+            Err(msg) if is_hf_lock_error(&msg) && attempt < MAX_ATTEMPTS => {
+                info!("Hugging Face download lock busy for {model_id} (attempt {attempt}): {msg}");
+                emit_status_full(
+                    "progress",
+                    &model_id,
+                    Some(
+                        "This model is already downloading. Waiting for that download to finish, then retrying."
+                            .into(),
+                    ),
+                    None,
+                    Some("Waiting for download".into()),
+                    Some(180),
+                );
+                if let Some(path) = lock_path_from_error(&msg) {
+                    wait_until_lock_free(&path).await;
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                }
+            }
+            Err(msg) if is_hf_lock_error(&msg) => {
+                return Err(format!(
+                    "a download of this model is still running ({msg}). Leave that Gravai open until the download finishes, then try again."
+                ));
+            }
+            Err(msg) => return Err(msg),
+        }
+    }
+    Err("a download of this model is still running".into())
+}
+
+fn is_hf_lock_error(msg: &str) -> bool {
+    msg.contains("Lock acquisition failed")
+}
+
+fn lock_path_from_error(msg: &str) -> Option<std::path::PathBuf> {
+    let rest = msg.split("Lock acquisition failed:").nth(1)?;
+    let path = rest.trim().lines().next()?.trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(path))
+    }
+}
+
+/// Poll until `path` is not exclusively locked, or 20 minutes pass.
+async fn wait_until_lock_free(path: &std::path::Path) {
+    let start = std::time::Instant::now();
+    let limit = std::time::Duration::from_secs(20 * 60);
+    while start.elapsed() < limit && lock_is_busy(path) {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+}
+
+fn lock_is_busy(path: &std::path::Path) -> bool {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+    else {
+        return false;
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
+        Err(_) => true,
     }
 }
 
@@ -748,5 +853,16 @@ mod tests {
         let (_, p) = estimate_progress(&mut state, started, 360, true, "gemma-4-e4b");
         assert!(p >= 0.50, "should be at least 50 % after download: {p}");
         assert!(p < 0.95, "should not yet be at the cap: {p}");
+    }
+
+    #[test]
+    fn parses_hf_lock_path_from_error() {
+        let msg = "Failed to access `google/gemma-4-E2B-it` on Hugging Face while fetching `model.safetensors`: Lock acquisition failed: /tmp/model.lock";
+        assert!(is_hf_lock_error(msg));
+        assert_eq!(
+            lock_path_from_error(msg).unwrap(),
+            std::path::PathBuf::from("/tmp/model.lock")
+        );
+        assert!(!is_hf_lock_error("model not found"));
     }
 }

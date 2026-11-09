@@ -777,3 +777,236 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+/// Allocate a separate capture directory. The prefix is its position on the
+/// session timeline; the suffix prevents a failed/retried start overwriting audio.
+pub fn continuation_directory(session_dir: &Path, offset_ms: u64) -> Result<PathBuf, String> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let path = session_dir
+        .join("continuations")
+        .join(format!("{offset_ms:020}_{nonce}"));
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Export the complete timeline, including captures made after a session stopped.
+/// Original files remain untouched. Compaction uses the same lock so compressed
+/// sources cannot disappear while this export is reading them.
+pub fn export_session_timeline(
+    session_dir: &Path,
+    output: &Path,
+    format: ExportFormat,
+    bitrate: u32,
+) -> Result<(), String> {
+    let _guard = COMPACTION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Audio compaction lock poisoned")?;
+    if !session_dir.join("continuations").exists() && !source_track_groups(session_dir)?.is_empty()
+    {
+        return merge_and_export(session_dir, output, format, bitrate);
+    }
+    let mut segments = vec![(0_u64, session_dir.to_path_buf())];
+    let continuation_root = session_dir.join("continuations");
+    if continuation_root.exists() {
+        let mut continued = Vec::new();
+        for entry in std::fs::read_dir(continuation_root).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.path().is_dir() {
+                let name = entry.file_name();
+                let offset = name
+                    .to_string_lossy()
+                    .split('_')
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .ok_or("Invalid continuation directory")?;
+                continued.push((offset, entry.path()));
+            }
+        }
+        continued.sort();
+        segments.extend(continued);
+    }
+    let scratch = continuation_scratch()?;
+    let result = (|| {
+        let mut prepared = Vec::new();
+        for (index, (offset, dir)) in segments.iter().enumerate() {
+            let wav = scratch.0.join(format!("{index}.wav"));
+            let groups = source_track_groups(dir)?;
+            if !groups.is_empty() {
+                streaming_mix(&groups, &wav)?;
+            } else if dir.join("playback.m4a").is_file() {
+                decode_playback(&dir.join("playback.m4a"), &wav)?;
+            } else if dir.join("playback.wav").is_file() {
+                ensure_pcm16_wav(&dir.join("playback.wav"), &wav)?;
+            } else {
+                continue; // Transcription-only captures have no audio.
+            }
+            let (_, spec, frames) = SampleStream::open(&wav)?;
+            prepared.push((
+                *offset,
+                TrackGroup {
+                    paths: vec![wav],
+                    sample_rate: spec.sample_rate,
+                    channels: spec.channels,
+                    frames: frames as u64,
+                },
+            ));
+        }
+        if prepared.is_empty() {
+            return Err("No audio files found for this session".into());
+        }
+        let mixed = scratch.0.join("timeline.wav");
+        concatenate_captures(&prepared, &mixed)?;
+        export_audio(&mixed, output, format, bitrate)
+    })();
+    result
+}
+
+struct TimelineScratch(PathBuf);
+impl Drop for TimelineScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+fn continuation_scratch() -> Result<TimelineScratch, String> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("gravai-timeline-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&path).map_err(|e| e.to_string())?;
+    Ok(TimelineScratch(path))
+}
+
+fn decode_playback(source: &Path, output: &Path) -> Result<(), String> {
+    let result = std::process::Command::new("afconvert")
+        .arg(source)
+        .arg(output)
+        .args(["-f", "WAVE", "-d", "LEI16"])
+        .output()
+        .map_err(|e| format!("Decode saved audio: {e}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "Decode saved audio: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn concatenate_captures(captures: &[(u64, TrackGroup)], output: &Path) -> Result<(), String> {
+    let seconds = captures
+        .iter()
+        .map(|(offset, group)| {
+            *offset as f64 / 1000.0 + group.frames as f64 / group.sample_rate as f64
+        })
+        .fold(0.0_f64, f64::max);
+    // Keep the temporary PCM below WAV's 4 GB limit for long recordings.
+    let max_rate = (3_900_000_000.0 / (seconds * 4.0)) as u32;
+    let output_rate = [48_000, 44_100, 32_000, 24_000, 16_000, 12_000, 8_000]
+        .into_iter()
+        .find(|rate| *rate <= max_rate)
+        .ok_or("Recording is too long for a safe timeline WAV")?;
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: output_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(output, spec).map_err(|e| e.to_string())?;
+    let mut position = 0_u64;
+    for (index, (offset, group)) in captures.iter().enumerate() {
+        let start = offset.saturating_mul(output_rate as u64) / 1000;
+        while position < start {
+            writer.write_sample(0_i16).map_err(|e| e.to_string())?;
+            writer.write_sample(0_i16).map_err(|e| e.to_string())?;
+            position += 1;
+        }
+        let frames =
+            (group.frames as f64 * output_rate as f64 / group.sample_rate as f64).ceil() as u64;
+        let end = captures
+            .get(index + 1)
+            .map(|(next, _)| next.saturating_mul(output_rate as u64) / 1000)
+            .unwrap_or(start.saturating_add(frames));
+        let mut track = TrackStream::new(group.clone());
+        for frame in 0..frames.min(end.saturating_sub(start)) {
+            for channel in 0..2 {
+                let sample = track.sample_at(frame, output_rate, channel)?;
+                writer
+                    .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                    .map_err(|e| e.to_string())?;
+            }
+            position += 1;
+        }
+    }
+    writer.finalize().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+
+    fn tone(path: &Path, rate: u32, sample: i16) {
+        let mut writer = hound::WavWriter::create(
+            path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: rate,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for _ in 0..rate / 10 {
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    #[test]
+    fn continued_audio_keeps_sources_and_aligns_multiple_captures() {
+        let dir = continuation_scratch().unwrap();
+        tone(&dir.0.join("mic.wav"), 16_000, 8_000);
+        let original = std::fs::read(dir.0.join("mic.wav")).unwrap();
+        let second = continuation_directory(&dir.0, 200).unwrap();
+        tone(&second.join("mic.wav"), 48_000, -8_000);
+        let third = continuation_directory(&dir.0, 300).unwrap();
+        tone(&third.join("system.wav"), 24_000, 4_000);
+        let output = dir.0.join("export.wav");
+        export_session_timeline(&dir.0, &output, ExportFormat::Wav, 128).unwrap();
+        let reader = hound::WavReader::open(&output).unwrap();
+        assert_eq!(reader.duration(), 19_200); // .4 seconds at 48kHz
+        let samples: Vec<i16> = reader.into_samples::<i16>().map(Result::unwrap).collect();
+        assert!(samples[100] > 7_900);
+        assert_eq!(samples[14_400], 0); // .15s: silence padding before continuation
+        assert!(samples[24_000] < -7_900); // .25s: second capture
+        assert!(samples[33_600] > 3_900); // .35s: third capture
+        assert_eq!(std::fs::read(dir.0.join("mic.wav")).unwrap(), original);
+        // Rebuilding playback must not accidentally include the last export.
+        export_session_timeline(&dir.0, &output, ExportFormat::Wav, 128).unwrap();
+        assert_eq!(hound::WavReader::open(output).unwrap().duration(), 19_200);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn continued_audio_includes_compacted_original() {
+        let dir = continuation_scratch().unwrap();
+        tone(&dir.0.join("mic.wav"), 48_000, 8_000);
+        compact_session(&dir.0, 128, true).unwrap().unwrap();
+        let original = std::fs::read(dir.0.join("playback.m4a")).unwrap();
+        let second = continuation_directory(&dir.0, 100).unwrap();
+        tone(&second.join("mic.wav"), 48_000, -8_000);
+        compact_session(&second, 128, true).unwrap().unwrap();
+        let output = dir.0.join("export.wav");
+        export_session_timeline(&dir.0, &output, ExportFormat::Wav, 128).unwrap();
+        let reader = hound::WavReader::open(output).unwrap();
+        assert!(reader.duration() >= 9_600);
+        let samples: Vec<i16> = reader.into_samples::<i16>().map(Result::unwrap).collect();
+        assert!(samples[2_400] > 5_000);
+        assert!(samples[14_400] < -5_000);
+        assert_eq!(std::fs::read(dir.0.join("playback.m4a")).unwrap(), original);
+    }
+}

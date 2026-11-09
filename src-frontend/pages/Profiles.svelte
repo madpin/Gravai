@@ -14,13 +14,13 @@
     // Transcription
     trans_engine: "whisper", trans_model: "medium", trans_lang: "en",
     // VAD
-    vad_engine: "webrtc", vad_pause: 0.5, vad_min: 0.3, vad_max: 30,
+    vad_engine: "webrtc", vad_pause: 0.5, vad_min: 0.3, vad_max: 12,
     // Features
     echo_enabled: true, echo_threshold: 0.55,
     meeting_enabled: true, diarization_enabled: false, sentiment_enabled: false,
     correction_enabled: false,
     // LLM
-    llm_provider: "local", llm_model: "", llm_local_model: "gemma-4-e2b", llm_url: "",
+    llm_provider: "local", llm_model: "", llm_local_model: "qwen3-4b", llm_url: "",
     // Export
     auto_export_transcript: false, auto_export_audio: false,
     transcript_folder: "", audio_folder: "",
@@ -36,23 +36,38 @@
     } catch (_) {}
   }
 
+  function configPatchFor(p: any) {
+    const patch: any = {};
+    if (p.transcription_engine) patch.transcription = { ...patch.transcription, engine: p.transcription_engine };
+    if (p.transcription_model) patch.transcription = { ...patch.transcription, model: p.transcription_model };
+    if (p.transcription_language) patch.transcription = { ...patch.transcription, language: p.transcription_language };
+    if (p.llm_provider) patch.llm = { ...patch.llm, provider: p.llm_provider };
+    if (p.llm_model) patch.llm = { ...patch.llm, model: p.llm_model };
+    if (p.llm_local_model) patch.llm = { ...patch.llm, local_model: p.llm_local_model };
+    if (p.diarization_enabled != null) patch.features = { ...patch.features, diarization: { enabled: p.diarization_enabled } };
+    if (p.echo_suppression_enabled != null) patch.features = { ...patch.features, echo_suppression: { enabled: p.echo_suppression_enabled } };
+    if (p.sentiment_enabled != null) patch.features = { ...patch.features, sentiment: { enabled: p.sentiment_enabled } };
+    if (p.meeting_enabled != null) patch.features = { ...patch.features, meeting_detection: { enabled: p.meeting_enabled } };
+    if (p.correction_enabled != null) patch.correction = { ...patch.correction, enabled: p.correction_enabled };
+    if (p.vad_engine || p.vad_pause != null || p.vad_min != null || p.vad_max != null) {
+      patch.vad = {
+        ...(p.vad_engine ? { engine: p.vad_engine } : {}),
+        ...(p.vad_pause != null ? { pause_seconds: p.vad_pause } : {}),
+        ...(p.vad_min != null || p.vad_max != null
+          ? { silero: { ...(p.vad_min != null ? { min_utterance_seconds: p.vad_min } : {}), ...(p.vad_max != null ? { max_utterance_seconds: p.vad_max } : {}) } }
+          : {}),
+      };
+    }
+    return patch;
+  }
+
   async function activate(id: string) {
     try {
       await invoke("activate_profile", { profileId: id });
       activeId = id;
-      // Apply profile settings to main config
       const p = profiles[id];
       if (p) {
-        const patch: any = {};
-        if (p.transcription_engine) patch.transcription = { ...patch.transcription, engine: p.transcription_engine };
-        if (p.transcription_model) patch.transcription = { ...patch.transcription, model: p.transcription_model };
-        if (p.transcription_language) patch.transcription = { ...patch.transcription, language: p.transcription_language };
-        if (p.llm_provider) patch.llm = { ...patch.llm, provider: p.llm_provider };
-        if (p.llm_model) patch.llm = { ...patch.llm, model: p.llm_model };
-        if (p.llm_local_model) patch.llm = { ...patch.llm, local_model: p.llm_local_model };
-        if (p.diarization_enabled != null) patch.features = { ...patch.features, diarization: { enabled: p.diarization_enabled } };
-        if (p.echo_suppression_enabled != null) patch.features = { ...patch.features, echo_suppression: { enabled: p.echo_suppression_enabled } };
-        if (p.correction_enabled != null) patch.correction = { ...patch.correction, enabled: p.correction_enabled };
+        const patch = configPatchFor(p);
         if (Object.keys(patch).length > 0) await invoke("update_config", { patch });
       }
     } catch (_) {}
@@ -67,7 +82,7 @@
       e.trans_model = p.transcription_model || "medium";
       e.trans_lang = p.transcription_language || "en";
       e.vad_engine = p.vad_engine || "webrtc";
-      e.vad_pause = p.vad_pause ?? 0.5; e.vad_min = p.vad_min ?? 0.3; e.vad_max = p.vad_max ?? 30;
+      e.vad_pause = p.vad_pause ?? 0.5; e.vad_min = p.vad_min ?? 0.3; e.vad_max = p.vad_max ?? 12;
       e.echo_enabled = p.echo_suppression_enabled ?? true;
       e.echo_threshold = p.echo_threshold ?? 0.55;
       e.meeting_enabled = p.meeting_enabled ?? true;
@@ -76,7 +91,7 @@
       e.correction_enabled = p.correction_enabled ?? false;
       e.llm_provider = p.llm_provider || "local";
       e.llm_model = p.llm_model || "";
-      e.llm_local_model = p.llm_local_model || "gemma-4-e2b";
+      e.llm_local_model = p.llm_local_model?.includes("gemma") ? "qwen3-4b" : (p.llm_local_model || "qwen3-4b");
       e.llm_url = p.llm_url || "";
       e.auto_export_transcript = p.auto_export_transcript ?? false;
       e.auto_export_audio = p.auto_export_audio ?? false;
@@ -88,11 +103,11 @@
       editingId = "__new__";
       e = { name: "", description: "",
         trans_engine: "whisper", trans_model: "medium", trans_lang: "en",
-        vad_engine: "webrtc", vad_pause: 0.5, vad_min: 0.3, vad_max: 30,
+        vad_engine: "webrtc", vad_pause: 0.5, vad_min: 0.3, vad_max: 12,
         echo_enabled: true, echo_threshold: 0.55,
         meeting_enabled: true, diarization_enabled: false, sentiment_enabled: false,
         correction_enabled: false,
-        llm_provider: "local", llm_model: "", llm_local_model: "gemma-4-e2b", llm_url: "",
+        llm_provider: "local", llm_model: "", llm_local_model: "qwen3-4b", llm_url: "",
         auto_export_transcript: false, auto_export_audio: false,
         transcript_folder: "", audio_folder: "", transcript_format: "markdown", realtime_save: true,
       };
@@ -119,6 +134,10 @@
     };
     try {
       await invoke("save_profile", { profile });
+      if (id === activeId) {
+        const patch = configPatchFor(profile);
+        if (Object.keys(patch).length > 0) await invoke("update_config", { patch });
+      }
       editingId = null;
       await load();
     } catch (err) { saveMsg = `Error: ${err}`; }
@@ -154,21 +173,21 @@
     <!-- VAD -->
     <div class="card-header section">Voice Activity Detection</div>
     <div class="settings-grid">
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Engine</span></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Engine</span><span class="setting-desc">WebRTC is light. Silero loads an ONNX model and uses more CPU.</span></div>
         <select class="select" bind:value={e.vad_engine}><option value="webrtc">WebRTC</option><option value="silero">Silero</option></select></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Pause</span><span class="setting-desc">Seconds of silence to finalize</span></div><input class="input input-narrow" type="number" bind:value={e.vad_pause} min="0.1" max="5" step="0.1" /></div>
       <div class="setting-row"><div class="setting-info"><span class="setting-label">Min Utterance</span></div><input class="input input-narrow" type="number" bind:value={e.vad_min} min="0.1" max="5" step="0.1" /></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Max Utterance</span></div><input class="input input-narrow" type="number" bind:value={e.vad_max} min="5" max="120" step="5" /></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Max Utterance</span><span class="setting-desc">Longer chunks make each Whisper pass block the machine</span></div><input class="input input-narrow" type="number" bind:value={e.vad_max} min="5" max="120" step="1" /></div>
     </div>
 
     <!-- Features -->
     <div class="card-header section">Features</div>
     <div class="settings-grid">
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Echo Suppression</span></div><label class="switch"><input type="checkbox" bind:checked={e.echo_enabled} /><span class="switch-slider"></span></label></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Meeting Detection</span></div><label class="switch"><input type="checkbox" bind:checked={e.meeting_enabled} /><span class="switch-slider"></span></label></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Diarization</span><span class="setting-desc">Speaker labels (You / Remote)</span></div><label class="switch"><input type="checkbox" bind:checked={e.diarization_enabled} /><span class="switch-slider"></span></label></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Emotion Detection</span><span class="setting-desc">Show emotions on system audio (requires go-emotions model)</span></div><label class="switch"><input type="checkbox" bind:checked={e.sentiment_enabled} /><span class="switch-slider"></span></label></div>
-      <div class="setting-row"><div class="setting-info"><span class="setting-label">Transcript Correction</span><span class="setting-desc">Per-utterance LLM correction of ASR mistakes</span></div><label class="switch"><input type="checkbox" bind:checked={e.correction_enabled} /><span class="switch-slider"></span></label></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Echo Suppression</span><span class="setting-desc">Drop mic/system duplicates. Turn off to skip that check.</span></div><label class="switch"><input type="checkbox" bind:checked={e.echo_enabled} /><span class="switch-slider"></span></label></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Meeting Detection</span><span class="setting-desc">Background scan for Zoom, Teams, and similar apps.</span></div><label class="switch"><input type="checkbox" bind:checked={e.meeting_enabled} /><span class="switch-slider"></span></label></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Diarization</span><span class="setting-desc">Speaker labels. Off skips the per-utterance diarizer.</span></div><label class="switch"><input type="checkbox" bind:checked={e.diarization_enabled} /><span class="switch-slider"></span></label></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Emotion Detection</span><span class="setting-desc">Loads go-emotions at record start and runs it on remote speech.</span></div><label class="switch"><input type="checkbox" bind:checked={e.sentiment_enabled} /><span class="switch-slider"></span></label></div>
+      <div class="setting-row"><div class="setting-info"><span class="setting-label">Transcript Correction</span><span class="setting-desc">Sends each batch to the LLM. This is the slow path during a recording.</span></div><label class="switch"><input type="checkbox" bind:checked={e.correction_enabled} /><span class="switch-slider"></span></label></div>
     </div>
 
     <!-- LLM -->
@@ -178,7 +197,7 @@
         <select class="select" bind:value={e.llm_provider}><option value="local">Local (on-device)</option><option value="api">API (OpenAI-compatible)</option></select></div>
       {#if e.llm_provider === "local"}
         <div class="setting-row"><div class="setting-info"><span class="setting-label">Local Model</span></div>
-          <select class="select" bind:value={e.llm_local_model}><option value="gemma-4-e2b">Gemma 4 E2B</option><option value="gemma-4-e4b">Gemma 4 E4B</option><option value="gemma-4-27b-moe">Gemma 4 27B MoE</option><option value="qwen3-0.6b">Qwen3 0.6B</option><option value="qwen3-1.7b">Qwen3 1.7B</option><option value="gemma-4-e2b">Qwen3 4B</option><option value="qwen3-8b">Qwen3 8B</option><option value="llama-3.2-3b">Llama 3.2 3B</option><option value="phi3-mini-q4">Phi-3 Mini</option><option value="mistral-7b-q4">Mistral 7B</option></select></div>
+          <select class="select" bind:value={e.llm_local_model}><option value="qwen3-0.6b">Qwen3 0.6B</option><option value="qwen3-1.7b">Qwen3 1.7B</option><option value="qwen3-4b">Qwen3 4B</option><option value="qwen3-8b">Qwen3 8B</option><option value="llama-3.2-3b">Llama 3.2 3B</option><option value="phi3-mini-q4">Phi-3 Mini</option><option value="mistral-7b-q4">Mistral 7B</option></select></div>
       {:else}
         <div class="setting-row"><div class="setting-info"><span class="setting-label">Model</span></div><input class="input" bind:value={e.llm_model} placeholder="gpt-4o-mini" /></div>
         <div class="setting-row"><div class="setting-info"><span class="setting-label">API URL</span></div><input class="input" bind:value={e.llm_url} placeholder="https://api.openai.com/v1" /></div>
