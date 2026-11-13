@@ -6,6 +6,7 @@ pub mod encoder;
 pub mod mixer;
 pub mod pipeline;
 pub mod recorder;
+pub mod recovery;
 pub mod resampler;
 pub mod screencapturekit;
 pub mod silence;

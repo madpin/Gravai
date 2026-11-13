@@ -36,6 +36,44 @@ const WHISPER_MODELS: &[(&str, &str, u64)] = &[
     ),
 ];
 
+/// Static cost hints: approximate memory while in use (GB) and a speed tier
+/// the settings screen shows next to each model. Not measured.
+fn model_hints(id: &str) -> Option<(f64, &'static str)> {
+    Some(match id {
+        "tiny" => (0.3, "Fastest, least accurate"),
+        "base" => (0.4, "Keeps up easily"),
+        "small" => (0.9, "Keeps up easily"),
+        "medium" => (2.1, "Keeps up on Apple Silicon"),
+        "large-v3-turbo" => (2.3, "Keeps up on M1 Pro and newer"),
+        "large-v3" => (3.9, "Most accurate, may fall behind on long calls"),
+        "qwen3-0.6b" => (0.8, "Very fast, basic summaries"),
+        "qwen3-1.7b" => (1.6, "Fast"),
+        "qwen3-4b" => (3.2, "Balanced, recommended"),
+        "qwen3-8b" => (6.0, "Slower, best quality"),
+        "llama-3.2-3b" => (2.6, "Fast"),
+        "phi3-mini-q4" => (3.0, "Balanced"),
+        "mistral-7b-q4" => (5.5, "Slower"),
+        "all-minilm" => (0.1, "Fast, English"),
+        "gemma-embed" => (0.5, "Balanced, many languages"),
+        "bge-m3" => (1.1, "Best for many languages, slower"),
+        _ => return None,
+    })
+}
+
+/// Add `ram_gb` and `speed` to a status entry when the catalog knows them.
+fn with_hints(mut entry: serde_json::Value) -> serde_json::Value {
+    let id = entry
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if let (Some((ram, speed)), Some(obj)) = (model_hints(&id), entry.as_object_mut()) {
+        obj.insert("ram_gb".into(), serde_json::json!(ram));
+        obj.insert("speed".into(), serde_json::json!(speed));
+    }
+    entry
+}
+
 // ── LLM catalogs ──────────────────────────────────────────────────────────────
 
 /// LLM GGUF model IDs (pre-downloaded GGUF files).
@@ -480,6 +518,48 @@ fn llm_models_status(models_dir: &std::path::Path) -> Vec<serde_json::Value> {
     results
 }
 
+/// Models a snapshot needs that are not on disk: `{id, approx_size}`.
+/// Lets the Setups menu say whether a setup is ready to record with.
+pub(crate) fn missing_models(snapshot: &gravai_config::setups::Snapshot) -> Vec<serde_json::Value> {
+    let dir = gravai_config::models_dir();
+    let mut needed: Vec<String> = vec![snapshot.transcription.model.clone()];
+    if snapshot.llm.provider == "local" {
+        needed.push(snapshot.llm.local_model.clone());
+    }
+    if snapshot.features.sentiment.enabled {
+        needed.push("go-emotions".into());
+    }
+    if snapshot.features.diarization.enabled && snapshot.features.diarization.model == "pyannote" {
+        needed.push("pyannote-segmentation".into());
+    }
+    if snapshot.vad.engine == "silero" {
+        needed.push("silero_vad".into());
+    }
+    needed
+        .into_iter()
+        .filter_map(|id| {
+            let (present, size) = if id == "silero_vad" {
+                (dir.join(gravai_models::SILERO_VAD_FILE).exists(), 2_300_000)
+            } else if let Some(info) = ai_model_info(&id) {
+                let sub = dir.join(info.subdir);
+                (
+                    info.files.iter().all(|(f, _, _)| sub.join(f).exists()),
+                    info.approx_size,
+                )
+            } else if let Some((_, _, size)) = WHISPER_MODELS.iter().find(|(w, _, _)| *w == id) {
+                let len = std::fs::metadata(dir.join(format!("ggml-{id}.bin")))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                (len >= MIN_MODEL_SIZE, *size)
+            } else {
+                // A custom GGUF in llm/, or an id we do not know: trust it if the file is there.
+                (dir.join("llm").join(format!("{id}.gguf")).exists(), 0)
+            };
+            (!present).then(|| serde_json::json!({ "id": id, "approx_size": size }))
+        })
+        .collect()
+}
+
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
 /// Get list of all models with download status.
@@ -503,7 +583,7 @@ pub async fn get_models_status() -> Result<serde_json::Value, String> {
                     "Model ggml-{id}.bin appears corrupted ({actual_size} bytes, expected ~{approx_size})"
                 );
             }
-            serde_json::json!({
+            with_hints(serde_json::json!({
                 "id": id,
                 "description": desc,
                 "approx_size": approx_size,
@@ -511,17 +591,18 @@ pub async fn get_models_status() -> Result<serde_json::Value, String> {
                 "corrupted": corrupted,
                 "actual_size": actual_size,
                 "path": path.display().to_string(),
-            })
+            }))
         })
         .collect();
 
-    let silero_path = models_dir.join("silero_vad.onnx");
+    let silero_path = models_dir.join(gravai_models::SILERO_VAD_FILE);
     let silero_size = std::fs::metadata(&silero_path)
         .map(|m| m.len())
         .unwrap_or(0);
     let silero = serde_json::json!({
         "id": "silero_vad",
         "description": "Silero VAD — voice activity detection",
+        "approx_size": 2_300_000,
         "downloaded": silero_path.exists(),
         "actual_size": silero_size,
     });
@@ -530,8 +611,8 @@ pub async fn get_models_status() -> Result<serde_json::Value, String> {
         "whisper_models": whisper_models,
         "silero_vad": silero,
         "ai_models": ai_models_status(&models_dir),
-        "embedding_models": embedding_models_status(&models_dir),
-        "llm_models": llm_models_status(&models_dir),
+        "embedding_models": embedding_models_status(&models_dir).into_iter().map(with_hints).collect::<Vec<_>>(),
+        "llm_models": llm_models_status(&models_dir).into_iter().map(with_hints).collect::<Vec<_>>(),
         "models_dir": models_dir.display().to_string(),
     }))
 }
@@ -542,6 +623,26 @@ pub async fn get_models_status() -> Result<serde_json::Value, String> {
 pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<String, String> {
     let models_dir = gravai_config::models_dir();
     let _ = std::fs::create_dir_all(&models_dir);
+
+    if model_id == "silero_vad" {
+        let emit = |status: &str, progress: u32, message: Option<String>| {
+            let _ = app.emit(
+                "gravai:model-download",
+                serde_json::json!({ "model_id": "silero_vad", "status": status, "progress": progress, "message": message }),
+            );
+        };
+        emit("downloading", 0, None);
+        return match gravai_models::download_silero_vad().await {
+            Ok(()) => {
+                emit("complete", 100, None);
+                Ok("Silero VAD downloaded".into())
+            }
+            Err(e) => {
+                emit("error", 0, Some(e.clone()));
+                Err(e)
+            }
+        };
+    }
 
     let filename = format!("ggml-{model_id}.bin");
     let path = models_dir.join(&filename);
@@ -665,6 +766,14 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<S
 #[tauri::command]
 pub async fn delete_model(model_id: String) -> Result<String, String> {
     let models_dir = gravai_config::models_dir();
+
+    if model_id == "silero_vad" {
+        let path = models_dir.join(gravai_models::SILERO_VAD_FILE);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("Delete: {e}"))?;
+        }
+        return Ok("Deleted Silero VAD".into());
+    }
 
     // Handle AI model deletion (sentiment/diarization subdirs)
     if let Some(info) = ai_model_info(&model_id) {

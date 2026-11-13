@@ -16,8 +16,6 @@ pub struct AppState {
     pub config: RwLock<AppConfig>,
     pub event_bus: EventBus,
     pub session: RwLock<Option<Arc<Session>>>,
-    pub active_profile_id: RwLock<Option<String>>,
-    pub active_preset_id: RwLock<Option<String>>,
 }
 ```
 - Managed as `Arc<AppState>` via `tauri::manage()`
@@ -44,8 +42,6 @@ pub enum GravaiEvent {
     VolumeLevel { source: String, level: f32 },
     MeetingDetected { app_name: String, title: Option<String> },
     MeetingEnded { app_name: String },
-    PresetActivated { preset_id: String },
-    ProfileSwitched { profile_id: String },
     DownloadProgress { model_id: String, downloaded: u64, total: u64 },
     Error { message: String },
     TranscriptCorrected { utterance_id: String, corrected_text: String },

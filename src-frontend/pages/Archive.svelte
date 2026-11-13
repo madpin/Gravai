@@ -402,7 +402,7 @@
           onclick={() => showDeleteConfirm = false}
           onkeydown={(e) => e.key === 'Escape' && (showDeleteConfirm = false)}
         >
-          <div class="delete-dialog" role="dialog" aria-modal="true" aria-label="Delete Session" onclick={(e) => e.stopPropagation()}>
+          <div class="delete-dialog" role="dialog" aria-modal="true" aria-label="Delete Session" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}>
             <h4>Delete Session</h4>
             <p>This will permanently delete <strong>{selectedSession?.title || selectedId}</strong>, including all audio files, transcripts, and database records.</p>
             <p class="delete-warning">This action cannot be undone.</p>
@@ -456,8 +456,9 @@
             <div
               class="bookmark-row"
               class:bookmark-seekable={!!audioPath}
-              role={audioPath ? "button" : undefined}
-              tabindex={audioPath ? 0 : undefined}
+              role="button"
+              tabindex={audioPath ? 0 : -1}
+              aria-disabled={!audioPath}
               onclick={audioPath ? () => { seekRequest = { ms: b.offset_ms }; } : undefined}
               onkeydown={audioPath ? (e) => { if (e.key === 'Enter' || e.key === ' ') seekRequest = { ms: b.offset_ms }; } : undefined}
             >

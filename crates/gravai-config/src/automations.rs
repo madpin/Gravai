@@ -48,12 +48,19 @@ pub enum AutomationCondition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutomationAction {
-    ActivateProfile { profile_id: String },
-    ActivatePreset { preset_id: String },
+    /// Write a saved setup into the live config. Older files said
+    /// `activate_profile` / `activate_preset`; `load` rewrites those.
+    ApplySetup {
+        setup_id: String,
+    },
     StartRecording,
     StopRecording,
-    ShowNotification { message: String },
-    RunExport { format: String },
+    ShowNotification {
+        message: String,
+    },
+    RunExport {
+        format: String,
+    },
 }
 
 /// A complete automation rule.
@@ -98,16 +105,11 @@ pub fn builtin_automations() -> Vec<Automation> {
         Automation {
             id: "auto-meeting-record".into(),
             name: "Start recording when a meeting starts".into(),
-            description: "Zoom, Teams, Slack, FaceTime, Discord, or Webex joins a call. Switches to the Meeting profile and starts recording. Skipped if a recording is already going.".into(),
+            description: "Zoom, Teams, Slack, FaceTime, Discord, or Webex joins a call. Starts recording with your current settings. Skipped if a recording is already going.".into(),
             enabled: false,
             trigger: AutomationTrigger::MeetingDetected,
             conditions: vec![AutomationCondition::NoActiveSession],
-            actions: vec![
-                AutomationAction::ActivateProfile {
-                    profile_id: "meeting".into(),
-                },
-                AutomationAction::StartRecording,
-            ],
+            actions: vec![AutomationAction::StartRecording],
             last_run: None,
             run_count: 0,
         },
@@ -151,7 +153,7 @@ pub fn builtin_automations() -> Vec<Automation> {
 
 /// Bumped when a builtin's default `enabled` state changes, so existing
 /// stores get the new defaults applied exactly once (see `load`).
-const CURRENT_DEFAULTS_VERSION: u32 = 2;
+const CURRENT_DEFAULTS_VERSION: u32 = 3;
 
 /// Automation store.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -165,15 +167,14 @@ pub struct AutomationStore {
 impl AutomationStore {
     pub fn load() -> Self {
         let path = super::data_dir().join("automations.json");
-        let mut store = if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                serde_json::from_str::<Self>(&content).unwrap_or_default()
-            } else {
-                Self::default()
-            }
-        } else {
-            Self::default()
-        };
+        let mut store = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .map(|mut raw| {
+                rewrite_legacy_actions(&mut raw);
+                serde_json::from_value::<Self>(raw).unwrap_or_default()
+            })
+            .unwrap_or_default();
         // Merge any builtin automations that don't yet exist in the store
         // (handles the case where new builtins are added after first run).
         for a in builtin_automations() {
@@ -291,6 +292,21 @@ impl AutomationStore {
             self.collapse_duplicate_meeting_rules();
             changed = true;
         }
+        if self.defaults_version < 3 {
+            // The meeting start rule used to apply the Meeting profile first,
+            // which rewrote settings on every call. It only records now.
+            if let Some(rule) = self.automations.get_mut("auto-meeting-record") {
+                rule.actions
+                    .retain(|a| !matches!(a, AutomationAction::ApplySetup { .. }));
+                if let Some(b) = builtin_automations()
+                    .into_iter()
+                    .find(|b| b.id == "auto-meeting-record")
+                {
+                    rule.description = b.description;
+                }
+            }
+            changed = true;
+        }
         if self.defaults_version < CURRENT_DEFAULTS_VERSION {
             self.defaults_version = CURRENT_DEFAULTS_VERSION;
             changed = true;
@@ -316,6 +332,30 @@ impl AutomationStore {
                 existing.description = builtin.description.clone();
                 if builtin.id == "zoom-auto-stop" {
                     existing.trigger = builtin.trigger.clone();
+                }
+            }
+        }
+    }
+}
+
+/// Old files name profiles and presets. Setups keep those ids, so point the
+/// action at the setup with the same id.
+fn rewrite_legacy_actions(raw: &mut serde_json::Value) {
+    let Some(automations) = raw.get_mut("automations").and_then(|a| a.as_object_mut()) else {
+        return;
+    };
+    for automation in automations.values_mut() {
+        let Some(actions) = automation.get_mut("actions").and_then(|a| a.as_array_mut()) else {
+            continue;
+        };
+        for action in actions.iter_mut() {
+            let legacy = [
+                ("activate_profile", "profile_id"),
+                ("activate_preset", "preset_id"),
+            ];
+            for (tag, field) in legacy {
+                if let Some(id) = action.get(tag).and_then(|v| v.get(field)).cloned() {
+                    *action = serde_json::json!({ "apply_setup": { "setup_id": id } });
                 }
             }
         }
@@ -454,5 +494,42 @@ mod tests {
             .map(|automation| automation.id.clone())
             .collect();
         assert_eq!(teams, vec!["teams-only".to_string()]);
+    }
+
+    #[test]
+    fn legacy_profile_and_preset_actions_become_apply_setup() {
+        let mut raw = serde_json::json!({
+            "automations": {
+                "auto-meeting-record": {
+                    "id": "auto-meeting-record", "name": "x", "description": "", "enabled": true,
+                    "trigger": "meeting_detected", "conditions": [],
+                    "actions": [
+                        { "activate_profile": { "profile_id": "meeting" } },
+                        "start_recording"
+                    ],
+                    "last_run": null, "run_count": 0
+                },
+                "mine": {
+                    "id": "mine", "name": "y", "description": "", "enabled": true,
+                    "trigger": "session_started", "conditions": [],
+                    "actions": [{ "activate_preset": { "preset_id": "podcast" } }],
+                    "last_run": null, "run_count": 0
+                }
+            },
+            "defaults_version": 2
+        });
+        rewrite_legacy_actions(&mut raw);
+        let mut store: AutomationStore = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            &store.automations["mine"].actions[0],
+            AutomationAction::ApplySetup { setup_id } if setup_id == "podcast"
+        ));
+        assert!(store.apply_default_migrations());
+        let meeting = &store.automations["auto-meeting-record"];
+        assert_eq!(meeting.actions.len(), 1);
+        assert!(meeting.starts_recording());
+        assert!(meeting.enabled);
+        // User rules keep their apply action.
+        assert_eq!(store.automations["mine"].actions.len(), 1);
     }
 }

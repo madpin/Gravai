@@ -42,7 +42,7 @@ Gravai is a privacy-first macOS app for audio capture, transcription, and AI mee
 | `gravai-audio` | `AudioCaptureManager`, resampler (48kHz→16kHz), multi-track WAV recorder, VAD (WebRTC/Silero), echo suppression, silence detection |
 | `gravai-transcription` | `TranscriptionProvider` trait + Whisper engine implementation |
 | `gravai-intelligence` | LLM client, summarization, diarization, embeddings, RAG chat, Minijinja prompt templates |
-| `gravai-config` | Versioned JSON config at `~/.gravai/config.json`, presets, profiles, shortcuts, automations |
+| `gravai-config` | Versioned JSON config at `~/.gravai/config.json`, setups (named snapshots), shortcuts, automations |
 | `gravai-storage` | SQLite + FTS5 + vector embeddings; session CRUD, full-text search |
 | `gravai-models` | Model downloader (Whisper, Silero VAD from HuggingFace → `~/.gravai/models/`) |
 | `gravai-export` | Markdown, PDF, Obsidian, Notion exporters |
@@ -50,12 +50,12 @@ Gravai is a privacy-first macOS app for audio capture, transcription, and AI mee
 
 ### Tauri App (`src-tauri/src/`)
 
-- `lib.rs` — 47 Tauri commands, event bridge (`GravaiEvent` → frontend `gravai:*` events), system tray, automations engine
+- `lib.rs` — Tauri command registry, event bridge (`GravaiEvent` → frontend `gravai:*` events), system tray, automations engine, global shortcuts (`shortcuts.rs`)
 - `commands/` — Thin handlers wrapping core crate logic (audio, session, models, search, intelligence, storage, export, config, tools, knowledge)
 
 ### Frontend (`src-frontend/`)
 
-Svelte 5 + TypeScript. Pages: Recording, Archive, Chat, Presets, Profiles, Knowledge, Storage, Settings. Frontend communicates exclusively via Tauri `invoke`/`listen` — no direct Rust access.
+Svelte 5 + TypeScript. Sidebar: Record, Archive, Ask, Settings. Settings is one page with sections (Capture, Speech, Assistant, Search, Sessions, Library, App) under `pages/settings/`; every setting has exactly one home and writes the live config through `lib/config.ts`. Frontend communicates exclusively via Tauri `invoke`/`listen` — no direct Rust access.
 
 ### Recording Pipeline
 
@@ -76,7 +76,7 @@ Sys (SCK) ───┘
 - **EventBus**: Typed `GravaiEvent` enum for loosely-coupled communication between crates
 - **Provider Traits**: Audio capture, transcription, VAD, and LLM are all behind traits — swap implementations without changing callers
 - **Tauri Commands**: Always thin; logic lives in the relevant crate, not in `src-tauri/`
-- **Configuration**: Versioned JSON auto-migrates on load; presets bundle capture settings, profiles bundle transcription+VAD+LLM settings
+- **Configuration**: Versioned JSON auto-migrates on load. The live config is what the next recording uses. Setups are named full snapshots applied one-shot (nothing stays active); each recording stores its snapshot for recents and continuation
 
 ## Data & Config Locations
 

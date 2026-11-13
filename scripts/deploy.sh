@@ -24,6 +24,10 @@ LOGFILE="/tmp/gravai-deploy-${TS}.log"
 
 # Don't let a debug RUSTC_LOG flood the deploy log or change rustc's behavior.
 unset RUSTC_LOG
+# Cargo replays each fresh crate's saved compiler output on every build. Crates
+# once compiled with RUSTC_LOG set keep printing that log (hundreds of thousands
+# of lines) until the saved output is gone. Removing it does not force a rebuild.
+grep -l "INFO rustc_" target/release/.fingerprint/*/output-* 2>/dev/null | xargs rm -f 2>/dev/null || true
 
 # Bake Metal shaders into the app. Always 1: a leftover 0 in the environment
 # compiles every kernel again on model load (the multi-minute warmup).

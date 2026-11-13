@@ -93,7 +93,6 @@ body {
   padding: 9px 0; justify-content: center; gap: 0;
 }
 .sidebar.collapsed .nav-icon { width: auto; margin: 0; }
-.sidebar.collapsed .nav-section-toggle { padding: 9px 0; justify-content: center; }
 .sidebar.collapsed .sidebar-header { padding: 16px 0; justify-content: center; }
 .sidebar-header { padding: 20px 18px 14px; display: flex; align-items: center; gap: 10px; }
 .sidebar-header .app-icon { width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0; }
@@ -118,24 +117,8 @@ body {
   font-weight: 600;
 }
 .nav-icon { font-size: 15px; width: 20px; text-align: center; display: inline-block; }
-.nav-item.sub { padding-left: 24px; font-size: 12px; }
-.nav-item.sub .nav-icon { font-size: 13px; }
 .nav-item.active svg { opacity: 1; }
-
-/* Nav section (collapsible group) */
-.nav-section { list-style: none; margin-top: 6px; border-top: 1px solid var(--border-subtle); padding-top: 6px; }
-.nav-section-toggle {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 9px 12px; border: none; background: none; cursor: pointer;
-  color: var(--text-tertiary); font-size: 11px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.8px;
-  font-family: inherit; border-radius: var(--radius-sm);
-  transition: color 0.15s;
-}
-.nav-section-toggle:hover { color: var(--text-secondary); }
-.nav-section-toggle .nav-icon { font-size: 13px; }
-.nav-section-arrow { margin-left: auto; font-size: 10px; color: var(--text-tertiary); }
-.nav-sublist { list-style: none; padding: 2px 0 0; }
+.nav-divider { list-style: none; height: 1px; background: var(--border-subtle); margin: 8px 6px; }
 /* sidebar-footer removed — replaced by StatusBar at bottom of app */
 .sidebar-collapse-btn-wrap {
   padding: 6px 8px; border-top: 1px solid var(--border-subtle);
@@ -242,7 +225,6 @@ body {
 .source-toggle { font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; flex: 1; }
 .source-meter { display: flex; align-items: center; flex-shrink: 0; }
 .source-device { flex: 1; min-width: 0; }
-.source-volume { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .toggle-label { font-size: 13px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
 
 /* ===== VU Meter ===== */
@@ -256,10 +238,6 @@ body {
   transition: width 0.08s linear;
   box-shadow: 0 0 4px rgba(52, 211, 153, 0.3);
 }
-
-/* ===== Slider ===== */
-.slider { width: 80px; accent-color: var(--accent); cursor: pointer; }
-.slider-value { font-size: 11px; color: var(--text-tertiary); min-width: 36px; text-align: right; font-family: "SF Mono", monospace; }
 
 /* ===== Buttons ===== */
 .btn {
@@ -603,45 +581,6 @@ body {
 /* ===== Page transitions ===== */
 .content > * { animation: pageIn 0.2s var(--ease); }
 @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-
-/* ===== Active config bar ===== */
-.active-config-bar { display: flex; gap: 8px; flex-wrap: wrap; }
-.config-pill-wrap { position: relative; }
-.config-pill {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 12px; border-radius: 20px;
-  background: var(--bg-secondary); border: 1px solid var(--border-subtle);
-  font-size: 12px; cursor: help; transition: border-color 0.15s;
-}
-.config-pill-wrap:hover .config-pill { border-color: var(--accent); }
-.config-pill-icon { font-size: 13px; }
-.config-pill-label { color: var(--text-tertiary); font-weight: 500; }
-.config-pill-value { color: var(--text-primary); font-weight: 600; }
-.config-pill-edit {
-  display: none; align-items: center; justify-content: center;
-  background: none; border: none; padding: 0 2px; margin-left: 2px;
-  color: var(--accent); font-size: 13px; cursor: pointer; line-height: 1;
-  opacity: 0.8; transition: opacity 0.1s;
-}
-.config-pill-edit:hover { opacity: 1; }
-.config-pill-wrap:hover .config-pill-edit { display: flex; }
-.config-tooltip {
-  opacity: 0; visibility: hidden; pointer-events: none;
-  position: absolute; top: calc(100% + 6px); left: 0;
-  background: var(--bg-primary); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 14px;
-  min-width: 220px; z-index: 50;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-  transition: opacity 0.15s var(--ease), visibility 0.15s var(--ease);
-}
-.config-pill-wrap:hover .config-tooltip { opacity: 1; visibility: visible; pointer-events: auto; }
-.config-tooltip-row {
-  font-size: 11px; color: var(--text-secondary);
-  padding: 2px 0; line-height: 1.4;
-}
-.config-tooltip-divider {
-  border-top: 1px solid var(--border); margin: 4px 0;
-}
 
 /* ===== Export indicator ===== */
 .export-indicator { display: flex; gap: 6px; flex-wrap: wrap; }

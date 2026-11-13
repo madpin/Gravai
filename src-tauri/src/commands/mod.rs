@@ -7,6 +7,7 @@ mod export;
 mod intelligence;
 mod knowledge;
 mod models;
+mod recovery;
 mod search;
 mod session;
 mod storage;
@@ -19,6 +20,7 @@ pub use export::*;
 pub use intelligence::*;
 pub use knowledge::*;
 pub use models::*;
+pub use recovery::*;
 pub use search::*;
 pub use session::*;
 pub use storage::*;
@@ -44,8 +46,6 @@ pub async fn get_app_status(state: State<'_, Arc<AppState>>) -> Result<serde_jso
 
     Ok(serde_json::json!({
         "session": session_info,
-        "active_profile": *state.active_profile.read().await,
-        "active_preset": *state.active_preset.read().await,
     }))
 }
 
@@ -164,6 +164,26 @@ pub async fn request_calendar_access() -> Result<String, String> {
 #[tauri::command]
 pub async fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Whether Gravai opens at login (its launch agent is installed).
+#[tauri::command]
+pub async fn get_launch_at_login(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    }
+    .map_err(|e| e.to_string())?;
+    autolaunch.is_enabled().map_err(|e| e.to_string())
 }
 
 /// Check GitHub releases for a newer version via the Tauri updater plugin.

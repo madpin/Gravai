@@ -65,6 +65,59 @@ impl Default for Profile {
     }
 }
 
+impl Profile {
+    /// Write every field this profile sets onto `config`. Unset fields are left alone.
+    pub fn apply_to(&self, config: &mut crate::AppConfig) {
+        if let Some(ref engine) = self.transcription_engine {
+            config.transcription.engine = engine.clone();
+        }
+        if let Some(ref model) = self.transcription_model {
+            config.transcription.model = model.clone();
+        }
+        if let Some(ref lang) = self.transcription_language {
+            config.transcription.language = lang.clone();
+        }
+        if let Some(ref provider) = self.llm_provider {
+            config.llm.provider = provider.clone();
+        }
+        if let Some(ref model) = self.llm_model {
+            config.llm.model = model.clone();
+        }
+        if let Some(ref local_model) = self.llm_local_model {
+            config.llm.local_model = local_model.clone();
+        }
+        // Re-run migration in case the profile has legacy provider values
+        config.llm.migrate();
+        if let Some(enabled) = self.diarization_enabled {
+            config.features.diarization.enabled = enabled;
+        }
+        if let Some(enabled) = self.echo_suppression_enabled {
+            config.features.echo_suppression.enabled = enabled;
+        }
+        if let Some(enabled) = self.correction_enabled {
+            config.correction.enabled = enabled;
+        }
+        if let Some(enabled) = self.sentiment_enabled {
+            config.features.sentiment.enabled = enabled;
+        }
+        if let Some(enabled) = self.meeting_enabled {
+            config.features.meeting_detection.enabled = enabled;
+        }
+        if let Some(ref engine) = self.vad_engine {
+            config.vad.engine = engine.clone();
+        }
+        if let Some(pause) = self.vad_pause {
+            config.vad.pause_seconds = pause;
+        }
+        if let Some(min) = self.vad_min {
+            config.vad.silero.min_utterance_seconds = min;
+        }
+        if let Some(max) = self.vad_max {
+            config.vad.silero.max_utterance_seconds = max;
+        }
+    }
+}
+
 /// Built-in profiles.
 pub fn builtin_profiles() -> Vec<Profile> {
     vec![
@@ -113,7 +166,7 @@ pub struct ProfileStore {
 
 impl ProfileStore {
     pub fn load() -> Self {
-        let path = super::data_dir().join("profiles.json");
+        let path = crate::data_dir().join("profiles.json");
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(mut store) = serde_json::from_str::<Self>(&content) {
@@ -169,17 +222,8 @@ impl ProfileStore {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let path = super::data_dir().join("profiles.json");
+        let path = crate::data_dir().join("profiles.json");
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, content)
-    }
-
-    pub fn activate(&mut self, profile_id: &str) -> Option<&Profile> {
-        if self.profiles.contains_key(profile_id) {
-            self.active_profile_id = Some(profile_id.to_string());
-            self.profiles.get(profile_id)
-        } else {
-            None
-        }
     }
 }

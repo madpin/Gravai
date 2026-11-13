@@ -33,6 +33,11 @@ tauri-plugin-notification = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-clipboard-manager = "2"
+# 2.4 needs tauri 2.12; the npm @tauri-apps packages are on 2.10, and `tauri build`
+# refuses mismatched minors. Move both together.
+tauri-plugin-global-shortcut = ">=2.3, <2.4"
+# 2.6 needs tauri 2.12, like global-shortcut 2.4 above.
+tauri-plugin-autostart = ">=2.5, <2.6"
 
 # Shared deps
 tokio = { workspace = true }

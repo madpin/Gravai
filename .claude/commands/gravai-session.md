@@ -20,7 +20,7 @@ Idle(0) ──start──→ Recording(1) ──pause──→ Paused(2)
 
 ## `start_session()` — Full Sequence
 1. **Guard**: `SESSION_STARTING` atomic + RAII `SessionStartGuard` prevents concurrent starts
-2. **Config**: Load active profile/preset overrides (transcription engine/model, mic enabled, gain, etc.)
+2. **Config**: Clone the live `AppState.config`. A continuation applies the session's stored `Snapshot` (`sessions.config_snapshot`) on top, keeping live devices. New sessions store `Snapshot::capture(&config)` right after the DB row is created
 3. **ID**: `generate_session_id()` → `"YYYYMMDD_HHMMSS"` format
 4. **Auto-name**: query calendar (EventKit) or Zoom window title for session title
 5. **DB**: Create `SessionRecord` in SQLite early (utterances need the session_id FK)

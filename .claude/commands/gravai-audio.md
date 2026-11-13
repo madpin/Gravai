@@ -83,6 +83,13 @@ pub struct PipelineInput {
 - Silence duration detection, separate from VAD (complements it)
 - Used by the silence monitor in `lib.rs` to detect audio device failures
 
+### `recovery.rs` — unfinished recordings
+- `hound` writes WAV lengths only on finalize, so a crash leaves tracks whose header says 0 bytes; every reader and `compact_session` then skips them.
+- `inspect_wav(path) -> WavInfo { file_bytes, sample_rate, channels, bits_per_sample, seconds, header_ok }` reads RIFF chunks without trusting the lengths; `seconds` comes from the file size.
+- `repair_wav(path)` rewrites the RIFF and `data` lengths (drops a trailing partial frame).
+- `inspect_session_dir(dir) -> Vec<SegmentReport>` covers the folder and `continuations/<offset_ms>/`; `repair_session_dir(dir)` repairs every track and removes temp files (`playback.building.m4a`, `_playback_temp.wav`); `timeline_seconds(&segments)`.
+- Used by `src-tauri/src/commands/recovery.rs` (`scan_incomplete_sessions`, `resolve_incomplete_session` with `convert` | `keep` | `delete`).
+
 ## Audio Flow
 ```
 CPAL mic stream (48kHz)   ──→ mpsc HQ ──→ TrackWriter (mic.wav)

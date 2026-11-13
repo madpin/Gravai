@@ -35,6 +35,11 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[
         "Session bookmarks",
         include_str!("../sql/007_session_bookmarks.sql"),
     ),
+    (
+        8,
+        "Session config snapshot",
+        include_str!("../sql/008_session_config_snapshot.sql"),
+    ),
 ];
 
 /// Run all pending migrations. Creates the schema_version table if needed.

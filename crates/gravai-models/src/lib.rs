@@ -31,11 +31,23 @@ pub async fn ensure_models(config: &gravai_config::AppConfig) {
 
     // Download Silero VAD if configured
     if config.vad.engine == "silero" {
-        let silero_file = dir.join("silero_vad.onnx");
-        let silero_url =
-            "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx";
-        download_if_missing(&silero_file, silero_url, "Silero VAD").await;
+        download_if_missing(&dir.join(SILERO_VAD_FILE), SILERO_VAD_URL, "Silero VAD").await;
     }
+}
+
+pub const SILERO_VAD_FILE: &str = "silero_vad.onnx";
+const SILERO_VAD_URL: &str =
+    "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx";
+
+/// Download the Silero voice-detection model into the models folder.
+pub async fn download_silero_vad() -> Result<(), String> {
+    let dir = models_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(SILERO_VAD_FILE);
+    if path.exists() {
+        return Ok(());
+    }
+    download_file(SILERO_VAD_URL, &path, "Silero VAD").await
 }
 
 async fn download_if_missing(path: &PathBuf, url: &str, label: &str) {

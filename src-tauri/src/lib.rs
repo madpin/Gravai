@@ -1,6 +1,7 @@
 //! Gravai Tauri application — thin glue layer between core crates and the UI.
 
 mod commands;
+mod shortcuts;
 
 use gravai_config::load_config;
 use gravai_core::{AppState, GravaiEvent};
@@ -39,12 +40,45 @@ fn make_tray_icon() -> tauri::image::Image<'static> {
     tauri::image::Image::new_owned(px, W as u32, H as u32)
 }
 
+/// Apply `edit` to the live config and save it, so the next recording uses it.
+async fn apply_to_live_config(
+    handle: &tauri::AppHandle,
+    edit: impl FnOnce(&mut gravai_config::AppConfig),
+) {
+    let Some(state) = handle.try_state::<Arc<AppState>>() else {
+        return;
+    };
+    let mut config = state.config.write().await;
+    edit(&mut config);
+    if let Err(err) = gravai_config::save_config(&config) {
+        tracing::warn!("Automation: could not save config: {err}");
+    }
+    let _ = handle.emit("gravai:config-changed", ());
+}
+
 /// Execute a list of automation actions by emitting events to the frontend.
 /// `currently_recording` is the live recording state at the time of the call.
+///
+/// Runs on the async runtime, in order, so an apply action has written the
+/// config before a following StartRecording reaches the window.
 pub(crate) fn run_automation_actions(
     handle: &tauri::AppHandle,
     // Short noun-phrase shown in the auto-stop countdown banner (e.g.
     // "Zoom meeting ended"). Only used by the `StopRecording` action.
+    reason: &str,
+    actions: &[gravai_config::automations::AutomationAction],
+    currently_recording: bool,
+) {
+    let handle = handle.clone();
+    let reason = reason.to_string();
+    let actions = actions.to_vec();
+    tauri::async_runtime::spawn(async move {
+        execute_automation_actions(&handle, &reason, &actions, currently_recording).await;
+    });
+}
+
+async fn execute_automation_actions(
+    handle: &tauri::AppHandle,
     reason: &str,
     actions: &[gravai_config::automations::AutomationAction],
     currently_recording: bool,
@@ -87,22 +121,26 @@ pub(crate) fn run_automation_actions(
                         .show();
                 }
             }
-            AutomationAction::ActivateProfile { profile_id } => {
-                // Apply before StartRecording. start_session reads the active
-                // profile from disk, and nothing in the window listens for this.
-                let mut store = gravai_config::profiles::ProfileStore::load();
-                if store.activate(profile_id).is_some() {
-                    if let Err(err) = store.save() {
-                        tracing::warn!("Automation: could not save profile {profile_id}: {err}");
-                    } else {
-                        tracing::info!("Automation: activated profile {profile_id}");
+            AutomationAction::ApplySetup { setup_id } => {
+                // Runs before StartRecording, which reads the live config.
+                let snapshot = match handle.try_state::<Arc<AppState>>() {
+                    Some(state) => {
+                        let config = state.config.read().await;
+                        gravai_config::setups::SetupStore::load(&config)
+                            .get(setup_id)
+                            .map(|s| s.snapshot.clone())
                     }
-                } else {
-                    tracing::warn!("Automation: profile '{profile_id}' not found");
+                    None => None,
+                };
+                match snapshot {
+                    Some(snapshot) => {
+                        apply_to_live_config(handle, |c| snapshot.apply_to(c)).await;
+                        tracing::info!("Automation: applied setup {setup_id}");
+                    }
+                    None => tracing::warn!("Automation: setup '{setup_id}' not found"),
                 }
-                let _ = handle.emit("gravai:automation-activate-profile", profile_id);
             }
-            // Other actions (ActivatePreset, RunExport) are handled by the frontend
+            // Other actions (RunExport) are handled by the frontend
             _ => {
                 let _ = handle.emit(
                     "gravai:automation-action",
@@ -152,6 +190,10 @@ struct TrayItems {
 }
 type TrayItemsState = Arc<std::sync::Mutex<TrayItems>>;
 
+/// Passed by the launch agent, so a login launch can open the window the way
+/// `startup.window` says while a launch by the user always shows it.
+const OPENED_AT_LOGIN_ARG: &str = "--opened-at-login";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging
@@ -159,8 +201,12 @@ pub fn run() {
     gravai_core::perf::init();
     tracing::info!("Gravai starting up");
 
-    // Load config
-    let config = load_config();
+    // Load config. Fold in any active profile/preset first, so every copy
+    // below sees the values the next recording will use.
+    let mut config = load_config();
+    gravai_config::migrate_active_bundles(&mut config);
+    // First launch after setups: turn presets and profiles into setups.
+    let _ = gravai_config::setups::SetupStore::load(&config);
 
     // Run preflight checks in background
     let preflight_config = config.clone();
@@ -226,15 +272,42 @@ pub fn run() {
     // Auto-check for updates once on launch (5 s delay so window is ready)
     let auto_check_updates = config.updates.auto_check;
 
+    let startup_window = if std::env::args().any(|arg| arg == OPENED_AT_LOGIN_ARG) {
+        config.startup.window
+    } else {
+        gravai_config::StartupWindow::Window
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Visibility is left out: the window starts hidden (tauri.conf.json)
+        // and setup decides whether to show it.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        - tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
+                .build(),
+        )
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(OPENED_AT_LOGIN_ARG)
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::default().build())
+        .plugin(shortcuts::plugin())
         .manage(app_state)
         .setup(move |app| {
+            if let Err(e) = shortcuts::register(
+                app.handle(),
+                &gravai_config::shortcuts::ShortcutStore::load(),
+            ) {
+                tracing::warn!("Shortcuts: {e}");
+            }
             // ── System Tray ──────────────────────────────────────────────
             {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
@@ -245,7 +318,7 @@ pub fn run() {
                 let start_item    = MenuItemBuilder::with_id("start",  "⏺  Start Recording").enabled(true).build(app)?;
                 let stop_item     = MenuItemBuilder::with_id("stop",   "⏹  Stop Recording").enabled(false).build(app)?;
                 let recording_tab = MenuItemBuilder::with_id("go_rec", "Open Recording Tab").build(app)?;
-                let models_tab    = MenuItemBuilder::with_id("go_models", "Open Models Tab").build(app)?;
+                let settings_tab    = MenuItemBuilder::with_id("go_settings", "Open Settings").build(app)?;
                 let quit_item     = MenuItemBuilder::with_id("quit",   "Quit Gravai").build(app)?;
                 let sep1 = PredefinedMenuItem::separator(app)?;
                 let sep2 = PredefinedMenuItem::separator(app)?;
@@ -259,7 +332,7 @@ pub fn run() {
                     .item(&stop_item)
                     .item(&sep2)
                     .item(&recording_tab)
-                    .item(&models_tab)
+                    .item(&settings_tab)
                     .item(&sep3)
                     .item(&quit_item)
                     .build()?;
@@ -328,11 +401,11 @@ pub fn run() {
                                     let _ = win.emit("gravai:navigate", "recording");
                                 }
                             }
-                            "go_models" => {
+                            "go_settings" => {
                                 if let Some(win) = app.get_webview_window("main") {
                                     let _ = win.show();
                                     let _ = win.set_focus();
-                                    let _ = win.emit("gravai:navigate", "models");
+                                    let _ = win.emit("gravai:navigate", "settings");
                                 }
                             }
                             "quit" => {
@@ -389,6 +462,22 @@ pub fn run() {
                             let _ = main_window.center();
                         }
                     }
+                }
+            }
+
+            // ── Initial window ────────────────────────────────────────────
+            if let Some(main_window) = app.get_webview_window("main") {
+                use gravai_config::StartupWindow;
+                match startup_window {
+                    StartupWindow::Window => {
+                        let _ = main_window.show();
+                        let _ = main_window.set_focus();
+                    }
+                    StartupWindow::Minimized => {
+                        let _ = main_window.show();
+                        let _ = main_window.minimize();
+                    }
+                    StartupWindow::MenuBar => {}
                 }
             }
 
@@ -706,7 +795,6 @@ pub fn run() {
             commands::switch_microphone,
             commands::list_running_apps,
             commands::list_capturable_apps,
-            commands::set_source_gain,
             commands::get_session_audio_path,
             commands::start_session,
             commands::continue_session,
@@ -725,14 +813,19 @@ pub fn run() {
             commands::get_export_formats,
             commands::export_session_audio,
             commands::get_session_sentiment,
-            // Phase 3: Presets, profiles, shortcuts, automations
-            commands::get_presets,
-            commands::activate_preset,
-            commands::save_preset,
-            commands::delete_preset,
-            commands::get_profiles,
-            commands::activate_profile,
-            commands::save_profile,
+            // Setups, shortcuts, automations
+            commands::list_setups,
+            commands::save_current_setup,
+            commands::rename_setup,
+            commands::delete_setup,
+            commands::restore_builtin_setups,
+            commands::apply_setup,
+            commands::apply_recent,
+            commands::apply_snapshot,
+            commands::list_recent_starts,
+            commands::get_run_summary,
+            commands::scan_incomplete_sessions,
+            commands::resolve_incomplete_session,
             commands::get_shortcuts,
             commands::rebind_shortcut,
             commands::get_automations,
@@ -781,6 +874,8 @@ pub fn run() {
             commands::request_calendar_access,
             // Updates
             commands::get_app_version,
+            commands::get_launch_at_login,
+            commands::set_launch_at_login,
             commands::check_for_update,
             commands::install_update,
             // Knowledge base
@@ -796,6 +891,16 @@ pub fn run() {
             commands::list_bookmarks,
             commands::delete_bookmark,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Gravai");
+        .build(tauri::generate_context!())
+        .expect("error while building Gravai")
+        .run(|_app, _event| {
+            // Clicking the Dock icon brings back a window hidden in the menu bar.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = _event {
+                if let Some(win) = _app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+        });
 }

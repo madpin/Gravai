@@ -100,6 +100,14 @@
     interval = window.setInterval(refresh, 5000);
     unlisteners.push(await listen("gravai:stop-session", () => stop()));
     unlisteners.push(await listen("gravai:automation-start", () => autoStart()));
+    unlisteners.push(await listen("gravai:shortcut", (e: any) => runShortcut(String(e.payload))));
+    await loadLocalBindings();
+    window.addEventListener("keydown", onKeydown);
+    window.addEventListener("gravai-shortcuts-changed", loadLocalBindings);
+    unlisteners.push(() => {
+      window.removeEventListener("keydown", onKeydown);
+      window.removeEventListener("gravai-shortcuts-changed", loadLocalBindings);
+    });
     // Silence countdown: arm on active:true; on active:false (audio resumed)
     // cancel only if the running countdown is the silence one.
     unlisteners.push(await listen("gravai:silence-countdown", (e: any) => {
@@ -159,6 +167,51 @@
       if ($isPaused) { await invoke("resume_session"); isPaused.set(false); }
       else { await invoke("pause_session"); isPaused.set(true); }
     } catch (_) {}
+  }
+
+  // ── Keyboard shortcuts ─────────────────────────────────────────────────
+  // Global keys arrive from Rust as `gravai:shortcut`. Window-only keys are
+  // matched here against the same bindings.
+  let localBindings: Array<{ action: string; key: string }> = [];
+
+  async function loadLocalBindings() {
+    try {
+      const store: any = await invoke("get_shortcuts");
+      localBindings = Object.values(store.bindings ?? {})
+        .filter((b: any) => !b.is_global && b.key_sequence)
+        .map((b: any) => ({ action: b.action_id, key: b.key_sequence }));
+    } catch (_) {}
+  }
+
+  function keyOf(e: KeyboardEvent): string {
+    const parts: string[] = [];
+    if (e.metaKey || e.ctrlKey) parts.push("CmdOrCtrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    const key = e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.key.toUpperCase();
+    parts.push(key);
+    return parts.join("+");
+  }
+
+  function sameKey(a: string, b: string): boolean {
+    const norm = (k: string) => k.split("+").map(p => p.toUpperCase()).sort().join("+");
+    return norm(a) === norm(b);
+  }
+
+  function onKeydown(e: KeyboardEvent) {
+    if (!(e.metaKey || e.ctrlKey || e.altKey)) return;
+    const pressed = keyOf(e);
+    const hit = localBindings.find(b => sameKey(b.key, pressed));
+    if (hit) { e.preventDefault(); runShortcut(hit.action); }
+  }
+
+  async function runShortcut(action: string) {
+    if (action === "recording.start") autoStart();
+    else if (action === "recording.stop") { if ($isRecording) stop(); }
+    else if (action === "recording.pause") { if ($isRecording) togglePause(); }
+    else if (action === "recording.bookmark" && $isRecording) {
+      try { await invoke("add_bookmark", { note: null }); } catch (_) {}
+    }
   }
 
   async function stop() {

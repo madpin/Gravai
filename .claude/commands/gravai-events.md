@@ -29,12 +29,6 @@ pub enum GravaiEvent {
     MeetingEnded {
         app_name: String,
     },
-    PresetActivated {
-        preset_id: String,
-    },
-    ProfileSwitched {
-        profile_id: String,
-    },
     DownloadProgress {
         model_id: String,
         downloaded: u64,  // bytes
@@ -75,8 +69,6 @@ Converts `GravaiEvent` → Tauri window events. Runs in a `tokio::spawn` loop at
 | `VolumeLevel` | `"gravai:volume"` | Also updates `last_audio_time` for silence monitor |
 | `MeetingDetected` | `"gravai:meeting"` | Also triggers automation evaluation |
 | `MeetingEnded` | `"gravai:meeting-ended"` | |
-| `PresetActivated` | `"gravai:preset"` | |
-| `ProfileSwitched` | `"gravai:profile"` | |
 | `DownloadProgress` | `"gravai:model-download"` | |
 | `Error` | `"gravai:error"` | |
 | `TranscriptCorrected` | `"gravai:correction"` | |
@@ -141,7 +133,9 @@ A secondary consumer of `VolumeLevel` events in `lib.rs`:
 1. Load all enabled `Automation` rules from config
 2. Match `AutomationTrigger::MeetingDetected` or `MeetingAppDetected { app_name }`
 3. Evaluate conditions (process running, day of week, session state)
-4. Execute actions (start recording, switch profile/preset, show notification)
+4. Execute actions in order on the async runtime (apply a setup, start recording, show notification). `ApplySetup` writes the live config and emits `gravai:config-changed` before a following start.
+
+Other window events emitted directly (not via `GravaiEvent`): `gravai:config-changed` (live config written by an apply), `gravai:shortcut` (global shortcut action id, from `src-tauri/src/shortcuts.rs`).
 
 ---
 

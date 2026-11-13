@@ -1,6 +1,6 @@
 //! Shared application state (Arc<AppState>).
 //!
-//! Ported from ears-rust-api app_state.rs, expanded with profile/preset fields.
+//! Ported from ears-rust-api app_state.rs.
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,8 +14,6 @@ pub struct AppState {
     pub config: RwLock<AppConfig>,
     pub event_bus: EventBus,
     pub session: RwLock<Option<Arc<Session>>>,
-    pub active_profile: RwLock<Option<String>>,
-    pub active_preset: RwLock<Option<String>>,
 }
 
 impl AppState {
@@ -24,8 +22,6 @@ impl AppState {
             config: RwLock::new(config),
             event_bus: EventBus::new(),
             session: RwLock::new(None),
-            active_profile: RwLock::new(None),
-            active_preset: RwLock::new(None),
         }
     }
 }

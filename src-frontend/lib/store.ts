@@ -3,6 +3,24 @@
 import { writable } from "svelte/store";
 
 export const currentPage = writable("recording");
+
+export type SettingsSection = "capture" | "speech" | "assistant" | "search" | "sessions" | "library" | "app";
+export const settingsSection = writable<SettingsSection>("capture");
+
+// Pages that became Settings sections, so old links and tray items still land.
+const LEGACY_PAGES: Record<string, string> = {
+  models: "settings:library", knowledge: "settings:library", storage: "settings:library",
+  shortcuts: "settings:app", automations: "settings:sessions",
+  presets: "recording", profiles: "recording",
+};
+
+/** Go to a page, or to a Settings section with "settings:<section>". */
+export function navigate(target: string) {
+  const resolved = LEGACY_PAGES[target] ?? target;
+  const [page, section] = resolved.split(":");
+  if (page === "settings" && section) settingsSection.set(section as SettingsSection);
+  currentPage.set(page);
+}
 export const isRecording = writable(false);
 export const isPaused = writable(false);
 export const currentSessionId = writable<string | null>(null);

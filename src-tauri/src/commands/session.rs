@@ -7,6 +7,7 @@ use gravai_audio::capture::{AudioCaptureManager, AudioChunk, VolumeCallback};
 use gravai_audio::echo::EchoSuppressor;
 use gravai_audio::pipeline;
 use gravai_audio::recorder::MultiTrackRecorder;
+use gravai_config::setups::Snapshot;
 use gravai_core::{AppState, GravaiEvent, Session, SessionState};
 use tauri::State;
 use tokio::sync::mpsc;
@@ -75,7 +76,7 @@ fn meeting_end_auto_stop_enabled(app_name: &str) -> bool {
         })
 }
 
-fn shared_db() -> Result<Arc<gravai_storage::Database>, String> {
+pub(crate) fn shared_db() -> Result<Arc<gravai_storage::Database>, String> {
     if let Some(db) = DB.get() {
         return Ok(db.clone());
     }
@@ -155,80 +156,23 @@ async fn start_session_inner(
         }
         None => None,
     };
+    // The live config is what this recording uses. A continued recording
+    // keeps the settings it started with; devices still come from now.
     let mut config = state.config.read().await.clone();
-
-    // Apply active profile overrides to config before starting
-    let profile_store = gravai_config::profiles::ProfileStore::load();
-    if let Some(ref pid) = profile_store.active_profile_id {
-        if let Some(profile) = profile_store.profiles.get(pid) {
-            if let Some(ref engine) = profile.transcription_engine {
-                config.transcription.engine = engine.clone();
+    if let Some(ref record) = previous {
+        let stored = shared_db()?
+            .get_session_snapshot(&record.id)
+            .map_err(|e| e.to_string())?;
+        match stored.map(|json| serde_json::from_str::<Snapshot>(&json)) {
+            Some(Ok(snapshot)) => {
+                snapshot.apply_to(&mut config);
+                info!(
+                    "Continuing with the session's original settings ({})",
+                    snapshot.summary()
+                );
             }
-            if let Some(ref model) = profile.transcription_model {
-                config.transcription.model = model.clone();
-            }
-            if let Some(ref lang) = profile.transcription_language {
-                config.transcription.language = lang.clone();
-            }
-            if let Some(ref provider) = profile.llm_provider {
-                config.llm.provider = provider.clone();
-            }
-            if let Some(ref model) = profile.llm_model {
-                config.llm.model = model.clone();
-            }
-            if let Some(ref local_model) = profile.llm_local_model {
-                config.llm.local_model = local_model.clone();
-            }
-            // Re-run migration in case the profile has legacy provider values
-            config.llm.migrate();
-            if let Some(enabled) = profile.diarization_enabled {
-                config.features.diarization.enabled = enabled;
-            }
-            if let Some(enabled) = profile.echo_suppression_enabled {
-                config.features.echo_suppression.enabled = enabled;
-            }
-            if let Some(enabled) = profile.correction_enabled {
-                config.correction.enabled = enabled;
-            }
-            if let Some(enabled) = profile.sentiment_enabled {
-                config.features.sentiment.enabled = enabled;
-            }
-            if let Some(enabled) = profile.meeting_enabled {
-                config.features.meeting_detection.enabled = enabled;
-            }
-            if let Some(ref engine) = profile.vad_engine {
-                config.vad.engine = engine.clone();
-            }
-            if let Some(pause) = profile.vad_pause {
-                config.vad.pause_seconds = pause;
-            }
-            if let Some(min) = profile.vad_min {
-                config.vad.silero.min_utterance_seconds = min;
-            }
-            if let Some(max) = profile.vad_max {
-                config.vad.silero.max_utterance_seconds = max;
-            }
-            info!(
-                "Applied profile '{}' overrides (model: {})",
-                profile.name, config.transcription.model
-            );
-        }
-    }
-
-    // Also apply active preset overrides
-    let preset_store = gravai_config::presets::PresetStore::load();
-    if let Some(ref pid) = preset_store.active_preset_id {
-        if let Some(preset) = preset_store.presets.get(pid) {
-            config.audio.microphone.enabled = preset.mic_enabled;
-            config.audio.system_audio.enabled = preset.sys_enabled;
-            config.audio.recording.sample_rate = preset.sample_rate;
-            config.audio.recording.bit_depth = preset.bit_depth;
-            config.audio.recording.channels = preset.channels;
-            config.audio.recording.export_format = preset.export_format.clone();
-            if let Some(ref folder) = preset.output_folder {
-                config.audio.recording.output_folder = Some(folder.clone());
-            }
-            info!("Applied preset '{}' overrides", preset.name);
+            Some(Err(e)) => warn!("Ignoring unreadable session snapshot: {e}"),
+            None => {}
         }
     }
 
@@ -324,6 +268,14 @@ async fn start_capture(
             };
             if let Err(e) = db.create_session(&record) {
                 error!("Failed to create session record: {e}");
+            }
+            match serde_json::to_string(&Snapshot::capture(&config)) {
+                Ok(json) => {
+                    if let Err(e) = db.set_session_snapshot(&session_id, &json) {
+                        warn!("Could not store session settings: {e}");
+                    }
+                }
+                Err(e) => warn!("Could not serialize session settings: {e}"),
             }
         }
         // Register the session so background tasks can resolve the current capture

@@ -225,6 +225,63 @@ impl Database {
         rows.collect()
     }
 
+    /// Store the settings a recording started with (JSON).
+    pub fn set_session_snapshot(
+        &self,
+        session_id: &str,
+        snapshot_json: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET config_snapshot = ?1 WHERE id = ?2",
+            params![snapshot_json, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Settings a recording started with, if it was recorded with a snapshot.
+    pub fn get_session_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT config_snapshot FROM sessions WHERE id = ?1")?;
+        let mut rows =
+            stmt.query_map(params![session_id], |row| row.get::<_, Option<String>>(0))?;
+        match rows.next() {
+            Some(row) => row,
+            None => Ok(None),
+        }
+    }
+
+    /// Newest recordings that have a snapshot: `(session, snapshot_json)`.
+    pub fn recent_session_snapshots(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(SessionRecord, String)>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, started_at, ended_at, duration_seconds, title, meeting_app, state, config_snapshot
+             FROM sessions WHERE config_snapshot IS NOT NULL
+             ORDER BY started_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                SessionRecord {
+                    id: row.get(0)?,
+                    started_at: row.get(1)?,
+                    ended_at: row.get(2)?,
+                    duration_seconds: row.get(3)?,
+                    title: row.get(4)?,
+                    meeting_app: row.get(5)?,
+                    state: row.get(6)?,
+                },
+                row.get(7)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
     pub fn delete_session(&self, session_id: &str) -> Result<bool, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let count = conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
@@ -1233,5 +1290,37 @@ mod tests {
         // FTS5 triggers still fire under the shared connection.
         let hits = db.search_utterances("concurrency").unwrap();
         assert_eq!(hits.len(), 100);
+    }
+
+    #[test]
+    fn session_snapshot_round_trip_and_recents() {
+        let db = Database::open_in_memory().unwrap();
+        for (id, at) in [
+            ("a", "2026-11-01T10:00:00Z"),
+            ("b", "2026-11-02T10:00:00Z"),
+            ("c", "2026-11-03T10:00:00Z"),
+        ] {
+            db.create_session(&SessionRecord {
+                id: id.into(),
+                started_at: at.into(),
+                ended_at: None,
+                duration_seconds: None,
+                title: None,
+                meeting_app: None,
+                state: "stopped".into(),
+            })
+            .unwrap();
+        }
+        assert_eq!(db.get_session_snapshot("a").unwrap(), None);
+        db.set_session_snapshot("a", r#"{"x":1}"#).unwrap();
+        db.set_session_snapshot("c", r#"{"x":3}"#).unwrap();
+        assert_eq!(
+            db.get_session_snapshot("a").unwrap().as_deref(),
+            Some(r#"{"x":1}"#)
+        );
+        let recent = db.recent_session_snapshots(8).unwrap();
+        let ids: Vec<_> = recent.iter().map(|(s, _)| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["c", "a"]);
+        assert_eq!(db.get_session_snapshot("missing").unwrap(), None);
     }
 }

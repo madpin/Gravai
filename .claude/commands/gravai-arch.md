@@ -20,7 +20,7 @@ You are helping with the Gravai codebase. Provide a concise, accurate overview o
 | `gravai-audio` | `AudioCaptureManager`, resampler (48kHz→16kHz), VAD, multi-track WAV, echo suppression |
 | `gravai-transcription` | `TranscriptionProvider` trait + Whisper ONNX engine |
 | `gravai-intelligence` | LLM client, summarization, diarization, sentiment, embeddings, RAG chat, correction |
-| `gravai-config` | Versioned JSON config at `~/.gravai/config.json`, presets, profiles, automations |
+| `gravai-config` | Versioned JSON config at `~/.gravai/config.json`, setups, shortcuts, automations |
 | `gravai-storage` | SQLite CRUD, FTS5 search, vector embeddings, sessions, utterances, conversations, knowledge |
 | `gravai-models` | Whisper + Silero VAD model downloader (HuggingFace → `~/.gravai/models/`) |
 | `gravai-export` | Markdown, PDF, Obsidian, Notion exporters |
@@ -32,7 +32,7 @@ You are helping with the Gravai codebase. Provide a concise, accurate overview o
 - **Rule**: Commands are always thin — logic lives in crates, not in `src-tauri/`
 
 ## Frontend (`src-frontend/src/`)
-- Pages: `Recording`, `Archive`, `Chat`, `Presets`, `Profiles`, `Knowledge`, `Models`, `Shortcuts`, `Automations`, `Storage`, `Settings`
+- Pages: `Recording`, `Archive`, `Chat`, `Settings` (sections in `pages/settings/`: Capture, Speech, Assistant, Search, Sessions, Library, App)
 - State: Svelte writable stores in `lib/store.ts`
 - API: `lib/tauri.ts` wraps `window.__TAURI__.core.invoke()` and `.event.listen()`
 - Communication: **only** via Tauri `invoke`/`listen` — no direct Rust access from frontend

@@ -10,14 +10,37 @@ pub struct CapturePreset {
     pub name: String,
     pub description: String,
     pub mic_enabled: bool,
+    /// Unused. Nothing in the pipeline applies gain; kept so older files parse.
+    #[serde(default = "unity_gain")]
     pub mic_gain: f32,
     pub sys_enabled: bool,
+    /// Unused, see `mic_gain`.
+    #[serde(default = "unity_gain")]
     pub sys_gain: f32,
     pub sample_rate: u32,
     pub bit_depth: u16,
     pub channels: u16,
     pub export_format: String,
     pub output_folder: Option<String>,
+}
+
+fn unity_gain() -> f32 {
+    1.0
+}
+
+impl CapturePreset {
+    /// Write this preset's capture settings onto `config`.
+    pub fn apply_to(&self, config: &mut crate::AppConfig) {
+        config.audio.microphone.enabled = self.mic_enabled;
+        config.audio.system_audio.enabled = self.sys_enabled;
+        config.audio.recording.sample_rate = self.sample_rate;
+        config.audio.recording.bit_depth = self.bit_depth;
+        config.audio.recording.channels = self.channels;
+        config.audio.recording.export_format = self.export_format.clone();
+        if let Some(ref folder) = self.output_folder {
+            config.audio.recording.output_folder = Some(folder.clone());
+        }
+    }
 }
 
 impl Default for CapturePreset {
@@ -124,7 +147,7 @@ pub struct PresetStore {
 
 impl PresetStore {
     pub fn load() -> Self {
-        let path = super::data_dir().join("presets.json");
+        let path = crate::data_dir().join("presets.json");
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(store) = serde_json::from_str(&content) {
@@ -141,17 +164,8 @@ impl PresetStore {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let path = super::data_dir().join("presets.json");
+        let path = crate::data_dir().join("presets.json");
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, content)
-    }
-
-    pub fn activate(&mut self, preset_id: &str) -> Option<&CapturePreset> {
-        if self.presets.contains_key(preset_id) {
-            self.active_preset_id = Some(preset_id.to_string());
-            self.presets.get(preset_id)
-        } else {
-            None
-        }
     }
 }

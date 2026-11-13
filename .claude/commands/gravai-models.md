@@ -90,19 +90,20 @@ pub fn create_provider(config: &TranscriptionConfig) -> Box<dyn TranscriptionPro
 ```
 Routes to `WhisperEngine` (default) or `HttpStubProvider` based on `config.engine`.
 
-## Tauri Commands (Models Page)
+## Tauri Commands (Settings model pickers)
 ```typescript
 // Get status of all models
 const status = await invoke<ModelsStatus>("get_models_status");
-// Returns: whisper models list, silero status, AI models, embedding models
-// Each: { id, name, downloaded: bool, size_bytes, path }
+// Returns: whisper_models, silero_vad, ai_models, embedding_models, llm_models, models_dir
+// Each: { id, description, approx_size, actual_size, downloaded, ... } plus static
+// cost hints `ram_gb` and `speed` for Whisper/LLM/embedding ids (model_hints in models.rs)
 
 // Trigger download (emits gravai:model-download progress events)
-await invoke("download_model", { modelId: "whisper-base" });
+await invoke("download_model", { modelId: "base" });   // "silero_vad" downloads the VAD model
 ```
 
 ## Frontend Model Download Flow
-1. User clicks Download on Models page
+1. User clicks Download on a `ModelPicker` row (Settings → Speech/Assistant/Search) or a "Download model" button
 2. `invoke("download_model", { modelId })` → starts background download
 3. Backend publishes `DownloadProgress` events → bridge emits `"gravai:model-download"`
 4. Frontend `modelDownloading` store tracks progress, shows progress bar

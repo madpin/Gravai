@@ -2,7 +2,9 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen, fmtTimer, fmtDuration } from "../lib/tauri";
   import { get } from "svelte/store";
-  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, bookmarkCount, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, currentPage } from "../lib/store";
+  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, bookmarkCount, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, navigate } from "../lib/store";
+  import { config, loadConfig, setValue } from "../lib/config";
+  import RunBar from "../components/RunBar.svelte";
   import TranscriptView from "../components/TranscriptView.svelte";
   import AppPicker from "../components/AppPicker.svelte";
   import Icon from "../components/Icon.svelte";
@@ -11,8 +13,6 @@
   let timer = $state("");
   let micEnabled = $state(true);
   let sysEnabled = $state(true);
-  let micVolume = $state(100);
-  let sysVolume = $state(100);
   let vuMic = $state(0);
   let vuSys = $state(0);
   let summaryLoading = $state(false);
@@ -27,15 +27,18 @@
   let runningApps = $state<any[]>([]);
   let selectedAppBundleId = $state("");
 
-  // Export config (loaded once for display)
-  let exportAutoTranscript = $state(false);
-  let exportAutoAudio = $state(false);
-  let exportRealtimeSave = $state(true);
+  // The live config: source switches here and in Settings are the same values.
+  let runConfig = $derived($config);
+  let exportAutoTranscript = $derived(runConfig?.export?.auto_export_transcript ?? false);
+  let exportRealtimeSave = $derived(runConfig?.export?.realtime_save ?? true);
+  let showEmotions = $derived(runConfig?.features?.sentiment?.enabled ?? false);
+  $effect(() => {
+    if (!runConfig) return;
+    micEnabled = runConfig.audio?.microphone?.enabled ?? true;
+    sysEnabled = runConfig.audio?.system_audio?.enabled ?? true;
+    selectedAppBundleId = runConfig.audio?.system_audio?.app_bundle_id ?? "";
+  });
 
-  // Active preset/profile info
-  let activePreset = $state<any>(null);
-  let activeProfile = $state<any>(null);
-  let showEmotions = $derived(activeProfile?.sentiment_enabled ?? false);
 
   // Intervals and cleanup
   let timerInterval: number | null = null;
@@ -288,7 +291,7 @@
         addAlert({
           level: "error",
           message: msg,
-          actions: [{ label: "Go to Models", handler: () => currentPage.set("models") }],
+          actions: [{ label: "Speech settings", handler: () => navigate("settings:speech") }],
           dismissable: true,
         });
       } else if (msg.includes("closed") || msg.includes("Microphone disconnected")) {
@@ -349,42 +352,16 @@
     });
     unlisteners.push(usp);
 
-    // Keyboard shortcut for bookmark: Cmd+Shift+B
-    function handleBookmarkShortcut(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        addBookmark();
-      }
-    }
-    window.addEventListener("keydown", handleBookmarkShortcut);
-    unlisteners.push(() => window.removeEventListener("keydown", handleBookmarkShortcut));
 
     await loadDevices();
-    // Load export config + active preset/profile for status display
+    // Load the live config for the source controls and the summary line
     try {
-      const cfg: any = await invoke("get_config");
-      exportAutoTranscript = cfg.export?.auto_export_transcript ?? false;
-      exportAutoAudio = cfg.export?.auto_export_audio ?? false;
-      exportRealtimeSave = cfg.export?.realtime_save ?? true;
-      micEnabled = cfg.audio?.microphone?.enabled ?? true;
-      sysEnabled = cfg.audio?.system_audio?.enabled ?? true;
+      const cfg: any = $config ?? await loadConfig();
       if (cfg.audio?.microphone?.device_name) {
         selectedMicName = cfg.audio.microphone.device_name;
       } else if ((cfg.audio?.microphone?.device_index ?? -1) >= 0) {
         const saved = micDevices.find(d => d.index === cfg.audio.microphone.device_index);
         selectedMicName = saved?.name ?? "";
-      }
-    } catch (_) {}
-    try {
-      const ps: any = await invoke("get_presets");
-      if (ps.active_preset_id && ps.presets?.[ps.active_preset_id]) {
-        activePreset = ps.presets[ps.active_preset_id];
-      }
-    } catch (_) {}
-    try {
-      const pr: any = await invoke("get_profiles");
-      if (pr.active_profile_id && pr.profiles?.[pr.active_profile_id]) {
-        activeProfile = pr.profiles[pr.active_profile_id];
       }
     } catch (_) {}
     checkMeetings();
@@ -481,55 +458,14 @@
       <span class="timer">{timer}</span>
     </div>
 
-    <!-- Active preset/profile indicators -->
-    {#if activePreset || activeProfile}
-      <div class="active-config-bar">
-        {#if activePreset}
-          <div class="config-pill-wrap">
-            <div class="config-pill">
-              <span class="config-pill-icon"><Icon name="sliders" size={14}/></span>
-              <span class="config-pill-label">Preset:</span>
-              <span class="config-pill-value">{activePreset.name}</span>
-              <button class="config-pill-edit" onclick={() => currentPage.set("presets")} title="Edit preset" aria-label="Edit preset"><Icon name="pencil" size={12}/></button>
-            </div>
-            <div class="config-tooltip">
-              <div class="config-tooltip-row">{activePreset.mic_enabled ? '' : ''}<Icon name="microphone" size={11}/>{activePreset.mic_enabled ? ' Mic on' : ' Mic off'} &middot; <Icon name="monitor" size={11}/>{activePreset.sys_enabled ? ' System on' : ' System off'}</div>
-              <div class="config-tooltip-row">{activePreset.sample_rate/1000}kHz &middot; {activePreset.bit_depth}-bit &middot; {activePreset.channels === 1 ? 'Mono' : 'Stereo'}</div>
-              <div class="config-tooltip-row">Format: {activePreset.export_format}</div>
-              {#if activePreset.output_folder}<div class="config-tooltip-row"><Icon name="folder" size={11}/> {activePreset.output_folder}</div>{/if}
-              {#if activeProfile}
-                <div class="config-tooltip-divider"></div>
-                <div class="config-tooltip-row"><Icon name="message-circle" size={11}/> Model: Whisper {activeProfile.transcription_model || 'medium'}</div>
-              {/if}
-            </div>
-          </div>
-        {/if}
-        {#if activeProfile}
-          <div class="config-pill-wrap">
-            <div class="config-pill">
-              <span class="config-pill-icon"><Icon name="user" size={14}/></span>
-              <span class="config-pill-label">Profile:</span>
-              <span class="config-pill-value">{activeProfile.name}</span>
-              <button class="config-pill-edit" onclick={() => currentPage.set("profiles")} title="Edit profile" aria-label="Edit profile"><Icon name="pencil" size={12}/></button>
-            </div>
-            <div class="config-tooltip">
-              <div class="config-tooltip-row"><Icon name="message-circle" size={11}/> Whisper {activeProfile.transcription_model || 'medium'} &middot; {activeProfile.transcription_language || 'en'}</div>
-              <div class="config-tooltip-row"><Icon name="bot" size={11}/> {activeProfile.llm_provider || 'local'} ({activeProfile.llm_provider === 'api' ? (activeProfile.llm_model || 'gpt-4o-mini') : (activeProfile.llm_local_model || 'qwen3-4b')})</div>
-              <div class="config-tooltip-row"><Icon name="users" size={11}/> Diarization: {activeProfile.diarization_enabled ? 'on' : 'off'} &middot; Echo: {activeProfile.echo_suppression_enabled !== false ? 'on' : 'off'}</div>
-              {#if activeProfile.auto_export_transcript}<div class="config-tooltip-row"><Icon name="file-text" size={11}/> Auto-export transcript</div>{/if}
-              {#if activeProfile.realtime_save !== false}<div class="config-tooltip-row"><Icon name="save" size={11}/> Real-time save</div>{/if}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
+    <RunBar />
 
     <!-- Transport -->
     <div class="transport">
       <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record"><Icon name={starting ? "spinner" : "record"} size={22}/></button>
       <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}><Icon name={$isPaused ? "play" : "pause"} size={20}/></button>
       <button class="transport-btn stop" disabled={!$isRecording && !starting} onclick={stop} title="Stop"><Icon name="stop" size={20}/></button>
-      <button class="transport-btn bookmark" disabled={!$isRecording} onclick={addBookmark} title="Add Bookmark (Cmd+Shift+B)">
+      <button class="transport-btn bookmark" disabled={!$isRecording} onclick={addBookmark} title="Add bookmark">
         <Icon name="bookmark" size={18}/>{#if $bookmarkCount > 0}<span class="bookmark-badge">{$bookmarkCount}</span>{/if}
       </button>
       <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording && !starting} class:starting={starting}>
@@ -541,11 +477,10 @@
     <LlmStatusBanner scope="status" />
 
     <!-- Export status indicator -->
-    {#if exportAutoTranscript || exportAutoAudio || exportRealtimeSave}
+    {#if exportAutoTranscript || exportRealtimeSave}
       <div class="export-indicator">
-        {#if exportRealtimeSave}<span class="export-tag save"><Icon name="save" size={11}/> Auto-save</span>{/if}
-        {#if exportAutoTranscript}<span class="export-tag transcript"><Icon name="file-text" size={11}/> Auto-export transcript</span>{/if}
-        {#if exportAutoAudio}<span class="export-tag audio"><Icon name="speaker" size={11}/> Auto-export audio</span>{/if}
+        {#if exportRealtimeSave}<span class="export-tag save"><Icon name="save" size={11}/> Saved while recording</span>{/if}
+        {#if exportAutoTranscript}<span class="export-tag transcript"><Icon name="file-text" size={11}/> Transcript saved on stop</span>{/if}
       </div>
     {/if}
 
@@ -556,7 +491,7 @@
         <!-- Mic row -->
         <div class="source-row">
           <div class="source-row-top">
-            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={micEnabled} /> <Icon name="microphone" size={13}/> Microphone</label>
+            <label class="source-toggle"><input type="checkbox" class="toggle" checked={micEnabled} onchange={(e) => setValue("audio.microphone.enabled", e.currentTarget.checked)} /> <Icon name="microphone" size={13}/> Microphone</label>
             <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div></div>
           </div>
           <div class="source-row-bottom">
@@ -571,16 +506,12 @@
                 {/each}
               </select>
             </div>
-            <div class="source-volume">
-              <input type="range" class="slider" min="0" max="200" bind:value={micVolume} />
-              <span class="slider-value">{micVolume}%</span>
-            </div>
           </div>
         </div>
         <!-- System audio row -->
         <div class="source-row">
           <div class="source-row-top">
-            <label class="source-toggle"><input type="checkbox" class="toggle" bind:checked={sysEnabled} /> <Icon name="monitor" size={13}/> System Audio</label>
+            <label class="source-toggle"><input type="checkbox" class="toggle" checked={sysEnabled} onchange={(e) => setValue("audio.system_audio.enabled", e.currentTarget.checked)} /> <Icon name="monitor" size={13}/> System Audio</label>
             <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div></div>
           </div>
           <div class="source-row-bottom">
@@ -588,12 +519,8 @@
               <AppPicker
                 apps={runningApps}
                 selected={selectedAppBundleId}
-                onselect={(v) => selectedAppBundleId = v}
+                onselect={(v) => setValue("audio.system_audio.app_bundle_id", v)}
               />
-            </div>
-            <div class="source-volume">
-              <input type="range" class="slider" min="0" max="200" bind:value={sysVolume} />
-              <span class="slider-value">{sysVolume}%</span>
             </div>
           </div>
         </div>

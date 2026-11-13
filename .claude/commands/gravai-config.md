@@ -1,12 +1,12 @@
 ---
-description: Guide to gravai-config crate — AppConfig, presets, profiles, automations, shortcuts
+description: Guide to gravai-config crate — AppConfig, setups, automations, shortcuts
 allowed-tools: Read, Glob, Grep
 ---
 
 You are helping with the `gravai-config` crate at `crates/gravai-config/`. Provide accurate, concise information about the requested topic.
 
 ## Crate Overview
-Versioned JSON configuration at `~/.gravai/config.json`. Manages the full app config plus separate stores for presets, profiles, shortcuts, and automations. All persisted to disk.
+Versioned JSON configuration at `~/.gravai/config.json`. Manages the full app config plus separate stores for setups, shortcuts, and automations. All persisted to disk. The live config is what the next recording uses; nothing is layered on top at start.
 
 ## `AppConfig` Top-Level Structure
 ```rust
@@ -80,46 +80,25 @@ models_dir() -> PathBuf    // ~/.gravai/models/
 log_file_path() -> PathBuf // ~/.gravai/gravai.log
 ```
 
-## Presets (`presets.rs`)
-Bundle audio capture settings for different scenarios.
+## Setups (`setups.rs`)
+Named snapshots of what a recording does. Applying is one-shot: it writes the live config and nothing stays active.
 ```rust
-pub struct CapturePreset {
-    pub id: String,
-    pub name: String,
-    pub mic_enabled: bool, pub mic_gain: f32,
-    pub system_enabled: bool, pub system_gain: f32,
-    pub sample_rate: u32, pub bit_depth: u16, pub channels: u16,
-    pub export_format: String,  // "wav", "m4a-aac", etc.
-    pub output_folder: Option<String>,
+pub struct Snapshot {          // capture, speech, assistant, sessions
+    pub mic_enabled: bool, pub sys_enabled: bool,
+    pub recording: RecordingConfig, pub transcription: TranscriptionConfig,
+    pub vad: VadConfig, pub features: FeaturesConfig,
+    pub llm: LlmSnapshot,      // provider, local_model, base_url, model, max_tokens — never api_key
+    pub correction: CorrectionConfig, pub export: ExportConfig,
 }
-pub struct PresetStore {
-    pub presets: HashMap<String, CapturePreset>,
-    pub active_preset_id: Option<String>,
-}
+impl Snapshot { fn capture(&AppConfig) -> Self; fn apply_to(&self, &mut AppConfig); fn summary(&self) -> String }
+pub struct Setup { pub id: String, pub name: String, pub description: String, pub builtin: bool, pub snapshot: Snapshot }
+pub struct SetupStore { pub version: u32, pub setups: Vec<Setup> }   // ~/.gravai/setups.json, ordered
 ```
-Builtins: `"meeting"`, `"podcast"`, `"streaming"`, `"interview"`, `"minimal"`
-
-## Profiles (`profiles.rs`)
-Bundle transcription + AI feature settings.
-```rust
-pub struct Profile {
-    pub id: String,
-    pub name: String,
-    pub transcription_engine: Option<String>,
-    pub transcription_model: Option<String>,
-    pub language: Option<String>,
-    pub diarization: Option<bool>,
-    pub sentiment: Option<bool>,
-    pub echo_suppression: Option<bool>,
-    pub llm_overrides: Option<LlmConfig>,
-    pub shortcut_set: Option<String>,
-}
-pub struct ProfileStore {
-    pub profiles: HashMap<String, Profile>,
-    pub active_profile_id: Option<String>,
-}
-```
-Builtins: `"meeting"`, `"podcast"`, `"minimal"`
+- Snapshots leave out mic device, captured app, API key, `embedding`, `updates`.
+- Builtins: `"meeting"` (Meeting), `"podcast"` (Podcast), `"minimal"` (Light).
+- `SetupStore::load(&live)`: first run turns `presets.json` + `profiles.json` into setups (each filled from the live config, shared ids merged, plus "Settings before update"), then renames them to `*.migrated.json`.
+- The same `Snapshot` JSON is stored per recording in `sessions.config_snapshot` (recents, continuation).
+- `legacy/{presets,profiles}.rs` (crate-private) are only read by migrations.
 
 ## Automations (`automations.rs`)
 Event-driven automation rules.
@@ -137,7 +116,7 @@ pub enum AutomationCondition {
     NoActiveSession, ActiveSession,
 }
 pub enum AutomationAction {
-    ActivateProfile { profile_id: String }, ActivatePreset { preset_id: String },
+    ApplySetup { setup_id: String },   // old activate_profile/activate_preset JSON is rewritten on load
     StartRecording, StopRecording,
     ShowNotification { title: String, body: String },
     RunExport { format: String },
@@ -152,15 +131,17 @@ pub struct Automation {
 }
 ```
 
-## How Profile/Preset Activation Works at Session Start
-1. `start_session()` reads `AppState.active_profile_id` + `active_preset_id`
-2. Loads the profile/preset from their respective stores
-3. Overrides relevant config fields (engine, model, mic_enabled, gain, etc.)
-4. Uses the merged config for the session — **does not persist to `config.json`**
+Builtins: `auto-meeting-record` (start only — never changes settings, defaults v3), `zoom-auto-stop`, `silence-auto-stop`, `auto-export-on-stop`.
+
+## Shortcuts (`shortcuts.rs`)
+`ShortcutBinding { action_id, key_sequence, description, is_global }`. Actions: `recording.start|stop|pause|bookmark`. `rebind(action, key, is_global)`; empty key = off. Load drops unknown actions and moves never-registered old defaults to `CmdOrCtrl+Alt+R/S/P`. Global keys are registered by `src-tauri/src/shortcuts.rs`; local ones by `StatusBar.svelte`. Both emit/handle `gravai:shortcut`.
+
+## Launch order
+`load_config` → `migrate_active_bundles` (folds leftover active profile/preset into config) → `SetupStore::load` (one-time setup migration).
 
 ## Tauri Commands for Config
 - `get_config()` / `update_config(patch)` / `export_config()` / `import_config()`
-- Profile/Preset CRUD in `commands/config_extras.rs`
+- Setups in `commands/config_extras.rs`: `list_setups`, `save_current_setup`, `rename_setup`, `delete_setup`, `restore_builtin_setups`, `apply_setup`, `apply_recent`, `apply_snapshot` (Undo), `list_recent_starts`, `get_run_summary`. Apply commands return the replaced `Snapshot` and emit `gravai:config-changed`.
 
 ---
 

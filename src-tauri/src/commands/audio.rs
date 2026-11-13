@@ -48,26 +48,6 @@ pub async fn switch_microphone(
     super::session::request_mic_switch(device_name)
 }
 
-/// Set volume gain for a source.
-#[tauri::command]
-pub async fn set_source_gain(
-    state: State<'_, Arc<AppState>>,
-    source: String,
-    gain: f32,
-) -> Result<(), String> {
-    let gain = gain.clamp(0.0, 2.0);
-    let config = state.config.write().await;
-
-    match source.as_str() {
-        "microphone" | "mic" => tracing::info!("Mic gain set to {gain}"),
-        "system" | "system_audio" => tracing::info!("System audio gain set to {gain}"),
-        _ => return Err(format!("Unknown source: {source}")),
-    }
-
-    gravai_config::save_config(&config).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// Get the path to a session's playable audio file (compressed M4A AAC for browser compatibility).
 /// Creates a `playback.m4a` file on first access (merge if multi-track, then encode).
 /// Falls back to 16-bit PCM WAV if AAC encoding is unavailable.

@@ -1,4 +1,4 @@
-//! Versioned configuration, profiles, presets, shortcuts, automations.
+//! Versioned configuration, setups, shortcuts, automations.
 //!
 //! Ported from ears-rust-api config.rs, adapted for Gravai:
 //! - JSON instead of TOML (easier programmatic merge)
@@ -6,8 +6,8 @@
 //! - Expanded with Gravai-specific sections
 
 pub mod automations;
-pub mod presets;
-pub mod profiles;
+pub(crate) mod legacy;
+pub mod setups;
 pub mod shortcuts;
 
 use serde::{Deserialize, Serialize};
@@ -395,16 +395,10 @@ impl Default for MeetingDetectionConfig {
 }
 
 /// Emotion labels on remote speech. Off skips loading and running the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SentimentConfig {
     pub enabled: bool,
-}
-
-impl Default for SentimentConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -497,6 +491,31 @@ impl Default for UpdatesConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Startup config
+// ---------------------------------------------------------------------------
+
+/// How the main window appears when Gravai opens at login.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupWindow {
+    /// Show the window, as when the user opens the app.
+    #[default]
+    Window,
+    /// Put the window in the Dock.
+    Minimized,
+    /// Keep the window hidden; Gravai waits in the menu bar.
+    MenuBar,
+}
+
+/// Whether Gravai opens at login lives in macOS Login Items, not here,
+/// so turning it off in System Settings is respected.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StartupConfig {
+    pub window: StartupWindow,
+}
+
+// ---------------------------------------------------------------------------
 // Correction config
 // ---------------------------------------------------------------------------
 
@@ -548,6 +567,7 @@ pub struct AppConfig {
     pub embedding: EmbeddingConfig,
     pub export: ExportConfig,
     pub updates: UpdatesConfig,
+    pub startup: StartupConfig,
     pub correction: CorrectionConfig,
 }
 
@@ -563,6 +583,7 @@ impl Default for AppConfig {
             embedding: EmbeddingConfig::default(),
             export: ExportConfig::default(),
             updates: UpdatesConfig::default(),
+            startup: StartupConfig::default(),
             correction: CorrectionConfig::default(),
         }
     }
@@ -626,6 +647,50 @@ pub fn save_config(config: &AppConfig) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Fold the active profile and preset into `config`, then forget them.
+///
+/// Recording start used to copy both onto the config for that one session
+/// without saving it, so the file on disk could disagree with what ran.
+/// Order matches the old start path: profile first, then preset.
+/// Returns true when anything changed.
+pub fn bake_active_bundles(
+    config: &mut AppConfig,
+    profiles: &mut legacy::profiles::ProfileStore,
+    presets: &mut legacy::presets::PresetStore,
+) -> bool {
+    let profile_id = profiles.active_profile_id.take();
+    let preset_id = presets.active_preset_id.take();
+    if let Some(profile) = profile_id.as_ref().and_then(|id| profiles.profiles.get(id)) {
+        profile.apply_to(config);
+        tracing::info!("Applied profile '{}' to the saved config", profile.name);
+    }
+    if let Some(preset) = preset_id.as_ref().and_then(|id| presets.presets.get(id)) {
+        preset.apply_to(config);
+        tracing::info!("Applied preset '{}' to the saved config", preset.name);
+    }
+    profile_id.is_some() || preset_id.is_some()
+}
+
+/// Run [`bake_active_bundles`] against the files on disk. Call once at
+/// launch, before anything copies the config.
+pub fn migrate_active_bundles(config: &mut AppConfig) {
+    let mut profiles = legacy::profiles::ProfileStore::load();
+    let mut presets = legacy::presets::PresetStore::load();
+    if !bake_active_bundles(config, &mut profiles, &mut presets) {
+        return;
+    }
+    if let Err(e) = save_config(config) {
+        tracing::warn!("Could not save config after applying profile/preset: {e}");
+        return;
+    }
+    if let Err(e) = profiles.save() {
+        tracing::warn!("Could not clear active profile: {e}");
+    }
+    if let Err(e) = presets.save() {
+        tracing::warn!("Could not clear active preset: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,6 +751,95 @@ mod tests {
             .remove("auto_compress");
         let parsed: AppConfig = serde_json::from_value(json).unwrap();
         assert!(parsed.audio.recording.auto_compress);
+    }
+
+    fn stores_with_active(
+        profile: Option<&str>,
+        preset: Option<&str>,
+    ) -> (legacy::profiles::ProfileStore, legacy::presets::PresetStore) {
+        let mut ps = legacy::profiles::ProfileStore::default();
+        for p in legacy::profiles::builtin_profiles() {
+            ps.profiles.insert(p.id.clone(), p);
+        }
+        ps.active_profile_id = profile.map(String::from);
+        let mut pr = legacy::presets::PresetStore::default();
+        for p in legacy::presets::builtin_presets() {
+            pr.presets.insert(p.id.clone(), p);
+        }
+        pr.active_preset_id = preset.map(String::from);
+        (ps, pr)
+    }
+
+    #[test]
+    fn profile_apply_only_touches_set_fields() {
+        let mut config = AppConfig::default();
+        config.transcription.language = "pt".into();
+        config.llm.local_model = "qwen3-8b".into();
+        let profile = legacy::profiles::Profile {
+            transcription_model: Some("large-v3".into()),
+            diarization_enabled: Some(true),
+            ..Default::default()
+        };
+        profile.apply_to(&mut config);
+        assert_eq!(config.transcription.model, "large-v3");
+        assert!(config.features.diarization.enabled);
+        assert_eq!(config.transcription.language, "pt");
+        assert_eq!(config.llm.local_model, "qwen3-8b");
+    }
+
+    #[test]
+    fn bake_applies_profile_then_preset_and_clears_ids() {
+        let mut config = AppConfig::default();
+        config.audio.system_audio.enabled = true;
+        let (mut ps, mut pr) = stores_with_active(Some("podcast"), Some("podcast"));
+        assert!(bake_active_bundles(&mut config, &mut ps, &mut pr));
+        assert_eq!(config.transcription.model, "large-v3");
+        assert!(config.features.diarization.enabled);
+        assert!(!config.audio.system_audio.enabled);
+        assert_eq!(config.audio.recording.bit_depth, 24);
+        assert!(ps.active_profile_id.is_none());
+        assert!(pr.active_preset_id.is_none());
+    }
+
+    #[test]
+    fn bake_is_a_no_op_without_active_ids() {
+        let mut config = AppConfig::default();
+        let before = serde_json::to_value(&config).unwrap();
+        let (mut ps, mut pr) = stores_with_active(None, None);
+        assert!(!bake_active_bundles(&mut config, &mut ps, &mut pr));
+        assert_eq!(serde_json::to_value(&config).unwrap(), before);
+    }
+
+    #[test]
+    fn bake_runs_once() {
+        let mut config = AppConfig::default();
+        let (mut ps, mut pr) = stores_with_active(Some("minimal"), Some("minimal"));
+        assert!(bake_active_bundles(&mut config, &mut ps, &mut pr));
+        let after_first = serde_json::to_value(&config).unwrap();
+        assert!(!bake_active_bundles(&mut config, &mut ps, &mut pr));
+        assert_eq!(serde_json::to_value(&config).unwrap(), after_first);
+    }
+
+    #[test]
+    fn bake_forgets_a_deleted_active_id() {
+        let mut config = AppConfig::default();
+        let before = serde_json::to_value(&config).unwrap();
+        let (mut ps, mut pr) = stores_with_active(Some("gone"), None);
+        assert!(bake_active_bundles(&mut config, &mut ps, &mut pr));
+        assert_eq!(serde_json::to_value(&config).unwrap(), before);
+        assert!(ps.active_profile_id.is_none());
+    }
+
+    #[test]
+    fn preset_without_gain_fields_parses() {
+        let json = serde_json::json!({
+            "id": "x", "name": "X", "description": "",
+            "mic_enabled": true, "sys_enabled": false,
+            "sample_rate": 48000, "bit_depth": 16, "channels": 1,
+            "export_format": "wav", "output_folder": null
+        });
+        let preset: legacy::presets::CapturePreset = serde_json::from_value(json).unwrap();
+        assert!((preset.mic_gain - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

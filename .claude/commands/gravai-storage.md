@@ -123,7 +123,7 @@ get_active_knowledge_entries() -> Result<Vec<KnowledgeEntry>>  // for correction
 ```
 
 ## Schema Notes
-- `sessions` table: primary key is the session ID string
+- `sessions` table: primary key is the session ID string. `config_snapshot` (migration 008) holds the `setups::Snapshot` JSON a recording started with: `set_session_snapshot`, `get_session_snapshot`, `recent_session_snapshots(limit)`
 - `utterances` table: FK to sessions (cascade delete), FTS5 virtual table `utterances_fts` mirrors text column
 - `embeddings` table: utterance_id FK, `embedding` stored as BLOB (f32 array)
 - `conversations` + `conversation_messages` tables for RAG chat history

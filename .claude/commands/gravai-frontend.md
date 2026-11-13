@@ -12,26 +12,26 @@ You are helping with the Gravai frontend at `src-frontend/src/`. Provide accurat
 
 ## Directory Structure
 ```
-src-frontend/src/
-├── App.svelte          # Root: sidebar nav, page router, alert bar, status bar
+src-frontend/
+├── App.svelte          # Root: sidebar (Record, Archive, Ask, Settings), page router, alert bar, status bar
 ├── lib/
 │   ├── tauri.ts        # Tauri invoke/listen wrappers + helpers
-│   └── store.ts        # Svelte writable stores (global state)
+│   ├── store.ts        # Global stores; navigate("settings:<section>") maps old page ids
+│   ├── config.ts       # Live config store: loadConfig, patchConfig, setValue(path, v), runSummary
+│   ├── models.ts       # Model status store, downloadModel, deleteModelFile, modelName
+│   └── costs.ts        # diskPerHour/diskLine, fmtBytes, apiHost
 ├── pages/
-│   ├── Recording.svelte    # Live recording + transcript
+│   ├── Recording.svelte    # Live recording + transcript; RunBar (summary + Setups menu)
 │   ├── Archive.svelte      # Past sessions, search, export
 │   ├── Chat.svelte         # Ask Gravai RAG
-│   ├── Presets.svelte      # Capture preset management
-│   ├── Profiles.svelte     # Transcription profile management
-│   ├── Knowledge.svelte    # Knowledge base entries
-│   ├── Models.svelte       # Model download status
-│   ├── Shortcuts.svelte    # Keyboard shortcuts
-│   ├── Automations.svelte  # Automation rules
-│   ├── Storage.svelte      # Disk usage + cleanup
-│   └── Settings.svelte     # Full settings panel
+│   ├── Settings.svelte     # Shell: section list + one section
+│   └── settings/           # Capture, Speech, Assistant, Search, Sessions, Library, AppSection
 └── components/
+    ├── settings/              # Group, Row (hint/cost/"Next recording" tag), Toggle, Segmented, More, ModelPicker, TextInput, NumberInput, FolderInput
+    ├── RecoveryDialog.svelte  # Launch prompt for recordings that didn't finish: convert / keep / delete (store in lib/recovery.ts)
+    ├── RunBar.svelte          # Record summary line + saved setups / previous recordings / Save current as…
     ├── TranscriptView.svelte  # Renders utterances (speaker-colored, timestamps)
-    ├── StatusBar.svelte       # Bottom bar: health, version, config status
+    ├── StatusBar.svelte       # Bottom bar; also handles auto-start/stop and keyboard shortcuts
     ├── AlertBar.svelte        # Top stack of dismissible alerts
     ├── Icon.svelte            # lucide icon set renderer
     ├── SessionPicker.svelte   # Session dropdown selector
@@ -95,17 +95,19 @@ export const modelDownloading = writable<ModelDownloadProgress | null>(null);
 | `"gravai:meeting"` | `{ app_name, title? }` | Show meeting detection alert |
 | `"gravai:meeting-ended"` | `{ app_name }` | Dismiss meeting alert |
 | `"gravai:model-download"` | `{ model_id, downloaded, total }` | Update download progress |
-| `"gravai:navigate"` | `{ page: string }` | Programmatic page navigation |
+| `"gravai:navigate"` | page id or `settings:<section>` | Programmatic navigation via `navigate()` |
+| `"gravai:config-changed"` | — | Live config written by an apply/automation; `lib/config.ts` reloads |
+| `"gravai:shortcut"` | action id | Global shortcut pressed; StatusBar runs it |
 | `"gravai:update-available"` | version info | Show update alert |
 | `"gravai:automation-start"` | session info | Handle auto-start from tray/automation |
 
 ## Key Pages
 
 ### `Recording.svelte`
-- Session controls: start/stop/pause, mic/system toggles, device selectors, gain sliders
+- Session controls: start/stop/pause, mic/system toggles, device selectors (write the live config, same values as Settings → Capture)
 - VU meters: live volume bars per source
 - Real-time transcript: auto-scrolls, speaker-color-coded via `TranscriptView`
-- Active preset/profile display
+- RunBar: one-line summary of the live config (opens Settings → Speech) and the Setups menu (apply with Undo)
 - Editable session title
 - Post-recording: summary generation button, sentiment display
 - Polls: timer every 250ms, transcript every 2s, meeting detection every 2s (when idle)

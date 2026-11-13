@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { currentPage, healthStatus, addAlert, modelDownloading, llmStatus } from "./lib/store";
+  import { currentPage, healthStatus, addAlert, modelDownloading, llmStatus, navigate } from "./lib/store";
+  import { loadConfig } from "./lib/config";
+  import { scanIncomplete, recoveryOpen } from "./lib/recovery";
+  import RecoveryDialog from "./components/RecoveryDialog.svelte";
   import { invoke, listen } from "./lib/tauri";
   import { onMount, onDestroy } from "svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -9,35 +12,17 @@
 
   import Recording from "./pages/Recording.svelte";
   import Archive from "./pages/Archive.svelte";
-  import Presets from "./pages/Presets.svelte";
-  import Profiles from "./pages/Profiles.svelte";
-  import Shortcuts from "./pages/Shortcuts.svelte";
-  import Automations from "./pages/Automations.svelte";
   import Chat from "./pages/Chat.svelte";
-  import Storage from "./pages/Storage.svelte";
-  import Models from "./pages/Models.svelte";
   import Settings from "./pages/Settings.svelte";
-  import Knowledge from "./pages/Knowledge.svelte";
 
   const mainPages = [
-    { id: "recording", label: "Recording", icon: "record" },
+    { id: "recording", label: "Record", icon: "record" },
     { id: "archive", label: "Archive", icon: "archive" },
-    { id: "chat", label: "Ask Gravai", icon: "chat" },
+    { id: "chat", label: "Ask", icon: "chat" },
   ];
 
-  const configPages = [
-    { id: "presets", label: "Presets", icon: "sliders" },
-    { id: "profiles", label: "Profiles", icon: "user" },
-    { id: "knowledge", label: "Knowledge", icon: "books" },
-    { id: "models", label: "Models", icon: "cpu" },
-    { id: "shortcuts", label: "Shortcuts", icon: "keyboard" },
-    { id: "automations", label: "Automations", icon: "zap" },
-    { id: "storage", label: "Storage", icon: "database" },
-    { id: "settings", label: "System", icon: "settings" },
-  ];
 
   let showOnboarding = $state(false);
-  let settingsOpen = $state(false);
   let sidebarCollapsed = $state(localStorage.getItem("gravai_sidebar_collapsed") === "true");
 
   function toggleSidebar() {
@@ -50,8 +35,12 @@
   let unlistenLlmStatus: (() => void) | null = null;
 
   onMount(async () => {
+    loadConfig();
     if (!localStorage.getItem("gravai_onboarded")) {
       showOnboarding = true;
+    } else {
+      // Recordings Gravai closed on without stopping: offer to repair them.
+      scanIncomplete().then((found) => { if (found.length) recoveryOpen.set(true); });
     }
     try {
       const report: any = await invoke("get_health_report");
@@ -83,14 +72,14 @@
       }
     } catch (_) {}
     unlistenNavigate = await listen("gravai:navigate", (e: any) => {
-      if (e.payload) currentPage.set(e.payload);
+      if (e.payload) navigate(e.payload);
     });
     unlistenUpdate = await listen("gravai:update-available", (e: any) => {
       const v = e.payload?.version;
       addAlert({
         level: "info",
         message: `Gravai v${v} is available — go to Settings to update`,
-        actions: [{ label: "Settings", handler: () => currentPage.set("settings") }],
+        actions: [{ label: "Settings", handler: () => navigate("settings:app") }],
         dismissable: true,
       });
     });
@@ -149,7 +138,7 @@
         addAlert({
           level: "error",
           message: `Local LLM error: ${d.message}`,
-          actions: [{ label: "Open Models", handler: () => currentPage.set("models") }],
+          actions: [{ label: "Assistant settings", handler: () => navigate("settings:assistant") }],
           dismissable: true,
         });
       }
@@ -161,13 +150,6 @@
   function setPage(id: string) {
     currentPage.set(id);
   }
-
-  // Auto-expand settings section when a config page is active
-  $effect(() => {
-    if (configPages.some(p => p.id === $currentPage)) {
-      settingsOpen = true;
-    }
-  });
 </script>
 
 {#if showOnboarding}
@@ -203,36 +185,19 @@
         </li>
       {/each}
 
-      <!-- Settings group -->
-      <li class="nav-section">
-        <button class="nav-section-toggle"
-          title={sidebarCollapsed ? "Settings" : undefined}
-          onclick={() => settingsOpen = !settingsOpen}>
-          <span class="nav-icon"><Icon name="settings" size={18} /></span>
-          {#if !sidebarCollapsed}
-            Settings
-            <span class="nav-section-arrow" class:open={settingsOpen}><Icon name={settingsOpen ? "chevron-down" : "chevron-right"} size={14} /></span>
-          {/if}
-        </button>
-        {#if settingsOpen}
-          <ul class="nav-sublist">
-            {#each configPages as page}
-              <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
-              <li
-                class="nav-item sub"
-                class:active={$currentPage === page.id}
-                role="button"
-                tabindex="0"
-                title={sidebarCollapsed ? page.label : undefined}
-                onclick={() => setPage(page.id)}
-                onkeydown={(e) => { if (e.key === "Enter") setPage(page.id); }}
-              >
-                <span class="nav-icon"><Icon name={page.icon} size={16} /></span>
-                {#if !sidebarCollapsed}{page.label}{/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
+      <li class="nav-divider" aria-hidden="true"></li>
+      <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+      <li
+        class="nav-item"
+        class:active={$currentPage === "settings"}
+        role="button"
+        tabindex="0"
+        title={sidebarCollapsed ? "Settings" : undefined}
+        onclick={() => setPage("settings")}
+        onkeydown={(e) => { if (e.key === "Enter") setPage("settings"); }}
+      >
+        <span class="nav-icon"><Icon name="settings" size={18} /></span>
+        {#if !sidebarCollapsed}Settings{/if}
       </li>
     </ul>
     <div class="sidebar-collapse-btn-wrap">
@@ -255,24 +220,11 @@
       <Archive />
     {:else if $currentPage === "chat"}
       <Chat />
-    {:else if $currentPage === "presets"}
-      <Presets />
-    {:else if $currentPage === "profiles"}
-      <Profiles />
-    {:else if $currentPage === "shortcuts"}
-      <Shortcuts />
-    {:else if $currentPage === "automations"}
-      <Automations />
-    {:else if $currentPage === "storage"}
-      <Storage />
-    {:else if $currentPage === "models"}
-      <Models />
-    {:else if $currentPage === "knowledge"}
-      <Knowledge />
     {:else if $currentPage === "settings"}
       <Settings />
     {/if}
   </main>
   </div>
   <StatusBar />
+  <RecoveryDialog />
 </div>

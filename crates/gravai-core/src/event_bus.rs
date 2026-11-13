@@ -40,12 +40,6 @@ pub enum GravaiEvent {
     /// Meeting app ended (was previously detected, now gone)
     MeetingEnded { app_name: String },
 
-    /// Capture preset activated
-    PresetActivated { preset_id: String },
-
-    /// Profile switched
-    ProfileSwitched { profile_id: String },
-
     /// Model download progress
     DownloadProgress {
         model_name: String,
