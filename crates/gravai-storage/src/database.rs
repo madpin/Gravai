@@ -762,8 +762,10 @@ impl Database {
             .filter_map(|r| r.ok())
             .filter_map(|(record, blob)| {
                 let stored: Vec<f32> = blob
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
                     .collect();
                 let score = cosine_similarity(query_vec, &stored);
                 if score > 0.0 {

@@ -253,8 +253,10 @@ fn audio_bytes_to_f32(data: &[u8]) -> Vec<f32> {
     if !data.len().is_multiple_of(4) {
         return Vec::new();
     }
-    data.chunks_exact(4)
-        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+    data.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_ne_bytes(*c))
         .collect()
 }
 
