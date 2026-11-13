@@ -29,7 +29,7 @@ env:
 jobs:
   rust-checks:
     name: Rust checks
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +80,7 @@ jobs:
 
   tauri-build:
     name: Tauri build (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     # Only run on PRs — pushes to main are built & released by release.yml
     if: github.event_name == 'pull_request'
     needs: [rust-checks, frontend-checks]
