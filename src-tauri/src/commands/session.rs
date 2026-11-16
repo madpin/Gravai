@@ -92,10 +92,10 @@ pub(crate) fn shared_db() -> Result<Arc<gravai_storage::Database>, String> {
 /// queuing up and starting duplicate sessions.
 static SESSION_STARTING: AtomicBool = AtomicBool::new(false);
 
-struct SessionStartGuard;
+pub(super) struct SessionStartGuard;
 impl SessionStartGuard {
     /// Try to acquire the guard. Returns `None` if already taken.
-    fn try_acquire() -> Option<Self> {
+    pub(super) fn try_acquire() -> Option<Self> {
         SESSION_STARTING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .ok()
@@ -371,6 +371,10 @@ async fn start_capture(
         std::sync::mpsc::channel::<Option<mpsc::Receiver<Vec<f32>>>>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
+    let timeline = Arc::new(gravai_audio::capture::CaptureTimeline::new(
+        session.capture_epoch(),
+    ));
+    let capture_timeline = timeline.clone();
     let capture_config = config.clone();
     let bus = state.event_bus.clone();
     // Set by the capture thread when the selected app was not running.
@@ -385,6 +389,7 @@ async fn start_capture(
 
     let _capture_thread = std::thread::spawn(move || {
         let mut capture = AudioCaptureManager::new(capture_config);
+        capture.set_timeline(capture_timeline);
         let loop_bus = bus.clone();
 
         // Throttle VolumeLevel publishes to 4 Hz per source. The underlying
@@ -791,7 +796,8 @@ async fn start_capture(
     // immediately and never touches blocking I/O.
     let previous_duration_seconds = session.previous_duration_seconds;
     let on_utterance: pipeline::OnUtterance = Arc::new(move |mut utterance| {
-        let offset = (previous_duration_seconds * 1000.0) as i64;
+        let offset = (previous_duration_seconds * 1000.0) as i64
+            + timeline.offset_ms(&utterance.source) as i64;
         utterance.start_ms += offset;
         utterance.end_ms += offset;
         let _ = utt_tx.send(utterance);

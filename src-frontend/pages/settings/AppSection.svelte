@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LiveCaptions from "../../components/settings/LiveCaptions.svelte";
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen } from "../../lib/tauri";
   import { config, setValue, loadConfig } from "../../lib/config";
@@ -13,7 +14,7 @@
   let c = $derived($config);
 
   // ── Shortcuts ────────────────────────────────────────────────────────
-  const ACTION_ORDER = ["recording.start", "recording.stop", "recording.pause", "recording.bookmark"];
+  const ACTION_ORDER = ["recording.start", "recording.stop", "recording.pause", "recording.bookmark", "captions.toggle"];
   let bindings = $state<Record<string, any>>({});
   let capturing = $state<string | null>(null);
   let shortcutMsg = $state("");
@@ -165,6 +166,8 @@
   {/each}
   {#if shortcutMsg}<p class="msg err">{shortcutMsg}</p>{/if}
 </Group>
+
+<LiveCaptions />
 
 <Group title="Startup">
   <Row label="Open when you log in" hint="Gravai starts by itself when you turn on your Mac.">

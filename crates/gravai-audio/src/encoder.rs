@@ -1,14 +1,11 @@
-//! Audio format export: WAV, AIFF, and stubs for M4A (AAC/ALAC).
-//!
-//! WAV is handled by hound (already in recorder.rs).
-//! AIFF also uses hound.
-//! M4A encoding will use CoreAudio AudioToolbox in a future update.
+//! Audio format export, streaming timeline mixdown and seekable replay caches.
 
 use std::collections::BTreeMap;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::info;
+static TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Supported export formats.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -150,6 +147,38 @@ fn export_aiff(source_wav: &Path, output_path: &Path) -> Result<(), String> {
     }
 }
 
+/// Optional fallback when CoreAudio codecs are unavailable (for example in
+/// restricted environments). Missing FFmpeg remains an ordinary encode error;
+/// callers keep their source WAVs and playback can fall back to PCM.
+fn ffmpeg_convert(source: &Path, output: &Path, bitrate: Option<u32>) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-nostdin", "-y", "-v", "error", "-i"])
+        .arg(source)
+        .args(["-map", "0:a:0", "-vn"]);
+    match bitrate {
+        Some(rate) => {
+            cmd.args(["-c:a", "aac", "-b:a"])
+                .arg(format!("{}k", rate.clamp(32, 320)))
+                .args(["-movflags", "+faststart"]);
+        }
+        None => {
+            cmd.args(["-c:a", "pcm_s16le", "-f", "wav"]);
+        }
+    }
+    let result = cmd
+        .arg(output)
+        .output()
+        .map_err(|e| format!("Optional FFmpeg conversion unavailable: {e}"))?;
+    if result.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "FFmpeg conversion failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ))
+    }
+}
+
 /// Use macOS `afconvert` CLI tool for format conversion.
 #[cfg(target_os = "macos")]
 fn export_via_afconvert(
@@ -181,6 +210,10 @@ fn export_via_afconvert(
     let result = cmd.output().map_err(|e| format!("afconvert: {e}"))?;
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
+        if format == ExportFormat::M4aAac {
+            tracing::warn!("System AAC encoder unavailable; trying optional FFmpeg: {stderr}");
+            return ffmpeg_convert(source, output, Some(aac_bitrate));
+        }
         return Err(format!("afconvert failed: {stderr}"));
     }
 
@@ -573,6 +606,38 @@ pub fn merge_and_export(
 
 static COMPACTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+pub(crate) fn compaction_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    COMPACTION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Audio compaction lock poisoned".into())
+}
+pub(crate) fn verified_duration(path: &Path) -> Result<f64, String> {
+    audio_duration(path)
+}
+
+/// Capture sources plus known disposable replay caches; exports are excluded.
+pub(crate) fn retention_wavs(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut paths: Vec<_> = source_track_groups(dir)?
+        .into_iter()
+        .flat_map(|g| g.paths)
+        .collect();
+    for name in [
+        "master.wav",
+        "playback.wav",
+        "_playback_timeline.wav",
+        "_playback_temp.wav",
+        "_playback_building.wav",
+        "_playback_retention.wav",
+    ] {
+        let path = dir.join(name);
+        if path.is_file() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
 static SESSION_LOCKS: OnceLock<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
@@ -729,7 +794,9 @@ pub fn compact_session(
 
     let source_duration = groups
         .iter()
-        .map(|track| track.frames as f64 / track.sample_rate as f64)
+        .map(|track| {
+            track.start_offset_ms as f64 / 1000.0 + track.frames as f64 / track.sample_rate as f64
+        })
         .fold(0.0f64, f64::max);
     let playback = session_dir.join("playback.m4a");
     let building = session_dir.join("playback.building.m4a");
@@ -982,9 +1049,10 @@ pub fn continuation_directory(session_dir: &Path, offset_ms: u64) -> Result<Path
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_nanos();
-    let path = session_dir
-        .join("continuations")
-        .join(format!("{offset_ms:020}_{nonce}"));
+    let path = session_dir.join("continuations").join(format!(
+        "{offset_ms:020}_{nonce}_{}",
+        TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     Ok(path)
 }
@@ -1002,7 +1070,10 @@ pub fn export_session_timeline(
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| "Audio compaction lock poisoned")?;
-    if !session_dir.join("continuations").exists() && !source_track_groups(session_dir)?.is_empty()
+    let archive = crate::retention::manifest(session_dir)?;
+    if archive.is_none()
+        && !session_dir.join("continuations").exists()
+        && !source_track_groups(session_dir)?.is_empty()
     {
         return merge_and_export(session_dir, output, format, bitrate);
     }
@@ -1020,7 +1091,12 @@ pub fn export_session_timeline(
                     .next()
                     .and_then(|s| s.parse::<u64>().ok())
                     .ok_or("Invalid continuation directory")?;
-                continued.push((offset, entry.path()));
+                if !archive
+                    .as_ref()
+                    .is_some_and(|a| a.included.contains(&name.to_string_lossy().into_owned()))
+                {
+                    continued.push((offset, entry.path()));
+                }
             }
         }
         continued.sort();
@@ -1032,7 +1108,9 @@ pub fn export_session_timeline(
         for (index, (offset, dir)) in segments.iter().enumerate() {
             let wav = scratch.0.join(format!("{index}.wav"));
             let groups = source_track_groups(dir)?;
-            if !groups.is_empty() {
+            if let Some(archive) = archive.as_ref().filter(|_| index == 0) {
+                decode_playback(&dir.join(&archive.file), &wav)?;
+            } else if !groups.is_empty() {
                 streaming_mix(&groups, &wav)?;
             } else if dir.join("playback.m4a").is_file() {
                 decode_playback(&dir.join("playback.m4a"), &wav)?;
@@ -1077,7 +1155,11 @@ fn continuation_scratch() -> Result<TimelineScratch, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("gravai-timeline-{}-{nonce}", std::process::id()));
+    let sequence = TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "gravai-timeline-{}-{nonce}-{sequence}",
+        std::process::id()
+    ));
     std::fs::create_dir(&path).map_err(|e| e.to_string())?;
     Ok(TimelineScratch(path))
 }
@@ -1090,10 +1172,7 @@ fn decode_playback(source: &Path, output: &Path) -> Result<(), String> {
         .output()
         .map_err(|e| format!("Decode saved audio: {e}"))?;
     if !result.status.success() {
-        return Err(format!(
-            "Decode saved audio: {}",
-            String::from_utf8_lossy(&result.stderr)
-        ));
+        return ffmpeg_convert(source, output, None);
     }
     Ok(())
 }
@@ -1210,4 +1289,85 @@ mod continuation_tests {
         assert!(samples[14_400] < -5_000);
         assert_eq!(std::fs::read(dir.0.join("playback.m4a")).unwrap(), original);
     }
+}
+
+/// One seekable mix on the session timeline. Never delete the sole compressed
+/// source during rebuild; build alongside it and atomically replace caches.
+pub fn resolve_playback_path(dir: &Path, force: bool) -> Result<PathBuf, String> {
+    let lock = session_lock(dir);
+    let _guard = lock.lock().map_err(|_| "Audio lock poisoned")?;
+    if let Some(archive) = crate::retention::manifest(dir)? {
+        let included: Vec<_> = crate::retention::capture_dirs(dir)?
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        if archive.included == included {
+            return Ok(dir.join(archive.file));
+        }
+    }
+    let continued = dir.join("continuations").exists();
+    let m4a = dir.join(if continued {
+        "_timeline.m4a"
+    } else {
+        "playback.m4a"
+    });
+    let wav = dir.join(if continued {
+        "_playback_timeline.wav"
+    } else {
+        "playback.wav"
+    });
+    if !force {
+        for path in [&m4a, &wav] {
+            if timeline_cache_fresh(path, dir) {
+                return Ok(path.clone());
+            }
+        }
+    }
+    let building = dir.join("_playback_building.wav");
+    export_session_timeline(dir, &building, ExportFormat::Wav, 128)?;
+    let encoded = dir.join("_playback_building.m4a");
+    match export_audio(&building, &encoded, ExportFormat::M4aAac, 128) {
+        Ok(()) => {
+            std::fs::rename(&encoded, &m4a).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_file(building);
+            Ok(m4a)
+        }
+        Err(error) => {
+            tracing::warn!("Replay AAC unavailable; using PCM: {error}");
+            let _ = std::fs::remove_file(encoded);
+            std::fs::rename(&building, &wav).map_err(|e| e.to_string())?;
+            Ok(wav)
+        }
+    }
+}
+
+pub(crate) fn timeline_cache_fresh(path: &Path, dir: &Path) -> bool {
+    if !is_fresh_cache(path, dir) {
+        return false;
+    }
+    let Ok(cached) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+        return false;
+    };
+    if let Ok(meta) = std::fs::metadata(dir.join("track_offsets.json")) {
+        if meta.modified().is_ok_and(|t| t > cached) {
+            return false;
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(dir.join("continuations")) {
+        for entry in entries.flatten() {
+            let leg = entry.path();
+            if !timeline_cache_fresh(path, &leg) {
+                return false;
+            }
+            for name in ["playback.m4a", "playback.wav"] {
+                if std::fs::metadata(leg.join(name))
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t > cached)
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }

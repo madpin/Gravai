@@ -225,6 +225,9 @@ impl MultiTrackRecorder {
 
     /// Write a chunk to the named track.
     pub fn write_track(&mut self, name: &str, chunk: &AudioChunk) -> Result<(), String> {
+        if let Some(offset) = chunk.start_offset_ms {
+            self.track_offsets_ms.entry(name.into()).or_insert(offset);
+        }
         self.note_first_write(name);
         if let Some((_, writer)) = self.tracks.iter_mut().find(|(n, _)| n == name) {
             writer.write(chunk)?;
@@ -288,6 +291,7 @@ mod tests {
 
     fn chunk(samples: usize) -> AudioChunk {
         AudioChunk {
+            start_offset_ms: None,
             samples: vec![0.1; samples],
             sample_rate: 48_000,
             channels: 2,

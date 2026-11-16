@@ -38,9 +38,15 @@ pub fn default_shortcuts() -> Vec<ShortcutBinding> {
         },
         ShortcutBinding {
             action_id: "recording.bookmark".into(),
-            key_sequence: "CmdOrCtrl+Shift+B".into(),
+            key_sequence: "CmdOrCtrl+Alt+B".into(),
             description: "Add bookmark".into(),
-            is_global: false,
+            is_global: true,
+        },
+        ShortcutBinding {
+            action_id: "captions.toggle".into(),
+            key_sequence: String::new(),
+            description: "Toggle caption overlay".into(),
+            is_global: true,
         },
     ]
 }

@@ -2887,6 +2887,7 @@ dependencies = [
  "gravai-config",
  "gravai-core",
  "gravai-intelligence",
+ "gravai-storage",
  "gravai-transcription",
  "hound",
  "ndarray 0.16.1",

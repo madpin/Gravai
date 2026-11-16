@@ -1,5 +1,6 @@
 //! Gravai Tauri application — thin glue layer between core crates and the UI.
 
+mod captions;
 mod commands;
 mod shortcuts;
 
@@ -304,6 +305,7 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .manage(std::sync::Mutex::new(captions::Captions::default()))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -466,6 +468,20 @@ pub fn run() {
                 let tray_items: TrayItemsState = Arc::new(std::sync::Mutex::new(TrayItems { start: start_item, stop: stop_item, status: status_item }));
                 app.manage(tray_items);
             }
+
+            captions::configure(app.handle(), &config.live_captions)?;
+            // Startup + daily while open. Each pass skips active recordings and
+            // reads policies from session snapshots, never from the selected setup.
+            let retention_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match commands::run_retention_now(retention_handle.clone()).await {
+                        Ok(report) => { let _ = retention_handle.emit("gravai:retention", &report); }
+                        Err(error) => tracing::info!("Retention deferred: {error}"),
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
+                }
+            });
 
             // ── Clamp restored window size to current monitor ─────────────
             //
@@ -677,6 +693,7 @@ pub fn run() {
                 loop {
                     match rx.recv().await {
                         Ok(event) => {
+                            captions::event(&handle, &event);
                             let (event_name, payload) = match &event {
                                 GravaiEvent::VolumeLevel { source, db } => {
                                     // -50 dB chosen as a generous threshold:
@@ -966,6 +983,8 @@ pub fn run() {
             commands::delete_llm_model,
             // Storage management
             commands::get_storage_info,
+            commands::run_retention_now,
+            commands::get_audio_archival,
             commands::delete_session_audio,
             commands::delete_full_session,
             commands::save_realtime_transcript,
@@ -988,6 +1007,8 @@ pub fn run() {
             commands::rename_speaker_in_session,
             commands::get_speaker_suggestions,
             // Bookmarks
+            captions::get_live_captions,
+            captions::toggle_caption_overlay,
             commands::add_bookmark,
             commands::list_bookmarks,
             commands::delete_bookmark,

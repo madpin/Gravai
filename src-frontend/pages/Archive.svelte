@@ -52,8 +52,10 @@
   // Audio player state
   let audioPath = $state<string | null>(null);
   let audioLoading = $state(false);
+  let archival = $state<any>(null);
   let audioError = $state<string | null>(null);
   let currentTimeMs = $state(-1);
+  let followPlayhead = $state(false);
   let seekRequest = $state<{ ms: number; autoplay?: boolean } | null>(null);
 
   // Filters
@@ -85,8 +87,12 @@
     } catch (_) {}
   }
 
+  let selectionGeneration = 0;
   async function select(id: string) {
+    const generation = ++selectionGeneration;
+    const current = () => generation === selectionGeneration;
     selectedId = id;
+    archival = null;
     continueError = null;
     summary = null;
     summaryError = null;
@@ -96,18 +102,37 @@
     audioError = null;
     currentTimeMs = -1;
     seekRequest = null;
-    try { utterances = await invoke("get_transcript", { sessionId: id }); } catch (_) {}
-    try { bookmarks = await invoke("list_bookmarks", { sessionId: id }); } catch (_) {}
+    utterances = [];
+    audioLoading = true;
+    try {
+      const rows = await invoke("get_transcript", { sessionId: id });
+      if (!current()) return;
+      utterances = rows;
+    } catch (_) { if (!current()) return; }
+    try {
+      const rows = await invoke("list_bookmarks", { sessionId: id });
+      if (!current()) return;
+      bookmarks = rows;
+    } catch (_) { if (!current()) return; }
     // Load any previously saved summary so the user doesn't have to re-run the LLM
     try {
       const saved = await invoke("get_session_summary", { sessionId: id });
+      if (!current()) return;
       if (saved) summary = saved;
-    } catch (_) {}
+    } catch (_) { if (!current()) return; }
+    try {
+      const status = await invoke("get_audio_archival", { sessionId: id });
+      if (!current()) return;
+      archival = status;
+    } catch (_) { if (!current()) return; }
     // Load audio (may trigger a merge of multiple tracks — show loading state)
     audioLoading = true;
     try {
-      audioPath = await invoke("get_session_audio_path", { sessionId: id });
+      const path = await invoke("get_session_audio_path", { sessionId: id });
+      if (!current()) return;
+      audioPath = path;
     } catch (e: any) {
+      if (!current()) return;
       audioError = typeof e === "string" ? e : e?.message ?? "Audio not available";
     }
     audioLoading = false;
@@ -530,6 +555,7 @@
                 <span class="bookmark-time">[{fmtOffsetMs(b.offset_ms)}]</span>
                 <!-- svelte-ignore a11y_autofocus -->
                 <input
+                  maxlength={500}
                   class="bookmark-note-input"
                   bind:value={editingBookmarkValue}
                   autofocus
@@ -604,6 +630,7 @@
         </button>
       </div>
     {/if}
+    {#if audioPath?.endsWith(".m4a") || archival}<p style="padding: 4px 16px; font-size: 12px" role="status">{audioPath?.endsWith(".m4a") ? "Compressed copy available" : !audioPath && archival?.state === "audio_unavailable" ? "Audio no longer available · transcript retained" : ""}{#if archival?.error} Retention: {archival.error}{/if}</p>{/if}
     <AudioPlayer
       {audioPath}
       {bookmarks}
@@ -613,14 +640,18 @@
       onRebuilt={(path) => { audioPath = path; audioError = null; }}
     />
 
+    <label style="padding: 8px 16px; font-size: 12px"><input type="checkbox" bind:checked={followPlayhead} disabled={!audioPath} /> Follow audio playhead</label>
     <TranscriptView
+      reviewMode={true}
+      autoScroll={false}
+      {followPlayhead}
       utterances={searchResults || utterances}
       sessionId={selectedId}
       sessionStartedAt={selectedSession?.started_at ?? ""}
       {bookmarks}
       {currentTimeMs}
-      onUtteranceClick={(ms) => { seekRequest = { ms }; }}
-      onBookmarkClick={(ms) => { seekRequest = { ms }; }}
+      onUtteranceClick={audioPath ? (ms) => { seekRequest = { ms }; } : undefined}
+      onBookmarkClick={audioPath ? (ms) => { seekRequest = { ms }; } : undefined}
     />
   </div>
 </div>

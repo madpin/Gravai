@@ -4,5 +4,6 @@ mod database;
 mod migrations;
 
 pub use database::{
-    BookmarkRecord, Database, KnowledgeEntry, SessionRecord, SummaryRecord, UtteranceRecord,
+    AudioArchivalRecord, BookmarkRecord, Database, KnowledgeEntry, SessionRecord, SummaryRecord,
+    UtteranceRecord,
 };

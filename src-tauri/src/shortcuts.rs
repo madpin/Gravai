@@ -26,7 +26,11 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             });
             if let Some(action) = action {
                 tracing::info!("Shortcut: {action}");
-                let _ = app.emit("gravai:shortcut", action);
+                if action == "captions.toggle" {
+                    let _ = crate::captions::toggle_caption_overlay(app.clone());
+                } else {
+                    let _ = app.emit("gravai:shortcut", action);
+                }
             }
         })
         .build()

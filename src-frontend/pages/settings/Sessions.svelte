@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Retention from "../../components/settings/Retention.svelte";
   import { onMount } from "svelte";
   import { invoke } from "../../lib/tauri";
   import { config, setValue } from "../../lib/config";
@@ -134,6 +135,8 @@
       </Row>
     {/each}
   </Group>
+
+  <Retention />
 
   <Group title="After a recording">
     <Row label="Save the transcript" hint="Writes a Markdown file to the transcript folder when a recording stops.">

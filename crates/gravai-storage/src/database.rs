@@ -6,6 +6,17 @@ use std::sync::Mutex;
 
 use crate::migrations;
 
+/// Bookmark notes are short annotations, bounded by Unicode scalar count.
+fn bookmark_note(note: Option<&str>) -> Result<Option<&str>, rusqlite::Error> {
+    let note = note.map(str::trim).filter(|s| !s.is_empty());
+    if note.is_some_and(|s| s.chars().count() > 500) {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Bookmark notes are limited to 500 characters".into(),
+        ));
+    }
+    Ok(note)
+}
+
 /// A session record from the database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -68,6 +79,17 @@ pub struct BookmarkRecord {
     pub offset_ms: i64,
     pub note: Option<String>,
     pub created_at: String,
+}
+
+/// Durable audio lifecycle status, separate from transcript/session content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioArchivalRecord {
+    pub session_id: String,
+    pub replay_path: Option<String>,
+    pub mime: Option<String>,
+    pub state: String,
+    pub raw_deleted_at: Option<String>,
+    pub error: Option<String>,
 }
 
 /// A persisted meeting summary for a session.
@@ -177,6 +199,10 @@ impl Database {
         tx.execute(
             "DELETE FROM session_summaries WHERE session_id = ?1",
             params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM session_audio_archival WHERE session_id=?1",
+            [session_id],
         )?;
         tx.commit()
     }
@@ -298,6 +324,23 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_audio_archival(&self, audio: &AudioArchivalRecord) -> Result<(), rusqlite::Error> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO session_audio_archival (session_id,replay_path,mime,state,raw_deleted_at,error)
+             VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(session_id) DO UPDATE SET
+             replay_path=excluded.replay_path,mime=excluded.mime,state=excluded.state,
+             raw_deleted_at=excluded.raw_deleted_at,error=excluded.error",
+            params![audio.session_id,audio.replay_path,audio.mime,audio.state,audio.raw_deleted_at,audio.error])?;
+        Ok(())
+    }
+
+    pub fn audio_archival(&self, id: &str) -> Result<Option<AudioArchivalRecord>, rusqlite::Error> {
+        use rusqlite::OptionalExtension;
+        self.conn.lock().unwrap().query_row(
+            "SELECT session_id,replay_path,mime,state,raw_deleted_at,error FROM session_audio_archival WHERE session_id=?1",
+            [id], |r| Ok(AudioArchivalRecord { session_id:r.get(0)?,replay_path:r.get(1)?,mime:r.get(2)?,state:r.get(3)?,raw_deleted_at:r.get(4)?,error:r.get(5)? })).optional()
+    }
+
     // -- Bookmarks --
 
     pub fn insert_bookmark(
@@ -306,6 +349,12 @@ impl Database {
         offset_ms: i64,
         note: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
+        if offset_ms < 0 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "Bookmark offset must be nonnegative".into(),
+            ));
+        }
+        let note = bookmark_note(note)?;
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO session_bookmarks (session_id, offset_ms, note) VALUES (?1, ?2, ?3)",
@@ -318,7 +367,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, session_id, offset_ms, note, created_at
-             FROM session_bookmarks WHERE session_id = ?1 ORDER BY offset_ms ASC",
+             FROM session_bookmarks WHERE session_id = ?1 ORDER BY offset_ms ASC, id ASC",
         )?;
         let rows = stmt.query_map(params![session_id], |row| {
             Ok(BookmarkRecord {
@@ -346,7 +395,7 @@ impl Database {
         id: i64,
         note: Option<&str>,
     ) -> Result<bool, rusqlite::Error> {
-        let trimmed = note.map(str::trim).filter(|s| !s.is_empty());
+        let trimmed = bookmark_note(note)?;
         let conn = self.conn.lock().unwrap();
         let count = conn.execute(
             "UPDATE session_bookmarks SET note = ?1 WHERE id = ?2",
@@ -1376,5 +1425,86 @@ mod tests {
         let ids: Vec<_> = recent.iter().map(|(s, _)| s.id.as_str()).collect();
         assert_eq!(ids, vec!["c", "a"]);
         assert_eq!(db.get_session_snapshot("missing").unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod live_accessibility_tests {
+    use super::*;
+    fn session(db: &Database) {
+        db.create_session(&SessionRecord {
+            id: "audio".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: Some("2026-01-01T01:00:00Z".into()),
+            duration_seconds: Some(3600.0),
+            title: None,
+            meeting_app: None,
+            state: "stopped".into(),
+        })
+        .unwrap();
+    }
+    #[test]
+    fn bookmark_unicode_limits_and_normalization() {
+        let db = Database::open_in_memory().unwrap();
+        session(&db);
+        let full = "é".repeat(500);
+        let id = db.insert_bookmark("audio", 0, Some(&full)).unwrap();
+        assert!(db
+            .insert_bookmark("audio", 0, Some(&"é".repeat(501)))
+            .is_err());
+        assert!(db.insert_bookmark("audio", -1, None).is_err());
+        assert!(db.update_bookmark_note(id, Some(&"x".repeat(501))).is_err());
+        assert_eq!(
+            db.list_bookmarks("audio").unwrap()[0].note.as_deref(),
+            Some(full.as_str())
+        );
+        db.insert_bookmark("audio", 0, Some("  ")).unwrap();
+        assert!(db.list_bookmarks("audio").unwrap()[1].note.is_none());
+    }
+    #[test]
+    fn audio_state_upsert_retains_session_bookmarks_and_summary() {
+        let db = Database::open_in_memory().unwrap();
+        session(&db);
+        db.insert_bookmark("audio", 10, Some("decision")).unwrap();
+        db.upsert_session_summary("audio", Some("summary"), None, None, None, None)
+            .unwrap();
+        let mut record = AudioArchivalRecord {
+            session_id: "audio".into(),
+            replay_path: Some("archive.m4a".into()),
+            mime: Some("audio/mp4".into()),
+            state: "compressed".into(),
+            raw_deleted_at: None,
+            error: None,
+        };
+        db.set_audio_archival(&record).unwrap();
+        record.raw_deleted_at = Some("2026-02-01T00:00:00Z".into());
+        db.set_audio_archival(&record).unwrap();
+        assert_eq!(
+            db.audio_archival("audio").unwrap().unwrap().raw_deleted_at,
+            record.raw_deleted_at
+        );
+        assert_eq!(db.list_bookmarks("audio").unwrap().len(), 1);
+        assert!(db.get_session_summary("audio").unwrap().is_some());
+        assert!(db.get_session("audio").unwrap().is_some());
+        db.delete_session("audio").unwrap();
+        assert!(db.audio_archival("audio").unwrap().is_none());
+    }
+    #[test]
+    fn file_database_migration_and_bookmarks_survive_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "gravai-bookmarks-{}.db",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        {
+            let db = Database::open(&path).unwrap();
+            session(&db);
+            db.insert_bookmark("audio", 42, Some("persisted")).unwrap();
+        }
+        {
+            let db = Database::open(&path).unwrap();
+            assert_eq!(db.list_bookmarks("audio").unwrap()[0].offset_ms, 42);
+            assert!(db.audio_archival("audio").unwrap().is_none());
+        }
+        let _ = std::fs::remove_file(path);
     }
 }

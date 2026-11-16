@@ -52,6 +52,7 @@ mod tests {
     fn mix_into_adds_samples() {
         let mut acc = vec![0.0f32; 4];
         let chunk = AudioChunk {
+            start_offset_ms: None,
             samples: vec![0.5, 0.5, 0.5, 0.5],
             sample_rate: 48000,
             channels: 2,

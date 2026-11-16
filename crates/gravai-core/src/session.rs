@@ -84,6 +84,10 @@ impl Session {
         }
     }
 
+    pub fn capture_epoch(&self) -> std::time::Instant {
+        self.capture_started_at
+    }
+
     pub fn state(&self) -> SessionState {
         SessionState::from_u8(self.state.load(Ordering::SeqCst))
     }
@@ -116,6 +120,14 @@ impl Session {
     }
 
     /// Total captured duration, excluding gaps between stopped recordings.
+    /// Same monotonic session timeline as capture, including the existing paused state and continuation offsets.
+    pub fn bookmark_offset_ms(&self) -> Result<i64, &'static str> {
+        if !self.is_active() {
+            return Err("No active recording");
+        }
+        Ok((self.duration_seconds() * 1000.0) as i64)
+    }
+
     pub fn duration_seconds(&self) -> f64 {
         self.previous_duration_seconds + self.capture_started_at.elapsed().as_secs_f64()
     }
@@ -175,5 +187,22 @@ mod tests {
         let id = generate_session_id();
         assert_eq!(id.len(), 15); // YYYYMMDD_HHMMSS
         assert!(id.contains('_'));
+    }
+}
+
+#[cfg(test)]
+mod bookmark_tests {
+    use super::*;
+    #[test]
+    fn bookmarks_share_continuation_clock_in_recording_and_paused_states() {
+        let mut s = Session::new("bookmarks".into(), Default::default());
+        s.previous_duration_seconds = 120.0;
+        assert!(s.bookmark_offset_ms().is_err());
+        s.set_state(SessionState::Recording);
+        assert!((120000..121000).contains(&s.bookmark_offset_ms().unwrap()));
+        s.set_state(SessionState::Paused);
+        assert!((120000..121000).contains(&s.bookmark_offset_ms().unwrap()));
+        s.set_state(SessionState::Stopped);
+        assert!(s.bookmark_offset_ms().is_err());
     }
 }

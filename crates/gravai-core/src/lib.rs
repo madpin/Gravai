@@ -12,3 +12,5 @@ pub use app_state::AppState;
 pub use error::{GravaiError, Result};
 pub use event_bus::{EventBus, GravaiEvent};
 pub use session::{Session, SessionState};
+
+pub mod captions;

@@ -7,6 +7,7 @@
 
 pub mod automations;
 pub(crate) mod legacy;
+pub mod live_accessibility;
 pub mod setups;
 pub mod shortcuts;
 pub mod source_check;
@@ -49,7 +50,7 @@ pub fn log_file_path() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 /// Current config schema version. Bump when making breaking changes.
-pub const CONFIG_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -616,6 +617,8 @@ pub struct AppConfig {
     pub updates: UpdatesConfig,
     pub startup: StartupConfig,
     pub correction: CorrectionConfig,
+    pub live_captions: live_accessibility::LiveCaptions,
+    pub retention: live_accessibility::RetentionPolicy,
 }
 
 impl Default for AppConfig {
@@ -632,7 +635,21 @@ impl Default for AppConfig {
             updates: UpdatesConfig::default(),
             startup: StartupConfig::default(),
             correction: CorrectionConfig::default(),
+            live_captions: Default::default(),
+            retention: Default::default(),
         }
+    }
+}
+
+impl AppConfig {
+    /// Missing v2 fields deserialize disabled; never enroll old sessions in retention.
+    pub fn migrate(&mut self) {
+        self.version = CONFIG_VERSION;
+        self.llm.migrate();
+        self.correction.migrate();
+        self.vad.silero.migrate();
+        self.live_captions.normalize();
+        self.retention.normalize();
     }
 }
 
@@ -662,9 +679,7 @@ pub fn load_config() -> AppConfig {
         match std::fs::read_to_string(&path) {
             Ok(content) => match serde_json::from_str::<AppConfig>(&content) {
                 Ok(mut config) => {
-                    config.llm.migrate();
-                    config.correction.migrate();
-                    config.vad.silero.migrate();
+                    config.migrate();
                     // Persist migration so the file on disk is updated
                     let _ = save_config(&config);
                     tracing::info!("Config loaded from {}", path.display());

@@ -53,6 +53,7 @@ pub struct Snapshot {
     pub llm: LlmSnapshot,
     pub correction: CorrectionConfig,
     pub export: ExportConfig,
+    pub retention: crate::live_accessibility::RetentionPolicy,
 }
 
 impl Default for Snapshot {
@@ -79,6 +80,7 @@ impl Snapshot {
             },
             correction: config.correction.clone(),
             export: config.export.clone(),
+            retention: config.retention.clone(),
         }
     }
 
@@ -96,6 +98,8 @@ impl Snapshot {
         config.llm.max_tokens = self.llm.max_tokens;
         config.correction = self.correction.clone();
         config.export = self.export.clone();
+        config.retention = self.retention.clone();
+        config.retention.normalize();
         config.llm.migrate();
         config.correction.migrate();
         config.vad.silero.migrate();
@@ -210,7 +214,7 @@ pub fn builtin_setups() -> Vec<Setup> {
     ]
 }
 
-const SETUPS_VERSION: u32 = 1;
+const SETUPS_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupStore {
@@ -240,7 +244,17 @@ impl SetupStore {
         let path = Self::path();
         if let Ok(content) = std::fs::read_to_string(&path) {
             match serde_json::from_str::<Self>(&content) {
-                Ok(store) => return store,
+                Ok(mut store) => {
+                    let old = serde_json::to_value(&store).ok();
+                    store.version = SETUPS_VERSION;
+                    for setup in &mut store.setups {
+                        setup.snapshot.retention.normalize();
+                    }
+                    if serde_json::to_value(&store).ok() != old {
+                        let _ = store.save();
+                    }
+                    return store;
+                }
                 Err(e) => tracing::warn!("Could not parse setups.json: {e}"),
             }
             return Self::default();

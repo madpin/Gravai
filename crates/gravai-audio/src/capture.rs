@@ -23,6 +23,35 @@ pub struct AudioChunk {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub channels: u16,
+    /// First sample on the recording leg clock (before IPC/recorder queuing).
+    pub start_offset_ms: Option<u64>,
+}
+
+/// Shared capture origin for WAV padding, transcript offsets and bookmarks.
+pub struct CaptureTimeline {
+    epoch: std::time::Instant,
+    first: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+}
+impl CaptureTimeline {
+    pub fn new(epoch: std::time::Instant) -> Self {
+        Self {
+            epoch,
+            first: Default::default(),
+        }
+    }
+    fn note(&self, source: &str, frames: usize, rate: u32) -> u64 {
+        let offset = (self.epoch.elapsed().as_millis() as u64)
+            .saturating_sub(frames as u64 * 1000 / u64::from(rate.max(1)));
+        *self
+            .first
+            .lock()
+            .unwrap()
+            .entry(source.into())
+            .or_insert(offset)
+    }
+    pub fn offset_ms(&self, source: &str) -> u64 {
+        self.first.lock().unwrap().get(source).copied().unwrap_or(0)
+    }
 }
 
 /// Callback for volume level events.
@@ -116,6 +145,7 @@ pub struct AudioDeviceInfo {
 
 /// Manages microphone and system audio capture.
 pub struct AudioCaptureManager {
+    timeline: Arc<CaptureTimeline>,
     config: AppConfig,
     recording: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
@@ -158,8 +188,12 @@ pub struct AudioCaptureManager {
 }
 
 impl AudioCaptureManager {
+    pub fn set_timeline(&mut self, timeline: Arc<CaptureTimeline>) {
+        self.timeline = timeline;
+    }
     pub fn new(config: AppConfig) -> Self {
         Self {
+            timeline: Arc::new(CaptureTimeline::new(std::time::Instant::now())),
             config,
             recording: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
@@ -362,6 +396,7 @@ impl AudioCaptureManager {
         let switching = self.mic_switching.clone();
         fault.store(false, Ordering::Relaxed);
 
+        let timeline = self.timeline.clone();
         let stream = device
             .build_input_stream(
                 &stream_config,
@@ -379,6 +414,11 @@ impl AudioCaptureManager {
                             samples: hq_samples,
                             sample_rate: locked_rate,
                             channels: locked_channels,
+                            start_offset_ms: Some(timeline.note(
+                                "microphone",
+                                data.len() / usize::from(channels.max(1)),
+                                sample_rate,
+                            )),
                         });
                     }
 
@@ -467,6 +507,7 @@ impl AudioCaptureManager {
         let mut volume_sample_counter = 0u64;
         let volume_interval_samples = (sck_sample_rate as f64 * VOLUME_INTERVAL) as u64;
 
+        let timeline = self.timeline.clone();
         let callback = move |data: &[f32], sample_rate: u32, channels: u16| {
             if !recording.load(Ordering::Relaxed) || paused.load(Ordering::Relaxed) {
                 return;
@@ -476,6 +517,11 @@ impl AudioCaptureManager {
                 samples: data.to_vec(),
                 sample_rate,
                 channels,
+                start_offset_ms: Some(timeline.note(
+                    "system_audio",
+                    data.len() / usize::from(channels.max(1)),
+                    sample_rate,
+                )),
             });
 
             let mono_16k = match &mut resampler {
@@ -565,5 +611,22 @@ mod tests {
     fn remix_mono_to_stereo_duplicates_the_channel() {
         let stereo = remix(&[0.25, -0.5], 1, 2);
         assert_eq!(stereo, vec![0.25, 0.25, -0.5, -0.5]);
+    }
+}
+
+#[cfg(test)]
+mod timeline_tests {
+    use super::*;
+    #[test]
+    fn source_origins_use_capture_clock_and_never_consumer_queue_time() {
+        let timeline =
+            CaptureTimeline::new(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        let first = timeline.note("microphone", 1600, 16000);
+        assert!((2900..3000).contains(&first));
+        assert_eq!(timeline.note("microphone", 0, 16000), first);
+        let system = timeline.note("system_audio", 0, 48000);
+        assert!(system >= 3000);
+        assert_eq!(timeline.offset_ms("microphone"), first);
+        assert_eq!(timeline.offset_ms("system_audio"), system);
     }
 }

@@ -88,6 +88,8 @@ pub async fn delete_session_audio(session_id: String) -> Result<String, String> 
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         deleted += size;
     }
+    let db = super::session::shared_db()?;
+    gravai_audio::retention::forget_audio(&db, &session_id, &session_dir)?;
     // Remove empty directory
     let _ = std::fs::remove_dir(&session_dir);
 
@@ -198,4 +200,40 @@ fn session_audio_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>,
         }
     }
     Ok(files)
+}
+
+/// Run policies frozen into stopped sessions; never applies the current setup to old recordings.
+#[tauri::command]
+pub async fn run_retention_now(
+    app: tauri::AppHandle,
+) -> Result<gravai_audio::retention::RetentionReport, String> {
+    let guard = super::session::SessionStartGuard::try_acquire()
+        .ok_or("A recording is starting or stopping")?;
+    // Keep the lifecycle guard through the pass so no session can be continued mid-prune.
+    use tauri::Manager;
+    let state = app.state::<std::sync::Arc<gravai_core::AppState>>();
+    if state
+        .session
+        .read()
+        .await
+        .as_ref()
+        .is_some_and(|s| s.is_active())
+    {
+        return Err("Stop recording before running retention".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let db = super::session::shared_db()?;
+        gravai_audio::retention::run(&db, &gravai_config::sessions_dir(), chrono::Utc::now())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn get_audio_archival(
+    session_id: String,
+) -> Result<Option<gravai_storage::AudioArchivalRecord>, String> {
+    super::session::shared_db()?
+        .audio_archival(&session_id)
+        .map_err(|e| e.to_string())
 }

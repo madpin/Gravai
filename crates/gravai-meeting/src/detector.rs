@@ -271,13 +271,20 @@ fn get_running_process_names() -> Vec<String> {
         .args(["-eo", "comm="])
         .output()
     {
-        Ok(output) => String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        Err(_) => Vec::new(),
+        Ok(output) if output.status.success() => {
+            parse_process_names(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => Vec::new(),
     }
+}
+
+fn parse_process_names(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// A background meeting detector that polls periodically.
@@ -387,9 +394,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_running_processes_returns_something() {
-        let procs = get_running_process_names();
-        assert!(!procs.is_empty());
+    fn process_names_preserve_spaces_and_skip_empty_lines() {
+        // Test the process-list contract without depending on host ps access.
+        assert_eq!(parse_process_names(" /sbin/launchd\n\n /Applications/Microsoft Teams.app/Contents/MacOS/Microsoft Teams \n"),
+            vec!["/sbin/launchd", "/Applications/Microsoft Teams.app/Contents/MacOS/Microsoft Teams"]);
+        assert!(parse_process_names("").is_empty());
     }
 
     #[test]

@@ -59,6 +59,7 @@ pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
 /// Update configuration with a partial JSON patch (deep merge).
 #[tauri::command]
 pub async fn update_config(
+    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     patch: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -68,12 +69,11 @@ pub async fn update_config(
     let current = serde_json::to_value(&*config).map_err(|e| e.to_string())?;
     let merged = gravai_config::deep_merge(&current, &patch);
     *config = serde_json::from_value(merged).map_err(|e| e.to_string())?;
-    config.llm.migrate();
-    config.correction.migrate();
-    config.vad.silero.migrate();
+    config.migrate();
 
     // Persist to disk
     gravai_config::save_config(&config).map_err(|e| e.to_string())?;
+    crate::captions::configure(&app, &config.live_captions)?;
 
     serde_json::to_value(&*config).map_err(|e| e.to_string())
 }
@@ -88,6 +88,7 @@ pub async fn export_config(state: State<'_, Arc<AppState>>) -> Result<String, St
 /// Import configuration from a JSON string (full replace).
 #[tauri::command]
 pub async fn import_config(
+    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     json: String,
 ) -> Result<serde_json::Value, String> {
@@ -96,7 +97,9 @@ pub async fn import_config(
 
     let mut config = state.config.write().await;
     *config = new_config;
+    config.migrate();
     gravai_config::save_config(&config).map_err(|e| e.to_string())?;
+    crate::captions::configure(&app, &config.live_captions)?;
 
     serde_json::to_value(&*config).map_err(|e| e.to_string())
 }

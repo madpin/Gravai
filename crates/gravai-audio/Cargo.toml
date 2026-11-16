@@ -7,6 +7,7 @@ license.workspace = true
 description = "Audio capture, multi-track recording, resampling, mixing, VAD"
 
 [dependencies]
+gravai-storage = { workspace = true }
 gravai-core = { workspace = true }
 gravai-config = { workspace = true }
 gravai-transcription = { workspace = true }

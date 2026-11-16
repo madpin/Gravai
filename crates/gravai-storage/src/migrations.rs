@@ -40,6 +40,11 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[
         "Session config snapshot",
         include_str!("../sql/008_session_config_snapshot.sql"),
     ),
+    (
+        9,
+        "Audio archival state",
+        include_str!("../sql/009_audio_archival.sql"),
+    ),
 ];
 
 /// Run all pending migrations. Creates the schema_version table if needed.

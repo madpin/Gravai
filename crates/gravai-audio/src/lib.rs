@@ -11,3 +11,5 @@ pub mod resampler;
 pub mod screencapturekit;
 pub mod silence;
 pub mod vad;
+
+pub mod retention;

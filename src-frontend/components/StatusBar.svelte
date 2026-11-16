@@ -251,7 +251,8 @@
   }
 
   async function runShortcut(action: string) {
-    if (action === "recording.start") autoStart();
+    if (action === "captions.toggle") await invoke("toggle_caption_overlay");
+    else if (action === "recording.start") autoStart();
     else if (action === "recording.stop") { if ($isRecording) stop(); }
     else if (action === "recording.pause") { if ($isRecording) togglePause(); }
     else if (action === "recording.bookmark" && $isRecording) {

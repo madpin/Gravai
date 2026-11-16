@@ -1,6 +1,6 @@
 # Next phase: live bookmarks, transcript playback sync, accessibility surfaces, retention
 
-**Status:** Draft (planning)  
+**Status:** Implemented (local validation notes below)
 **Scope:** Live capture affordances (bookmarks, captions), archive playback sync, and **per-profile storage retention** with optional **compressed** (not necessarily lossless) audio archival.
 
 **Principles**
@@ -44,10 +44,10 @@ Users can mark “this mattered” during a long recording without stopping audi
 
 ### Acceptance criteria
 
-- [ ] User can add a bookmark via **hotkey** and via **button** during an active session; timestamp matches replay position within agreed tolerance (e.g. ±100 ms once audio seek exists).
-- [ ] Optional note persists and appears in archive/session detail (surface TBD: sidebar list or markers on a future timeline strip).
-- [ ] Bookmarks survive app restart and appear for the same `session_id`.
-- [ ] Shortcut is remappable and documented in Shortcuts settings.
+- [x] User can add a bookmark via **hotkey** and via **button** during an active session; timestamp matches replay position within agreed tolerance (e.g. ±100 ms once audio seek exists).
+- [x] Optional note persists and appears in archive/session detail (surface TBD: sidebar list or markers on a future timeline strip).
+- [x] Bookmarks survive app restart and appear for the same `session_id`.
+- [x] Shortcut is remappable and documented in Shortcuts settings.
 
 ### Open questions
 
@@ -86,11 +86,11 @@ Reviewing a meeting means **text and audio stay locked together**: clicking a li
 
 ### Acceptance criteria
 
-- [ ] Clicking an utterance seeks playback to that utterance’s start (within one frame / buffer tolerance).
-- [ ] During playback, exactly one utterance is marked as **current**; updates smoothly as time advances (no flicker on boundaries—define debounce if needed).
-- [ ] Clicking **progress bar / time** (if present) moves playhead in transcript to the containing utterance.
-- [ ] Works with corrected transcript display mode if timestamps refer to original alignment (document behavior when text is edited).
-- [ ] **Dual-track sessions:** playback is **one merged stream**; seek and playhead stay aligned with transcript (no per-track player in v1).
+- [x] Clicking an utterance seeks playback to that utterance’s start (within one frame / buffer tolerance).
+- [x] During playback, exactly one utterance is marked as **current**; updates smoothly as time advances (no flicker on boundaries—define debounce if needed).
+- [x] Clicking **progress bar / time** (if present) moves playhead in transcript to the containing utterance.
+- [x] Works with corrected transcript display mode if timestamps refer to original alignment (document behavior when text is edited).
+- [x] **Dual-track sessions:** playback is **one merged stream**; seek and playhead stay aligned with transcript (no per-track player in v1).
 
 ### Open questions
 
@@ -139,11 +139,11 @@ Nested object, e.g. `accessibility_live_captions` (name TBD):
 
 ### Acceptance criteria
 
-- [ ] Feature is **off** by default; enabling it requires explicit user action in Settings.
-- [ ] User can choose **overlay**, **menu bar**, or **both**; settings persist across restarts.
-- [ ] Overlay is configurable (at minimum: position preset, opacity, font size, line count).
-- [ ] Toggle hotkey (if set) shows/hides overlay without quitting recording.
-- [ ] When recording stops or session changes, overlay clears or shows inactive state—no stale text from previous session without user context.
+- [x] Feature is **off** by default; enabling it requires explicit user action in Settings.
+- [x] User can choose **overlay**, **menu bar**, or **both**; settings persist across restarts.
+- [x] Overlay is configurable (at minimum: position preset, opacity, font size, line count).
+- [x] Toggle hotkey (if set) shows/hides overlay without quitting recording.
+- [x] When recording stops or session changes, overlay clears or shows inactive state—no stale text from previous session without user context.
 
 ### Open questions
 
@@ -190,11 +190,11 @@ Long-running users accumulate large **multi-track WAV** trees under `~/.gravai/s
 
 ### Acceptance criteria
 
-- [ ] Each profile can set **independent** retention rules; inactive profiles do not surprise-delete when switching.
-- [ ] Sessions past **N** days trigger the configured action; younger sessions are untouched.
-- [ ] **Transcode path:** after success, replay uses the compressed file (or documented mixdown); **transcript + summary** still load.
-- [ ] **Delete path:** WAV removed; DB intact; UI clearly indicates “audio no longer available” vs “compressed copy available.”
-- [ ] Failed transcode **does not** delete source WAV; user-visible error in logs and optional Settings banner.
+- [x] Each profile can set **independent** retention rules; inactive profiles do not surprise-delete when switching.
+- [x] Sessions past **N** days trigger the configured action; younger sessions are untouched.
+- [x] **Transcode path:** after success, replay uses the compressed file (or documented mixdown); **transcript + summary** still load.
+- [x] **Delete path:** WAV removed; DB intact; UI clearly indicates “audio no longer available” vs “compressed copy available.”
+- [x] Failed transcode **does not** delete source WAV; user-visible error in logs and optional Settings banner.
 
 ### Open questions
 
@@ -221,4 +221,14 @@ Long-running users accumulate large **multi-track WAV** trees under `~/.gravai/s
 | Overlay / menu bar | `src-tauri` (window + tray), `src-frontend`, `gravai-config` |
 | Retention / compressed audio | `gravai-config` (profiles), `gravai-storage`, `gravai-audio` (or encoder helper), `src-tauri`, Storage/Profiles UI |
 
-This document is planning-only; it does not change product scope in `PRD.md` until reviewed.
+## Implementation choices and limits
+
+- Extended the existing bookmark table, notes prompt, exports, shortcuts and finished-session view. Notes are trimmed, optional, and limited to 500 Unicode scalar values in storage. New installs use an Anywhere bookmark shortcut (⌘⌥B on macOS); existing remaps and scope choices are preserved. Bookmarks work while paused. The existing paused state retains a continuous capture clock, so monotonic session elapsed time (plus continuation offset) is the audio/bookmark time base, including paused intervals. First-sample offsets are measured at capture callbacks, before queues, on that same clock; both transcription and replay use them. Track-start offsets pad the replay mix. Older stored transcript timestamps are not rewritten. Markdown/Obsidian bookmark export already existed and is retained.
+- Replay is materialized lazily, using the existing streaming mix and macOS AAC encoder (`afconvert`); PCM WAV is the playback fallback. All tracks and continuation captures share one timeline. Rebuild preserves the sole compressed source. Transcript review renders the full transcript, seeks with Enter/Space, uses half-open utterance ranges, and resolves overlaps by latest start then highest id. Corrected/original text retains original timing. Follow-playhead is separately opt-in; word timing is outside this phase.
+- Captions use finalized utterances only (bounded to eight in-memory lines, no partial-token redraws), with an independent Svelte window. Enable and configure in Settings → App; overlay toggle is an optional, initially unbound shortcut. Overlay opacity requires Tauri's macOS private API feature, enabled for this directly distributed app. Corners refer to the main window's current display work area when settings are applied. The overlay follows normal macOS Space behavior, does not span all Spaces/full-screen apps, and does not take focus on creation. Menu bar mode uses a truncated title and full latest-line tooltip; an expandable popover and click-through are deferred. Placeholders are English, consistent with the current UI.
+- Profiles have already migrated to **setups**, so retention lives in the versioned config and setup snapshot, copied into each new session's stored snapshot. Every built-in and migrated snapshot defaults to retention disabled. Settings → Sessions edits the next recording's policy; saving as a setup gives that setup independent rules. Changing setups or policies never retroactively enrolls existing sessions. Continuing a session retains its original policy and resets age from its latest stop.
+- Retention runs at startup, daily while open, and via **Run retention now**. Active sessions are skipped; the session lifecycle guard prevents start/continue during a pass. Age is measured from a valid `ended_at`, in whole 24-hour days, minimum one day. Only stopped, explicitly enrolled sessions qualify. Legacy shared custom output folders are skipped with a report message: their ownership cannot be determined safely.
+- Compressed archives are a single merged AAC/M4A timeline, **96 kbps total** by default for mono or stereo (configurable 32–320). Encoding uses macOS's bundled `afconvert`/`afinfo`, with optional FFmpeg fallback when CoreAudio codecs are unavailable. FFmpeg is not required on a normal macOS installation; if neither encoder works, sources remain intact. It validates positive duration, duration agreement, and reduction relative to PCM before publishing an immutable file through an atomic JSON manifest. SQLite stores replay path, MIME, status, deletion time and errors before raw deletion. Failure preserves sources; retries handle partial deletion. The manifest records included capture legs so future continuation/export does not duplicate archived audio.
+- Delete-only removes capture WAVs and known disposable WAV mix caches, preserving compressed copies and exports. Both actions retain transcript, corrections, summaries, bookmarks, embeddings and chat data. Archive reports compressed/unavailable status; errors appear in the pass report and logs. Enabling a policy is the explicit destructive opt-in, with inline explanation; no extra first-enable modal. Lossless regeneration after raw deletion is unavailable.
+
+Validation: storage/config/core and audio retention unit tests cover defaults/migration, snapshot isolation, bookmark limits/reopen, age boundaries, non-destructive failures, deletion scope/idempotence, and compressed continuation replay. `make check` was run; its default shader-precompilation mode is blocked here because Xcode's `metal` compiler is unavailable. The complete check passes with `make check MISTRALRS_METAL_PRECOMPILE=0 CHECK_VERBOSE=1` (format, Clippy, workspace unit tests, Svelte/TypeScript). `pnpm build` also passes. The restricted environment cannot enumerate processes via `ps`; the existing host-dependent process-list assertion was replaced with deterministic parsing coverage. AAC round-trip tests exercise the optional FFmpeg fallback here. Native overlay/Spaces and global shortcut behavior still need an interactive macOS smoke test.

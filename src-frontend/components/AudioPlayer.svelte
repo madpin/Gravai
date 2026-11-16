@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { convertFileSrc, invoke } from "../lib/tauri";
   import Icon from "./Icon.svelte";
 
@@ -62,7 +62,7 @@
     if (playing) {
       audioEl.pause();
     } else {
-      audioEl.play();
+      audioEl.play().catch(() => { loadError = "Playback could not start. Press Play to retry."; });
     }
   }
 
@@ -76,6 +76,7 @@
     if (!audioEl) return;
     duration = audioEl.duration;
     loadError = null;
+    if (onSeekRequest) seekToMs(onSeekRequest.ms, onSeekRequest.autoplay ?? true);
   }
 
   let loadError = $state<string | null>(null);
@@ -89,8 +90,7 @@
     loadError = "Failed to load audio. The file may be missing or in an unsupported format.";
   }
 
-  /** Deletes the cached playback/mix files for this session and rebuilds
-   * from the raw source tracks (see `rebuild_session_audio`). */
+  /** Rebuild replay alongside the source, preserving a sole compressed copy. */
   async function rebuildAudio() {
     if (!sessionId || rebuilding) return;
     rebuilding = true;
@@ -120,20 +120,21 @@
    * playback unless explicitly told not to (e.g. positioning the playhead
    * at the first bookmark when a session is first opened). */
   function seekToMs(ms: number, autoplay = true) {
-    if (!audioEl) return;
-    const seekTime = ms / 1000;
+    if (!audioEl || audioEl.readyState === 0) return;
+    const seekTime = Math.max(0, Math.min(ms / 1000, Number.isFinite(audioEl.duration) ? audioEl.duration : Infinity));
     audioEl.currentTime = seekTime;
     currentTime = seekTime;
-    onTimeUpdate(ms);
+    onTimeUpdate(seekTime * 1000);
     if (autoplay && !playing) {
-      audioEl.play();
+      audioEl.play().catch(() => { loadError = "Playback could not start. Press Play to retry."; });
     }
   }
 
   // External seek requests (transcript line click, bookmark row click in Archive).
   $effect(() => {
     if (onSeekRequest && audioEl) {
-      seekToMs(onSeekRequest.ms, onSeekRequest.autoplay ?? true);
+      const request = onSeekRequest;
+      untrack(() => seekToMs(request.ms, request.autoplay ?? true));
     }
   });
 
@@ -223,6 +224,7 @@
 
     <div class="player-scrubber-wrap">
       <input
+        aria-label="Audio playback position"
         type="range"
         class="player-scrubber"
         min="0"

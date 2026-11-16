@@ -4,7 +4,7 @@
   import { getUtteranceOffsetMs } from "../lib/transcript";
   import Icon from "./Icon.svelte";
 
-  let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null, bookmarks = [], sessionStartedAt = "", currentTimeMs = -1, onUtteranceClick, onBookmarkClick }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null; bookmarks?: any[]; sessionStartedAt?: string; currentTimeMs?: number; onUtteranceClick?: (startMs: number) => void; onBookmarkClick?: (offsetMs: number) => void } = $props();
+  let { utterances = [], autoScroll = true, reviewMode = false, followPlayhead = false, showEmotions = true, sessionId = null, bookmarks = [], sessionStartedAt = "", currentTimeMs = -1, onUtteranceClick, onBookmarkClick }: { utterances: any[]; autoScroll?: boolean; reviewMode?: boolean; followPlayhead?: boolean; showEmotions?: boolean; sessionId?: string | null; bookmarks?: any[]; sessionStartedAt?: string; currentTimeMs?: number; onUtteranceClick?: (startMs: number) => void; onBookmarkClick?: (offsetMs: number) => void } = $props();
 
   // Base time = session start (for aligning bookmark offsets with utterance timestamps)
   let baseTimeMs = $derived(
@@ -17,15 +17,13 @@
   // Uses start_ms if available, otherwise falls back to timestamp offset.
   let activeUtteranceId = $derived.by(() => {
     if (currentTimeMs < 0) return -1;
-    if (baseTimeMs === 0) return -1;
-    let activeId = -1;
-    for (const u of utterances) {
-      const offsetMs = getUtteranceOffsetMs(u, baseTimeMs);
-      if (offsetMs <= currentTimeMs) {
-        activeId = u.id;
-      }
-    }
-    return activeId;
+    // Latest containing start wins for overlaps; stable id breaks equal starts.
+    const candidates = utterances.filter(u => {
+      const start = getUtteranceOffsetMs(u, baseTimeMs);
+      return start <= currentTimeMs && (u.end_ms == null || currentTimeMs < u.end_ms);
+    });
+    candidates.sort((a, b) => getUtteranceOffsetMs(b, baseTimeMs) - getUtteranceOffsetMs(a, baseTimeMs) || b.id - a.id);
+    return candidates[0]?.id ?? -1;
   });
 
   // Auto-scroll to active utterance during playback (unless user is manually scrolling)
@@ -39,7 +37,7 @@
   }
 
   $effect(() => {
-    if (activeUtteranceId > 0 && !userScrolled && el) {
+    if (followPlayhead && activeUtteranceId > 0 && !userScrolled && el) {
       const activeEl = el.querySelector(`[data-utterance-id="${activeUtteranceId}"]`);
       if (activeEl) {
         activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -77,9 +75,9 @@
   // Cap the number of utterances rendered in the DOM to prevent unbounded growth.
   // The full array is preserved in the store for search/summary; only the tail is shown.
   const MAX_RENDERED = 300;
-  let hiddenCount = $derived(Math.max(0, utterances.length - MAX_RENDERED));
+  let hiddenCount = $derived((reviewMode || onUtteranceClick) ? 0 : Math.max(0, utterances.length - MAX_RENDERED));
   let visibleUtterances = $derived(
-    utterances.length > MAX_RENDERED ? utterances.slice(-MAX_RENDERED) : utterances
+    hiddenCount > 0 ? utterances.slice(hiddenCount) : utterances
   );
 
   const speakerColors = ["#7c6cff", "#34d399", "#fbbf24", "#f87171", "#60a5fa", "#a78bfa", "#fb923c", "#2dd4bf"];
@@ -256,11 +254,12 @@
         class="transcript-line"
         class:active-utterance={u.id === activeUtteranceId}
         class:clickable={!!onUtteranceClick}
+        aria-current={u.id === activeUtteranceId ? "true" : undefined}
         data-utterance-id={u.id}
         role="button"
         tabindex={onUtteranceClick ? 0 : -1}
         onclick={onUtteranceClick ? () => onUtteranceClick!(getUtteranceOffsetMs(u, baseTimeMs)) : undefined}
-        onkeydown={onUtteranceClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onUtteranceClick!(getUtteranceOffsetMs(u, baseTimeMs)); } } : undefined}
+        onkeydown={onUtteranceClick ? (e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onUtteranceClick!(getUtteranceOffsetMs(u, baseTimeMs)); } } : undefined}
       >
         <span class="transcript-meta">
           <Icon name={sourceIconName(u.source)} size={12}/> {fmtTime(u.timestamp)}

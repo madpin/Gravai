@@ -1,0 +1,1 @@
+{"identifier":"captions","description":"Live caption event subscription","windows":["captions"],"permissions":["core:event:default"]}

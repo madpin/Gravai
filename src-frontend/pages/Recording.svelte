@@ -767,6 +767,7 @@
           class="bookmark-note-prompt"
           placeholder="Add a note… Enter to save, Esc to skip"
           autofocus
+          maxlength={500}
           bind:value={bookmarkNoteValue}
           onkeydown={(e) => { if (e.key === "Enter") saveBookmarkNote(); if (e.key === "Escape") dismissBookmarkNote(); }}
           onblur={dismissBookmarkNote}

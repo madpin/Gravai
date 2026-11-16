@@ -15,11 +15,7 @@ pub async fn add_bookmark(
         .as_ref()
         .ok_or_else(|| "No active session".to_string())?;
 
-    if !session.is_active() {
-        return Err("Session is not active".into());
-    }
-
-    let offset_ms = (session.duration_seconds() * 1000.0) as i64;
+    let offset_ms = session.bookmark_offset_ms().map_err(str::to_string)?;
 
     let db_path = gravai_config::data_dir().join("gravai.db");
     let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
