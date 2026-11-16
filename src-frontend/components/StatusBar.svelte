@@ -6,7 +6,7 @@
   import {
     isRecording, isPaused, activityLogs, healthStatus, currentPage,
     currentSessionId, sessionStartTime, lastSessionId as lastSessionIdStore,
-    liveUtterances, liveSummary, llmStatus, addAlert, dismissAlert, alerts,
+    liveUtterances, liveSummary, llmStatus, addAlert, dismissAlert, alerts, sourceWarnings, navigate,
   } from "../lib/store";
 
   let snap = $state<any>(null);
@@ -31,6 +31,42 @@
       currentPage.set("recording");
     } catch (e) {
       activityLogs.update(l => [...l.slice(-99), `[Auto] Start failed: ${e}`]);
+    }
+  }
+
+  // ── Audio source warnings ──────────────────────────────────────────────
+  // The backend checks each enabled source shortly after a recording starts
+  // (`gravai:source-warning`) and says when sound arrives later
+  // (`gravai:source-warning-cleared`). Alert ids are kept per source so the
+  // alert goes away by itself.
+  const sourceAlertIds = new Map<string, string[]>();
+
+  function dismissSourceAlerts(source?: string) {
+    for (const [key, ids] of [...sourceAlertIds]) {
+      if (source && key !== source) continue;
+      ids.forEach(dismissAlert);
+      sourceAlertIds.delete(key);
+    }
+    sourceWarnings.update(w => {
+      if (!source) return {};
+      const { [source]: _gone, ...rest } = w;
+      return rest;
+    });
+  }
+
+  function showSourceWarning(d: { source: string; kind: string; message: string }) {
+    const id = addAlert({
+      level: "warning",
+      message: d.message,
+      actions: [{ label: "Capture settings", handler: () => navigate("settings:capture") }],
+      dismissable: true,
+    });
+    // The app-not-running notice stays when sound arrives; silence alerts do not.
+    const key = d.kind === "app_not_running" ? `${d.source}:app` : d.source;
+    sourceAlertIds.set(key, [...(sourceAlertIds.get(key) ?? []), id]);
+    // The app-not-running notice is informational; the Record page hint is for silence.
+    if (d.kind !== "app_not_running") {
+      sourceWarnings.update(w => ({ ...w, [d.source]: { kind: d.kind, message: d.message } }));
     }
   }
 
@@ -122,6 +158,15 @@
         false,
         Number.isFinite(secs) && secs > 0 ? secs : MEETING_END_AUTO_STOP_SECS,
       );
+    }));
+    unlisteners.push(await listen("gravai:source-warning", (e: any) => {
+      if (e.payload?.source && e.payload?.message) showSourceWarning(e.payload);
+    }));
+    unlisteners.push(await listen("gravai:source-warning-cleared", (e: any) => {
+      if (e.payload?.source) dismissSourceAlerts(e.payload.source);
+    }));
+    unlisteners.push(await listen("gravai:session", (e: any) => {
+      if (e.payload?.state === "stopped") dismissSourceAlerts();
     }));
     // Catch a meeting that was already open when the window started listening.
     try { await invoke("sync_meeting_automations"); } catch (_) {}

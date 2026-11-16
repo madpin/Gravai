@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { invoke, listen, fmtTimer, fmtDuration } from "../lib/tauri";
+  import { invoke, listen, fmtTimer, fmtDuration, copyToClipboard } from "../lib/tauri";
   import { get } from "svelte/store";
-  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, bookmarkCount, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, navigate, finishedSessionId, pendingArchiveSessionId } from "../lib/store";
+  import { sourceWarnings, isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, bookmarkCount, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, navigate, finishedSessionId, pendingArchiveSessionId } from "../lib/store";
   import { config, loadConfig, setValue } from "../lib/config";
   import RunBar from "../components/RunBar.svelte";
   import TranscriptView from "../components/TranscriptView.svelte";
@@ -69,15 +69,16 @@
   // empty idle page until the user explicitly leaves it (New recording) or
   // starts a new one. Navigating to another page and back does not clear it.
   let finishedView = $derived(!!$finishedSessionId && !$isRecording && !starting);
-  // "Is sound coming in?" hint: true once a source has been enabled and
-  // silent for more than 10s while recording.
+  // "Is sound coming in?" hint: shown as soon as the startup source check
+  // flags a source, and later when an enabled source has been silent for
+  // more than 10s while recording.
   let noSoundMic = $derived.by(() => {
     void timer; // re-evaluate on the recording tick
-    return $isRecording && micEnabled && lastMicSoundAt != null && Date.now() - lastMicSoundAt > 10_000;
+    return $isRecording && micEnabled && (!!$sourceWarnings.microphone || (lastMicSoundAt != null && Date.now() - lastMicSoundAt > 10_000));
   });
   let noSoundSys = $derived.by(() => {
     void timer;
-    return $isRecording && sysEnabled && lastSysSoundAt != null && Date.now() - lastSysSoundAt > 10_000;
+    return $isRecording && sysEnabled && (!!$sourceWarnings.system_audio || (lastSysSoundAt != null && Date.now() - lastSysSoundAt > 10_000));
   });
   $effect(() => {
     if (!runConfig) return;
@@ -280,6 +281,24 @@
     dismissBookmarkNote();
   }
 
+  let copiedPath = $state(false);
+  let copyPathError = $state<string | null>(null);
+
+  async function copyMarkdownPath() {
+    const sid = get(finishedSessionId);
+    if (!sid) return;
+    copyPathError = null;
+    try {
+      const path: string = await invoke("get_session_markdown_path", { sessionId: sid });
+      await copyToClipboard(path);
+      copiedPath = true;
+      setTimeout(() => { copiedPath = false; }, 1500);
+    } catch (e) {
+      copyPathError = String(e);
+      setTimeout(() => { copyPathError = null; }, 3000);
+    }
+  }
+
   function openInArchive() {
     const sid = get(finishedSessionId);
     if (!sid) return;
@@ -433,8 +452,9 @@
       const d = e.payload;
       if (!d?.source) return;
       const pct = Math.max(0, Math.min(100, ((d.db + 60) / 60) * 100));
-      // A couple of percent of noise floor doesn't count as "sound coming in".
-      const hasSound = pct > 2;
+      // Same -50 dB threshold as the backend source check; noise floor doesn't
+      // count as "sound coming in".
+      const hasSound = d.db > -50;
       if (d.source === "microphone") { vuMic = pct; if (hasSound) lastMicSoundAt = Date.now(); }
       else { vuSys = pct; if (hasSound) lastSysSoundAt = Date.now(); }
     });
@@ -760,12 +780,12 @@
         <div class="vu-row-item">
           <Icon name="microphone" size={13}/>
           <div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div>
-          {#if noSoundMic}<span class="no-sound-hint">No sound from Mic</span>{/if}
+          {#if noSoundMic}<span class="no-sound-hint" title={$sourceWarnings.microphone?.message ?? ""}>No sound from Mic</span>{/if}
         </div>
         <div class="vu-row-item">
           <Icon name="monitor" size={13}/>
           <div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div>
-          {#if noSoundSys}<span class="no-sound-hint">No sound from System</span>{/if}
+          {#if noSoundSys}<span class="no-sound-hint" title={$sourceWarnings.system_audio?.message ?? ""}>No sound from System</span>{/if}
         </div>
       </div>
     {/if}
@@ -777,8 +797,12 @@
       <!-- Finished session: outcome, then the session's permanent home -->
       <div class="finished-actions">
         <button class="btn btn-sm btn-accent" onclick={openInArchive}><Icon name="archive" size={13}/> Open in Archive</button>
+        <button class="btn btn-sm btn-ghost" onclick={copyMarkdownPath} title="Copy the path of the transcript's Markdown file">
+          <Icon name={copiedPath ? "check" : "file"} size={13}/> {copiedPath ? "Copied path" : "Copy path"}
+        </button>
         <button class="btn btn-sm btn-ghost" onclick={newRecording}><Icon name="plus" size={13}/> New recording</button>
       </div>
+      {#if copyPathError}<p class="copy-path-error" role="alert">Copy path failed: {copyPathError}</p>{/if}
 
       <div class="card outcome-card">
         {#if finalizing}
@@ -1014,6 +1038,7 @@
   .finished-actions {
     display: flex; gap: 8px;
   }
+  .copy-path-error { font-size: 11px; color: var(--danger); margin: 0; }
   .outcome-card { padding: 0; }
   .outcome-card .empty-state { padding: 16px; }
   .link-more {

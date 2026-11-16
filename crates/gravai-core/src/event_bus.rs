@@ -31,6 +31,15 @@ pub enum GravaiEvent {
     /// Audio volume level update for a source
     VolumeLevel { source: String, db: f64 },
 
+    /// An audio source has a problem the user should know about, such as a
+    /// selected app that is not running. `kind` is one of
+    /// `gravai_config::source_check::kind`.
+    SourceWarning {
+        source: String,
+        kind: String,
+        message: String,
+    },
+
     /// Meeting app detected
     MeetingDetected {
         app_name: String,

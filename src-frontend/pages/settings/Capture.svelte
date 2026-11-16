@@ -64,6 +64,17 @@
     </Row>
   </Group>
 
+  <Group title="Source check">
+    <Row label="Warn when a source is silent" hint={c.audio.source_check_secs > 0 ? "Gravai warns you if a source delivers no sound shortly after recording starts." : "No warning when a source is silent."} next>
+      <Toggle label="Warn when a source is silent" checked={c.audio.source_check_secs > 0} onchange={(v) => setValue("audio.source_check_secs", v ? 8 : 0)} />
+    </Row>
+    {#if c.audio.source_check_secs > 0}
+      <Row label="Check for" hint="How long to wait for sound before warning." next>
+        <NumberInput value={c.audio.source_check_secs} min={3} max={60} unit="s" onsave={(v) => setValue("audio.source_check_secs", v)} />
+      </Row>
+    {/if}
+  </Group>
+
   <Group title="Audio files">
     <Row label="Save audio" hint={rec.enabled ? "Keep the recording so you can play it back." : "Only the transcript is kept. There is nothing to play back."} next>
       <Toggle label="Save audio" checked={rec.enabled} onchange={(v) => setValue("audio.recording.enabled", v)} />

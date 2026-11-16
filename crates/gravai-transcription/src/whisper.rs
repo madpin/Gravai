@@ -249,9 +249,9 @@ mod tests {
             .collect();
 
         let normalized = normalize_text("  Thanks for watching!  ");
-        assert!(blocklist.iter().any(|h| normalized == *h));
+        assert!(blocklist.contains(&normalized));
 
         let normalized = normalize_text("Hello world");
-        assert!(!blocklist.iter().any(|h| normalized == *h));
+        assert!(!blocklist.contains(&normalized));
     }
 }

@@ -52,6 +52,7 @@ pub struct SystemAudioCapture {
     app_bundle_id: Option<String>,
     callback: Option<AudioCallback>,
     stream: Option<screencapturekit::stream::SCStream>,
+    target_app_missing: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -68,7 +69,14 @@ impl SystemAudioCapture {
             app_bundle_id,
             callback: Some(Box::new(callback)),
             stream: None,
+            target_app_missing: false,
         }
+    }
+
+    /// True after `start` when a bundle ID was selected but that app was not
+    /// running, so all system audio is captured instead.
+    pub fn target_app_missing(&self) -> bool {
+        self.target_app_missing
     }
 
     pub fn start(&mut self) -> Result<(), String> {
@@ -110,6 +118,7 @@ impl SystemAudioCapture {
                 tracing::warn!(
                     "App '{bundle_id}' not found in running apps — capturing all system audio"
                 );
+                self.target_app_missing = true;
                 SCContentFilter::create()
                     .with_display(display)
                     .with_excluding_windows(&[])

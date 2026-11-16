@@ -75,6 +75,10 @@ export function dismissAlertsByLevel(level: string) {
   alerts.update((a) => a.filter((x) => x.level !== level));
 }
 
+// Audio source problems found by the startup health check, keyed by source
+// ("microphone" | "system_audio"). Cleared when sound arrives or recording stops.
+export const sourceWarnings = writable<Record<string, { kind: string; message: string }>>({});
+
 export function clearAlerts() {
   alerts.set([]);
 }

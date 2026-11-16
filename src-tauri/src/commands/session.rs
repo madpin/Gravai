@@ -373,6 +373,9 @@ async fn start_capture(
 
     let capture_config = config.clone();
     let bus = state.event_bus.clone();
+    // Set by the capture thread when the selected app was not running.
+    let missing_app: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let missing_app_for_thread = missing_app.clone();
 
     // Shared flag to signal the capture thread to stop and release resources
     let capture_stop = Arc::new(AtomicBool::new(false));
@@ -416,6 +419,7 @@ async fn start_capture(
             return;
         }
 
+        *missing_app_for_thread.lock().unwrap() = capture.sys_target_missing.clone();
         let _ = mic_hq_tx.send(capture.mic_hq_rx.take());
         let _ = sys_hq_tx.send(capture.sys_hq_rx.take());
         let _ = mic_lq_tx_ch.send(capture.mic_lq_rx.take());
@@ -843,12 +847,7 @@ async fn start_capture(
                     break;
                 }
 
-                let export_dir = save_config
-                    .transcript_folder
-                    .as_ref()
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| gravai_config::data_dir().join("exports"));
-                let _ = std::fs::create_dir_all(&export_dir);
+                let _ = std::fs::create_dir_all(save_config.transcript_dir());
 
                 if let Ok(db) = shared_db() {
                     if let Ok(utterances) = db.get_utterances(&save_sid) {
@@ -883,7 +882,7 @@ async fn start_capture(
                                 &data,
                                 &gravai_export::ExportOptions::default(),
                             );
-                            let path = export_dir.join(format!("{save_sid}.md"));
+                            let path = save_config.markdown_path(&save_sid);
                             let _ = std::fs::write(&path, &md);
                         }
                     }
@@ -903,6 +902,18 @@ async fn start_capture(
         state: "recording".into(),
         session_id: Some(session_id.clone()),
     });
+
+    // After the state event, which starts a fresh source check. Tell the user
+    // now that all system audio is captured instead of the app they picked.
+    let missing_bundle_id = missing_app.lock().unwrap().take();
+    if let Some(bundle_id) = missing_bundle_id.filter(|_| config.audio.source_check_secs > 0) {
+        let warning = gravai_config::source_check::app_not_running_warning(&bundle_id);
+        state.event_bus.publish(GravaiEvent::SourceWarning {
+            source: warning.source.into(),
+            kind: warning.kind.into(),
+            message: warning.message,
+        });
+    }
 
     // If a meeting app was open at start, watch for it to close. When an
     // end-of-meeting automation will stop the recording, that countdown is
@@ -1210,12 +1221,7 @@ fn export_session_markdown(session_id: &str) -> Result<std::path::PathBuf, Strin
         return Err("no transcript yet".into());
     }
     let config = gravai_config::load_config();
-    let export_dir = config
-        .export
-        .transcript_folder
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| gravai_config::data_dir().join("exports"));
-    std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(config.export.transcript_dir()).map_err(|e| e.to_string())?;
     let bookmarks = db.list_bookmarks(session_id).unwrap_or_default();
     let session = db.get_session(session_id).ok().flatten();
     let data = gravai_export::ExportData {
@@ -1245,9 +1251,18 @@ fn export_session_markdown(session_id: &str) -> Result<std::path::PathBuf, Strin
     };
     let markdown =
         gravai_export::markdown::export_markdown(&data, &gravai_export::ExportOptions::default());
-    let path = export_dir.join(format!("{session_id}.md"));
+    let path = config.export.markdown_path(session_id);
     std::fs::write(&path, markdown).map_err(|e| e.to_string())?;
     Ok(path)
+}
+
+/// Absolute path of a session's Markdown transcript. The file is rewritten
+/// from the saved transcript first, so the path is valid and current even
+/// when the real-time save has not caught up with the last utterances.
+#[tauri::command]
+pub async fn get_session_markdown_path(session_id: String) -> Result<String, String> {
+    let path = export_session_markdown(&session_id)?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Rename a session — updates the `title` column in the sessions table.

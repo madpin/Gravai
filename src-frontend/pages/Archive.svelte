@@ -15,6 +15,7 @@
   let summaryLoading = $state(false);
   let summaryError = $state<string | null>(null);
   let copiedMd = $state(false);
+  let copiedPath = $state(false);
   let searchQuery = $state("");
   let searchMode = $state<"keyword" | "semantic" | "hybrid">("keyword");
   let searchResults = $state<any[] | null>(null);
@@ -234,6 +235,19 @@
       setTimeout(() => { copiedMd = false; }, 1500);
     } catch (e) {
       exportMsg = `Copy failed: ${e}`;
+      setTimeout(() => exportMsg = "", 3000);
+    }
+  }
+
+  async function copyMarkdownPath() {
+    if (!selectedId) return;
+    try {
+      const path: string = await invoke("get_session_markdown_path", { sessionId: selectedId });
+      await copyToClipboard(path);
+      copiedPath = true;
+      setTimeout(() => { copiedPath = false; }, 1500);
+    } catch (e) {
+      exportMsg = `Copy path failed: ${e}`;
       setTimeout(() => exportMsg = "", 3000);
     }
   }
@@ -481,6 +495,9 @@
         </button>
         <button class="btn btn-xs btn-ghost" onclick={copyMarkdown} title="Copy transcript as Markdown to clipboard">
           <Icon name={copiedMd ? "check" : "clipboard"} size={13}/> {copiedMd ? "Copied" : "Copy Markdown"}
+        </button>
+        <button class="btn btn-xs btn-ghost" onclick={copyMarkdownPath} title="Copy the path of the transcript's Markdown file to clipboard">
+          <Icon name={copiedPath ? "check" : "file"} size={13}/> {copiedPath ? "Copied path" : "Copy path"}
         </button>
         <button class="btn btn-xs btn-ghost" onclick={exportMd} title="Download transcript as Markdown file">
           <Icon name="file" size={13}/> Markdown

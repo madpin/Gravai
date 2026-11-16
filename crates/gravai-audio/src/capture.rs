@@ -152,6 +152,9 @@ pub struct AudioCaptureManager {
     pub mic_channels: Option<u16>,
     pub sys_sample_rate: Option<u32>,
     pub sys_channels: Option<u16>,
+    /// Bundle ID of the selected app when it was not running at start, so
+    /// all system audio is captured instead.
+    pub sys_target_missing: Option<String>,
 }
 
 impl AudioCaptureManager {
@@ -178,6 +181,7 @@ impl AudioCaptureManager {
             mic_channels: None,
             sys_sample_rate: None,
             sys_channels: None,
+            sys_target_missing: None,
         }
     }
 
@@ -494,6 +498,9 @@ impl AudioCaptureManager {
         let mut capture =
             SystemAudioCapture::new(sck_sample_rate, sck_channels, app_bundle_id, callback);
         capture.start().map_err(|e| format!("SCK start: {e}"))?;
+        self.sys_target_missing = capture
+            .target_app_missing()
+            .then(|| self.config.audio.system_audio.app_bundle_id.clone());
 
         self._sys_capture = Some(Box::new(capture));
         info!("System audio capture started via ScreenCaptureKit");

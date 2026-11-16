@@ -9,6 +9,7 @@ pub mod automations;
 pub(crate) mod legacy;
 pub mod setups;
 pub mod shortcuts;
+pub mod source_check;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -129,11 +130,24 @@ impl Default for RecordingConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-#[derive(Default)]
 pub struct AudioConfig {
     pub microphone: MicrophoneConfig,
     pub system_audio: SystemAudioConfig,
     pub recording: RecordingConfig,
+    /// Seconds after a recording starts to wait for audible audio from each
+    /// enabled source before warning the user. 0 disables the check.
+    pub source_check_secs: u32,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            microphone: MicrophoneConfig::default(),
+            system_audio: SystemAudioConfig::default(),
+            recording: RecordingConfig::default(),
+            source_check_secs: 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -457,6 +471,24 @@ impl Default for ExportConfig {
             transcript_format: "markdown".into(),
             realtime_save: true,
         }
+    }
+}
+
+impl ExportConfig {
+    /// Folder transcripts are written to.
+    pub fn transcript_dir(&self) -> PathBuf {
+        let dir = self
+            .transcript_folder
+            .as_deref()
+            .filter(|folder| !folder.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| data_dir().join("exports"));
+        std::path::absolute(&dir).unwrap_or(dir)
+    }
+
+    /// Absolute path of a session's Markdown transcript.
+    pub fn markdown_path(&self, session_id: &str) -> PathBuf {
+        self.transcript_dir().join(format!("{session_id}.md"))
     }
 }
 
@@ -861,6 +893,39 @@ mod tests {
         });
         let preset: legacy::presets::CapturePreset = serde_json::from_value(json).unwrap();
         assert!((preset.mic_gain - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn source_check_defaults_to_eight_seconds() {
+        assert_eq!(AudioConfig::default().source_check_secs, 8);
+        // Configs saved before the setting existed keep the default.
+        let config: AppConfig =
+            serde_json::from_value(serde_json::json!({ "audio": { "microphone": {} } })).unwrap();
+        assert_eq!(config.audio.source_check_secs, 8);
+        let off: AppConfig =
+            serde_json::from_value(serde_json::json!({ "audio": { "source_check_secs": 0 } }))
+                .unwrap();
+        assert_eq!(off.audio.source_check_secs, 0);
+    }
+
+    #[test]
+    fn markdown_path_uses_transcript_folder_or_default() {
+        let mut export = ExportConfig::default();
+        assert_eq!(
+            export.markdown_path("s1"),
+            data_dir().join("exports").join("s1.md")
+        );
+        export.transcript_folder = Some("/tmp/notes".into());
+        assert_eq!(
+            export.markdown_path("s1"),
+            PathBuf::from("/tmp/notes/s1.md")
+        );
+        // A blank folder means the default; a relative one is made absolute.
+        export.transcript_folder = Some("  ".into());
+        assert_eq!(export.transcript_dir(), data_dir().join("exports"));
+        export.transcript_folder = Some("notes".into());
+        assert!(export.markdown_path("s1").is_absolute());
+        assert!(export.markdown_path("s1").ends_with("notes/s1.md"));
     }
 
     #[test]

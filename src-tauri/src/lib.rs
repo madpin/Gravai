@@ -182,6 +182,31 @@ pub(crate) fn fire_automations(
     }
 }
 
+/// Native notification for an audio source problem.
+fn notify_source_warning(handle: &tauri::AppHandle, message: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = handle
+            .notification()
+            .builder()
+            .title("Gravai — Audio source problem")
+            .body(message)
+            .show();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (handle, message);
+}
+
+fn emit_source_cleared(handle: &tauri::AppHandle, sources: &[&str]) {
+    for source in sources {
+        let _ = handle.emit(
+            "gravai:source-warning-cleared",
+            serde_json::json!({ "source": source }),
+        );
+    }
+}
+
 /// Holds dynamic tray menu item references so the event bridge can update them.
 struct TrayItems {
     start: tauri::menu::MenuItem<tauri::Wry>,
@@ -602,8 +627,53 @@ pub fn run() {
                 }
             });
 
-            // Main event bridge loop
+            // ── Source health check ─────────────────────────────────────
+            //
+            // The decision logic lives in `gravai_config::source_check`. The
+            // bridge below feeds it volume levels; this task advances it once
+            // per second of recording and shows what it reports, using the
+            // audio settings the running session started with.
+            let source_health = Arc::new(std::sync::Mutex::new(
+                gravai_config::source_check::SourceHealth::default(),
+            ));
+            let is_recording_health = is_recording.clone();
+            let source_health_for_task = source_health.clone();
+            let handle_for_health = handle.clone();
             tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+                loop {
+                    interval.tick().await;
+                    if !is_recording_health.load(Ordering::Relaxed) {
+                        // Between recordings, or paused: the window does not run.
+                        // The bridge resets the check when a recording ends.
+                        continue;
+                    }
+                    let Some(state) = handle_for_health.try_state::<Arc<AppState>>() else {
+                        continue;
+                    };
+                    let Some(audio) = state
+                        .session
+                        .read()
+                        .await
+                        .as_ref()
+                        .map(|session| session.config.audio.clone())
+                    else {
+                        continue;
+                    };
+                    let update = source_health_for_task.lock().unwrap().tick(&audio);
+                    for warning in &update.raised {
+                        let _ = handle_for_health.emit("gravai:source-warning", warning);
+                        notify_source_warning(&handle_for_health, &warning.message);
+                    }
+                    emit_source_cleared(&handle_for_health, &update.cleared);
+                }
+            });
+
+            // Main event bridge loop
+            let handle_for_reset = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                // Session the source check is running for.
+                let mut checked_session: Option<String> = None;
                 loop {
                     match rx.recv().await {
                         Ok(event) => {
@@ -615,7 +685,11 @@ pub fn run() {
                                     // and especially below pure digital silence
                                     // (-91 dB) which is what SCK delivers when
                                     // the captured app stops playing.
-                                    if *db > -50.0 {
+                                    source_health
+                                        .lock()
+                                        .unwrap()
+                                        .record_level(source, *db);
+                                    if *db > gravai_config::source_check::AUDIBLE_DB {
                                         let now = std::time::Instant::now();
                                         // Per-source silence reset
                                         let mut map = per_source.lock().unwrap();
@@ -662,6 +736,21 @@ pub fn run() {
                                             });
                                         }
                                     }
+                                    // A new recording gets a fresh source check; resuming
+                                    // from pause or a re-sent "recording" event does not.
+                                    match state.as_str() {
+                                        "recording" if checked_session != *session_id => {
+                                            checked_session = session_id.clone();
+                                            let cleared = source_health.lock().unwrap().reset();
+                                            emit_source_cleared(&handle_for_reset, &cleared);
+                                        }
+                                        "stopped" => {
+                                            checked_session = None;
+                                            let cleared = source_health.lock().unwrap().reset();
+                                            emit_source_cleared(&handle_for_reset, &cleared);
+                                        }
+                                        _ => {}
+                                    }
                                     if recording {
                                         // Reset all silence trackers at session
                                         // start so previous-session state never
@@ -685,6 +774,16 @@ pub fn run() {
                                     (
                                         "gravai:session",
                                         serde_json::json!({ "state": state, "session_id": session_id }),
+                                    )
+                                }
+                                GravaiEvent::SourceWarning { source, kind, message } => {
+                                    if kind == gravai_config::source_check::kind::APP_NOT_RUNNING {
+                                        source_health.lock().unwrap().set_target_app_missing();
+                                    }
+                                    notify_source_warning(&handle, message);
+                                    (
+                                        "gravai:source-warning",
+                                        serde_json::json!({ "source": source, "kind": kind, "message": message }),
                                     )
                                 }
                                 GravaiEvent::MeetingDetected { app_name, window_title } => {
@@ -796,6 +895,7 @@ pub fn run() {
             commands::list_running_apps,
             commands::list_capturable_apps,
             commands::get_session_audio_path,
+            commands::get_session_markdown_path,
             commands::rebuild_session_audio,
             commands::start_session,
             commands::continue_session,
