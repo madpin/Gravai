@@ -2848,7 +2848,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-app"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2880,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-audio"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "chrono",
  "cpal",
@@ -2904,7 +2904,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-config"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -2917,7 +2917,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-core"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "chrono",
  "cpal",
@@ -2937,7 +2937,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-export"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "chrono",
  "gravai-core",
@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-intelligence"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2973,7 +2973,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-meeting"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "block2",
  "chrono",
@@ -2990,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-models"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "dirs 6.0.0",
  "futures-util",
@@ -3006,7 +3006,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-storage"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -3020,7 +3020,7 @@ dependencies = [
 
 [[package]]
 name = "gravai-transcription"
-version = "1.0.44"
+version = "1.0.45"
 dependencies = [
  "gravai-config",
  "gravai-core",
