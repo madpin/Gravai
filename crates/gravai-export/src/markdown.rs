@@ -12,7 +12,7 @@ pub fn export_markdown(data: &ExportData, options: &ExportOptions) -> String {
         "title: \"{}\"\n",
         data.title.as_deref().unwrap_or(&data.session_id)
     ));
-    md.push_str(&format!("date: {}\n", &data.started_at));
+    md.push_str(&format!("date: {}\n", data.started_at));
     if let Some(ref app) = data.meeting_app {
         md.push_str(&format!("meeting_app: {app}\n"));
     }
@@ -27,7 +27,7 @@ pub fn export_markdown(data: &ExportData, options: &ExportOptions) -> String {
         "# {}\n\n",
         data.title.as_deref().unwrap_or("Meeting Transcript")
     ));
-    md.push_str(&format!("**Date:** {}\n\n", &data.started_at));
+    md.push_str(&format!("**Date:** {}\n\n", data.started_at));
 
     // Summary
     if options.include_summary {
