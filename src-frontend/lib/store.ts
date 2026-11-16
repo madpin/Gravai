@@ -35,6 +35,12 @@ export const activityLogs = writable<string[]>([]);
 export const liveSummary = writable<any>(null);
 export const bookmarkCount = writable(0);
 
+// The session Record currently shows as a "finished object" after Stop —
+// set in stop(), cleared by "New recording" and when a new recording starts.
+// Navigating to another page and back does NOT clear it (Recording.svelte
+// unmounts/remounts but this store, like the others above, survives).
+export const finishedSessionId = writable<string | null>(null);
+
 // Meeting banner dismiss state (persists across tab switches)
 export const dismissedMeetingApps = writable<Set<string>>(new Set());
 

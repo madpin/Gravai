@@ -59,3 +59,15 @@ pub async fn delete_bookmark(bookmark_id: i64) -> Result<bool, String> {
     let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
     db.delete_bookmark(bookmark_id).map_err(|e| e.to_string())
 }
+
+/// Update a bookmark's note (the one-line "moment" annotation). Trims
+/// whitespace; an empty note clears it back to NULL. Used both by the
+/// "Add a note…" inline prompt right after a bookmark is created, and by
+/// the inline edit in Archive's bookmark list.
+#[tauri::command]
+pub async fn update_bookmark_note(bookmark_id: i64, note: Option<String>) -> Result<bool, String> {
+    let db_path = gravai_config::data_dir().join("gravai.db");
+    let db = gravai_storage::Database::open(&db_path).map_err(|e| e.to_string())?;
+    db.update_bookmark_note(bookmark_id, note.as_deref())
+        .map_err(|e| e.to_string())
+}

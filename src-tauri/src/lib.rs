@@ -796,6 +796,7 @@ pub fn run() {
             commands::list_running_apps,
             commands::list_capturable_apps,
             commands::get_session_audio_path,
+            commands::rebuild_session_audio,
             commands::start_session,
             commands::continue_session,
             commands::pause_session,
@@ -890,6 +891,7 @@ pub fn run() {
             commands::add_bookmark,
             commands::list_bookmarks,
             commands::delete_bookmark,
+            commands::update_bookmark_note,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Gravai")

@@ -12,6 +12,7 @@
   import TextInput from "../../components/settings/TextInput.svelte";
   import Segmented from "../../components/settings/Segmented.svelte";
   import ModelPicker from "../../components/settings/ModelPicker.svelte";
+  import Toggle from "../../components/settings/Toggle.svelte";
 
   let c = $derived($config);
   let customUrl = $state("");
@@ -81,6 +82,10 @@
         <TextInput type="password" value={c.llm.api_key ?? ""} placeholder="sk-…" width="200px" onsave={(v) => patchConfig({ llm: { api_key: v || null } })} />
       </Row>
     {/if}
+
+    <Row label="Summarize on stop" hint="Generate the meeting brief automatically as soon as a recording ends, instead of waiting for you to ask.">
+      <Toggle label="Summarize on stop" checked={c.features.auto_summary_on_stop} onchange={(v) => setValue("features.auto_summary_on_stop", v)} />
+    </Row>
 
     <More>
       <Row label="Longest answer" hint="Upper limit on what the model writes in one go.">

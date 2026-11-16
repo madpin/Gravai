@@ -3,8 +3,10 @@
 //! Writes each audio source to its own 16- or 24-bit integer-PCM WAV file.
 
 use hound::{SampleFormat, WavSpec, WavWriter};
+use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use tracing::{info, warn};
 
 use crate::capture::AudioChunk;
@@ -172,6 +174,14 @@ pub struct MultiTrackRecorder {
     bits: u16,
     tracks: Vec<(String, TrackWriter)>,
     master: Option<TrackWriter>,
+    /// Wall-clock reference for this recording leg (this session dir, or one
+    /// continuation leg). Used to measure how late each track's first chunk
+    /// arrived — e.g. ScreenCaptureKit setup commonly lags cpal's mic stream
+    /// by a few hundred ms. Written to `track_offsets.json` on finalize so
+    /// the encoder can pad that track with leading silence when mixing,
+    /// keeping every track aligned to this recording's time zero.
+    start: Instant,
+    track_offsets_ms: HashMap<String, u64>,
 }
 
 impl MultiTrackRecorder {
@@ -183,6 +193,8 @@ impl MultiTrackRecorder {
             bits: if bits == 24 { 24 } else { 16 },
             tracks: Vec::new(),
             master: None,
+            start: Instant::now(),
+            track_offsets_ms: HashMap::new(),
         })
     }
 
@@ -202,8 +214,18 @@ impl MultiTrackRecorder {
         Ok(())
     }
 
+    /// Note the first time a track receives audio, relative to this
+    /// recorder's start. Only the first call per name has any effect.
+    fn note_first_write(&mut self, name: &str) {
+        if !self.track_offsets_ms.contains_key(name) {
+            let elapsed_ms = self.start.elapsed().as_millis() as u64;
+            self.track_offsets_ms.insert(name.to_string(), elapsed_ms);
+        }
+    }
+
     /// Write a chunk to the named track.
     pub fn write_track(&mut self, name: &str, chunk: &AudioChunk) -> Result<(), String> {
+        self.note_first_write(name);
         if let Some((_, writer)) = self.tracks.iter_mut().find(|(n, _)| n == name) {
             writer.write(chunk)?;
         }
@@ -212,6 +234,7 @@ impl MultiTrackRecorder {
 
     /// Write a chunk to the master mix track.
     pub fn write_master(&mut self, chunk: &AudioChunk) -> Result<(), String> {
+        self.note_first_write("master");
         if let Some(ref mut master) = self.master {
             master.write(chunk)?;
         }
@@ -227,6 +250,8 @@ impl MultiTrackRecorder {
 
     /// Finalize all tracks and the master.
     pub fn finalize(self) -> Vec<PathBuf> {
+        let session_dir = self.session_dir.clone();
+        let offsets = self.track_offsets_ms;
         let mut paths = Vec::new();
         for (name, writer) in self.tracks {
             match writer.finalize() {
@@ -238,6 +263,19 @@ impl MultiTrackRecorder {
             match master.finalize() {
                 Ok(p) => paths.push(p),
                 Err(e) => warn!("Finalize master: {e}"),
+            }
+        }
+        // Record how late (ms) each track's first chunk arrived relative to
+        // this leg's start, so the mixer can pad it with leading silence
+        // instead of assuming every track began at the same instant.
+        if !offsets.is_empty() {
+            match serde_json::to_string(&offsets) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(session_dir.join("track_offsets.json"), json) {
+                        warn!("Could not write track_offsets.json: {e}");
+                    }
+                }
+                Err(e) => warn!("Could not serialize track offsets: {e}"),
             }
         }
         paths
@@ -290,6 +328,32 @@ mod tests {
         let part = dir.join("test.part0002.wav");
         assert_eq!(hound::WavReader::open(&path).unwrap().duration(), 1000);
         assert_eq!(hound::WavReader::open(&part).unwrap().duration(), 1000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn multi_track_recorder_persists_track_start_offsets() {
+        let dir = std::env::temp_dir().join("gravai_test_recorder_offsets");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut rec = MultiTrackRecorder::new(&dir, 16).unwrap();
+        rec.add_track("mic").unwrap();
+        rec.add_track("system").unwrap();
+
+        rec.write_track("mic", &chunk(100)).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        rec.write_track("system", &chunk(100)).unwrap();
+        // A later chunk on an already-started track must not move its offset.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        rec.write_track("mic", &chunk(100)).unwrap();
+
+        rec.finalize();
+
+        let json = std::fs::read_to_string(dir.join("track_offsets.json")).unwrap();
+        let offsets: HashMap<String, u64> = serde_json::from_str(&json).unwrap();
+        assert!(offsets.contains_key("mic"));
+        assert!(offsets.contains_key("system"));
+        // "system" started measurably after "mic" (the 50ms sleep).
+        assert!(offsets["system"] >= offsets["mic"] + 40);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

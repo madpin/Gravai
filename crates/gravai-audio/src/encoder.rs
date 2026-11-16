@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::info;
 
 /// Supported export formats.
@@ -256,11 +256,27 @@ struct TrackGroup {
     sample_rate: u32,
     channels: u16,
     frames: u64,
+    /// How far into the recording (ms) this track's first sample actually
+    /// falls, per `track_offsets.json` (written by `MultiTrackRecorder`).
+    /// Zero for tracks with no recorded offset (older sessions, or tracks
+    /// that started immediately) — the mixer treats that as "no padding".
+    start_offset_ms: u64,
+}
+
+/// Read `track_offsets.json` (if present) next to the session's raw WAVs.
+/// Missing/unreadable is not an error — it just means no track needs
+/// leading-silence padding (older recordings, or a session predating this).
+fn read_track_offsets(session_dir: &Path) -> BTreeMap<String, u64> {
+    std::fs::read_to_string(session_dir.join("track_offsets.json"))
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
 }
 
 fn source_track_groups(session_dir: &Path) -> Result<Vec<TrackGroup>, String> {
     let mut grouped: BTreeMap<String, Vec<(u32, PathBuf)>> = BTreeMap::new();
     let mut master = Vec::new();
+    let offsets = read_track_offsets(session_dir);
 
     for entry in std::fs::read_dir(session_dir).map_err(|e| format!("Read dir: {e}"))? {
         let path = entry.map_err(|e| format!("Read dir entry: {e}"))?.path();
@@ -307,7 +323,7 @@ fn source_track_groups(session_dir: &Path) -> Result<Vec<TrackGroup>, String> {
     }
 
     let mut groups = Vec::with_capacity(grouped.len());
-    for (_, mut parts) in grouped {
+    for (track_name, mut parts) in grouped {
         parts.sort_by_key(|(part, _)| *part);
         let mut sample_rate = 0;
         let mut channels = 0;
@@ -333,6 +349,7 @@ fn source_track_groups(session_dir: &Path) -> Result<Vec<TrackGroup>, String> {
                 sample_rate,
                 channels,
                 frames,
+                start_offset_ms: offsets.get(&track_name).copied().unwrap_or(0),
             });
         }
     }
@@ -407,8 +424,15 @@ impl TrackStream {
         output_rate: u32,
         output_channel: usize,
     ) -> Result<f32, String> {
-        let target =
-            ((output_frame as u128 * self.group.sample_rate as u128) / output_rate as u128) as u64;
+        // Before this track's own recorded start offset, it's silence —
+        // this is what keeps every track aligned to session time zero
+        // instead of all tracks assumed to start at the same instant.
+        let output_time_ms = (output_frame as u128 * 1000) / output_rate as u128;
+        if output_time_ms < self.group.start_offset_ms as u128 {
+            return Ok(0.0);
+        }
+        let local_time_ms = output_time_ms - self.group.start_offset_ms as u128;
+        let target = ((local_time_ms * self.group.sample_rate as u128) / 1000) as u64;
         while self.current_index.is_none_or(|index| index < target) {
             if !self.read_frame()? {
                 return Ok(0.0);
@@ -426,7 +450,9 @@ impl TrackStream {
 fn mix_plan(groups: &[TrackGroup]) -> Result<(u32, u16, u64), String> {
     let max_seconds = groups
         .iter()
-        .map(|track| track.frames as f64 / track.sample_rate as f64)
+        .map(|track| {
+            track.start_offset_ms as f64 / 1000.0 + track.frames as f64 / track.sample_rate as f64
+        })
         .fold(0.0f64, f64::max);
     let max_rate = groups
         .iter()
@@ -520,7 +546,19 @@ pub fn merge_and_export(
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy();
-    let mixed_wav = session_dir.join(format!("_mixed_{output_stem}.wav"));
+    // Unique per call (pid + nanos), not just per output name: two concurrent
+    // requests for the *same* output (double-click, Archive open racing an
+    // export) must never write the same temp file. `session_lock` below is
+    // the primary guard; this is defense in depth against a leftover temp
+    // file from a crashed previous run too.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mixed_wav = session_dir.join(format!(
+        "_mixed_{output_stem}_{}_{nonce}.wav",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&mixed_wav);
     info!(
         "Streaming {} track(s) from {}",
@@ -534,6 +572,67 @@ pub fn merge_and_export(
 }
 
 static COMPACTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+static SESSION_LOCKS: OnceLock<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>> =
+    OnceLock::new();
+
+/// A lock scoped to one session directory, so concurrent playback/export
+/// requests for the *same* session (double-click, Archive open racing an
+/// export) serialize instead of racing on the same cache/temp files.
+/// Different sessions proceed independently. Caller holds the returned
+/// `Arc<Mutex<()>>`'s guard for the full duration of its read-or-rebuild
+/// decision, not just the final write.
+pub fn session_lock(session_dir: &Path) -> Arc<Mutex<()>> {
+    let key = session_dir.to_string_lossy().to_string();
+    let mut map = SESSION_LOCKS
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+/// True when `path` is a decodable audio file with real content that is not
+/// older than the session's current raw source tracks. A cached
+/// `playback.m4a`/`playback.wav`/`master.wav` built from a partial/truncated
+/// recording (crash, recovery, a session that was later continued) must
+/// not be served forever just because the file exists and isn't tiny.
+pub fn is_fresh_cache(path: &Path, session_dir: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(cached_mtime) = meta.modified() else {
+        return false;
+    };
+    if let Ok(groups) = source_track_groups(session_dir) {
+        for group in &groups {
+            for source in &group.paths {
+                if let Ok(source_mtime) = std::fs::metadata(source).and_then(|m| m.modified()) {
+                    if source_mtime > cached_mtime {
+                        return false; // A source track is newer — rebuild.
+                    }
+                }
+            }
+        }
+    }
+    has_audible_duration(path)
+}
+
+/// A valid header is not enough — an interrupted encode can leave a
+/// zero-sample file that parses fine but plays nothing.
+fn has_audible_duration(path: &Path) -> bool {
+    let is_wav = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"));
+    if is_wav {
+        hound::WavReader::open(path)
+            .map(|r| r.duration() > 0)
+            .unwrap_or(false)
+    } else {
+        audio_duration(path).map(|d| d > 0.01).unwrap_or(false)
+    }
+}
 
 #[cfg(target_os = "macos")]
 fn audio_duration(path: &Path) -> Result<f64, String> {
@@ -711,6 +810,10 @@ mod tests {
     }
 
     fn write_test_wav(path: &Path, sample_rate: u32, channels: u16, frames: u32) {
+        write_tone_wav(path, sample_rate, channels, frames, 1000);
+    }
+
+    fn write_tone_wav(path: &Path, sample_rate: u32, channels: u16, frames: u32, value: i16) {
         let spec = hound::WavSpec {
             channels,
             sample_rate,
@@ -719,7 +822,7 @@ mod tests {
         };
         let mut writer = hound::WavWriter::create(path, spec).unwrap();
         for _ in 0..frames * u32::from(channels) {
-            writer.write_sample(1000i16).unwrap();
+            writer.write_sample(value).unwrap();
         }
         writer.finalize().unwrap();
     }
@@ -750,6 +853,100 @@ mod tests {
         assert_eq!(reader.spec().channels, 2);
         assert_eq!(reader.duration(), 9600);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn streaming_mix_pads_late_starting_track_with_leading_silence() {
+        let dir = test_dir("offset_mix");
+        std::fs::create_dir_all(&dir).unwrap();
+        // mic runs the full 2.0s from session time zero.
+        write_tone_wav(&dir.join("mic.wav"), 16_000, 1, 32_000, 1000);
+        // system's file holds 0.5s of audio, but per track_offsets.json it
+        // didn't start recording until 1.0s into the session (e.g. SCK setup
+        // lag) — it must be padded with 1.0s of leading silence, not played
+        // back from session time zero.
+        write_tone_wav(&dir.join("system.wav"), 16_000, 1, 8_000, 2000);
+        std::fs::write(dir.join("track_offsets.json"), r#"{"mic":0,"system":1000}"#).unwrap();
+
+        let groups = source_track_groups(&dir).unwrap();
+        let output = dir.join("mixed.wav");
+        streaming_mix(&groups, &output).unwrap();
+
+        let reader = hound::WavReader::open(&output).unwrap();
+        assert_eq!(reader.spec().sample_rate, 16_000);
+        // Longest *aligned* span wins: mic's 2.0s from t=0, not
+        // system's 1.0s-to-1.5s window.
+        assert_eq!(reader.duration(), 32_000);
+
+        let samples: Vec<i16> = reader.into_samples::<i16>().map(Result::unwrap).collect();
+        // Before system's recorded start (t=0.5s): mic only.
+        assert!((500..1_200).contains(&samples[8_000].unsigned_abs()));
+        // During the overlap (t=1.2s, inside system's 1.0-1.5s window): both.
+        assert!(samples[19_200].unsigned_abs() > 2_200);
+        // After system's audio ends (t=1.8s): mic only again.
+        assert!((500..1_200).contains(&samples[28_800].unsigned_abs()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn streaming_mix_duration_is_at_least_longest_track() {
+        let dir = test_dir("longest_duration");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_test_wav(&dir.join("mic.wav"), 16_000, 1, 1_600); // 0.1s
+        write_test_wav(&dir.join("system.wav"), 16_000, 1, 32_000); // 2.0s
+        let groups = source_track_groups(&dir).unwrap();
+        let output = dir.join("mixed.wav");
+        streaming_mix(&groups, &output).unwrap();
+        let reader = hound::WavReader::open(&output).unwrap();
+        assert!(reader.duration() >= 32_000);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn is_fresh_cache_rejects_cache_older_than_a_changed_source() {
+        let dir = test_dir("stale_cache");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mic = dir.join("mic.wav");
+        write_test_wav(&mic, 16_000, 1, 1600);
+        let master = dir.join("master.wav");
+        write_test_wav(&master, 16_000, 1, 1600);
+        assert!(
+            is_fresh_cache(&master, &dir),
+            "a cache built from the current sources should be usable"
+        );
+
+        // Simulate a crash/recovery or a continued recording rewriting the
+        // source track after the cache was built.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        write_test_wav(&mic, 16_000, 1, 3200);
+        assert!(
+            !is_fresh_cache(&master, &dir),
+            "a cache older than a changed source must never be served forever"
+        );
+
+        // Rebuilding makes it fresh again.
+        write_test_wav(&master, 16_000, 1, 3200);
+        assert!(is_fresh_cache(&master, &dir));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn is_fresh_cache_rejects_zero_sample_file() {
+        let dir = test_dir("empty_cache");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_test_wav(&dir.join("mic.wav"), 16_000, 1, 1600);
+        // A truncated/failed previous encode: valid header, zero samples.
+        write_test_wav(&dir.join("master.wav"), 16_000, 1, 0);
+        assert!(!is_fresh_cache(&dir.join("master.wav"), &dir));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn session_lock_is_shared_per_directory_only() {
+        let a = PathBuf::from("/tmp/gravai-lock-test-a");
+        let b = PathBuf::from("/tmp/gravai-lock-test-b");
+        assert!(Arc::ptr_eq(&session_lock(&a), &session_lock(&a)));
+        assert!(!Arc::ptr_eq(&session_lock(&a), &session_lock(&b)));
     }
 
     #[cfg(target_os = "macos")]
@@ -852,6 +1049,10 @@ pub fn export_session_timeline(
                     sample_rate: spec.sample_rate,
                     channels: spec.channels,
                     frames: frames as u64,
+                    // Already time-zero-aligned by streaming_mix/decode above;
+                    // the leg-to-leg offset is applied separately below by
+                    // concatenate_captures.
+                    start_offset_ms: 0,
                 },
             ));
         }

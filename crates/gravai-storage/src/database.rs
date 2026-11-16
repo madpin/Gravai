@@ -338,6 +338,23 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// Update a bookmark's note. Trims whitespace; an empty (or all-whitespace)
+    /// result clears the note to NULL rather than storing an empty string.
+    /// Returns `false` if no bookmark has this id.
+    pub fn update_bookmark_note(
+        &self,
+        id: i64,
+        note: Option<&str>,
+    ) -> Result<bool, rusqlite::Error> {
+        let trimmed = note.map(str::trim).filter(|s| !s.is_empty());
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute(
+            "UPDATE session_bookmarks SET note = ?1 WHERE id = ?2",
+            params![trimmed, id],
+        )?;
+        Ok(count > 0)
+    }
+
     // -- Session summaries --
 
     /// Insert or replace the summary for a session. We delete any prior
@@ -1214,6 +1231,41 @@ mod tests {
         assert!(db.delete_bookmark(id1).unwrap());
         assert!(!db.delete_bookmark(id1).unwrap()); // already deleted
         assert_eq!(db.list_bookmarks("s3").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn update_bookmark_note_trims_and_clears() {
+        let db = Database::open_in_memory().unwrap();
+        db.create_session(&SessionRecord {
+            id: "s5".into(),
+            started_at: "2026-04-06T12:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            title: None,
+            meeting_app: None,
+            state: "recording".into(),
+        })
+        .unwrap();
+
+        let id = db.insert_bookmark("s5", 1000, None).unwrap();
+
+        // Set a note, trimming surrounding whitespace.
+        assert!(db.update_bookmark_note(id, Some("  hello  ")).unwrap());
+        assert_eq!(
+            db.list_bookmarks("s5").unwrap()[0].note.as_deref(),
+            Some("hello")
+        );
+
+        // An empty/whitespace-only note clears it back to NULL.
+        assert!(db.update_bookmark_note(id, Some("   ")).unwrap());
+        assert!(db.list_bookmarks("s5").unwrap()[0].note.is_none());
+
+        assert!(db.update_bookmark_note(id, Some("done")).unwrap());
+        assert!(db.update_bookmark_note(id, None).unwrap());
+        assert!(db.list_bookmarks("s5").unwrap()[0].note.is_none());
+
+        // Unknown id reports no match.
+        assert!(!db.update_bookmark_note(999_999, Some("x")).unwrap());
     }
 
     #[test]

@@ -53,7 +53,7 @@
   let audioLoading = $state(false);
   let audioError = $state<string | null>(null);
   let currentTimeMs = $state(-1);
-  let seekRequest = $state<{ ms: number } | null>(null);
+  let seekRequest = $state<{ ms: number; autoplay?: boolean } | null>(null);
 
   // Filters
   let filterApp = $state("");
@@ -110,6 +110,14 @@
       audioError = typeof e === "string" ? e : e?.message ?? "Audio not available";
     }
     audioLoading = false;
+    // Review starts from what was flagged: position the playhead at the
+    // first bookmark and scroll the transcript to it — but don't autoplay.
+    // With no bookmarks, behave as today (nothing seeked).
+    if (audioPath && bookmarks.length > 0) {
+      const firstMs = bookmarks[0].offset_ms;
+      seekRequest = { ms: firstMs, autoplay: false };
+      currentTimeMs = firstMs;
+    }
     // Embeddings are optional. A neural model makes this the slow part of opening a session.
     try {
       const cfg: any = await invoke("get_config");
@@ -131,6 +139,39 @@
       await invoke("delete_bookmark", { bookmarkId: id });
       bookmarks = bookmarks.filter(b => b.id !== id);
     } catch (e) { exportMsg = `Error: ${e}`; }
+  }
+
+  let editingBookmarkId = $state<number | null>(null);
+  let editingBookmarkValue = $state("");
+
+  function startBookmarkNoteEdit(b: any) {
+    editingBookmarkId = b.id;
+    editingBookmarkValue = b.note ?? "";
+  }
+
+  async function saveBookmarkNote(id: number) {
+    const trimmed = editingBookmarkValue.trim();
+    editingBookmarkId = null;
+    try {
+      await invoke("update_bookmark_note", { bookmarkId: id, note: trimmed || null });
+      bookmarks = bookmarks.map(b => b.id === id ? { ...b, note: trimmed || null } : b);
+    } catch (e) { exportMsg = `Error: ${e}`; }
+  }
+
+  let rebuildingAudio = $state(false);
+
+  /** Deletes cached playback/mix files and rebuilds from the raw source
+   * tracks — the "Rebuild audio" action next to a playback error. */
+  async function rebuildAudio() {
+    if (!selectedId || rebuildingAudio) return;
+    rebuildingAudio = true;
+    try {
+      audioPath = await invoke("rebuild_session_audio", { sessionId: selectedId });
+      audioError = null;
+    } catch (e: any) {
+      audioError = typeof e === "string" ? e : e?.message ?? "Rebuild failed";
+    }
+    rebuildingAudio = false;
   }
 
   async function search() {
@@ -301,12 +342,18 @@
     color: var(--accent); white-space: nowrap; min-width: 42px;
   }
   .bookmark-note { color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .btn-bookmark-delete {
+  .bookmark-note-input {
+    flex: 1; font-size: 12px; background: var(--bg-elevated);
+    border: 1px solid var(--accent-dim); border-radius: var(--radius-sm);
+    color: var(--text-primary); padding: 2px 6px; font-family: inherit;
+  }
+  .btn-bookmark-edit, .btn-bookmark-delete {
     background: none; border: none; cursor: pointer; color: var(--text-tertiary);
     padding: 2px; border-radius: 4px; display: flex; align-items: center; opacity: 0;
     transition: opacity 0.15s; flex-shrink: 0;
   }
-  .bookmark-row:hover .btn-bookmark-delete { opacity: 1; }
+  .bookmark-row:hover .btn-bookmark-edit, .bookmark-row:hover .btn-bookmark-delete { opacity: 1; }
+  .btn-bookmark-edit:hover { color: var(--text-primary); }
   .btn-bookmark-delete:hover { color: var(--danger); }
   .audio-status {
     display: flex; align-items: center; gap: 6px;
@@ -314,6 +361,14 @@
     background: var(--bg-elevated); border-bottom: 1px solid var(--border-subtle);
   }
   .audio-status-warn { color: var(--warning); }
+  .audio-status-msg { flex: 1; }
+  .btn-rebuild {
+    display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+    background: none; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    color: var(--text-secondary); font-size: 11px; cursor: pointer; padding: 2px 8px;
+  }
+  .btn-rebuild:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-secondary); }
+  .btn-rebuild:disabled { opacity: 0.6; cursor: not-allowed; }
   .archive-llm-status { padding: 4px 16px 0; }
   .archive-llm-status:empty { display: none; padding: 0; }
   .summary-error-card {
@@ -453,19 +508,35 @@
         </div>
         <div class="bookmarks-list">
           {#each bookmarks as b}
-            <div
-              class="bookmark-row"
-              class:bookmark-seekable={!!audioPath}
-              role="button"
-              tabindex={audioPath ? 0 : -1}
-              aria-disabled={!audioPath}
-              onclick={audioPath ? () => { seekRequest = { ms: b.offset_ms }; } : undefined}
-              onkeydown={audioPath ? (e) => { if (e.key === 'Enter' || e.key === ' ') seekRequest = { ms: b.offset_ms }; } : undefined}
-            >
-              <span class="bookmark-time">[{fmtOffsetMs(b.offset_ms)}]</span>
-              <span class="bookmark-note">{b.note || "—"}</span>
-              <button class="btn-bookmark-delete" onclick={(e) => { e.stopPropagation(); deleteBookmark(b.id); }} title="Delete bookmark" aria-label="Delete bookmark"><Icon name="trash" size={11}/></button>
-            </div>
+            {#if editingBookmarkId === b.id}
+              <div class="bookmark-row">
+                <span class="bookmark-time">[{fmtOffsetMs(b.offset_ms)}]</span>
+                <!-- svelte-ignore a11y_autofocus -->
+                <input
+                  class="bookmark-note-input"
+                  bind:value={editingBookmarkValue}
+                  autofocus
+                  onkeydown={(e) => { if (e.key === "Enter") saveBookmarkNote(b.id); if (e.key === "Escape") editingBookmarkId = null; }}
+                  onblur={() => saveBookmarkNote(b.id)}
+                />
+              </div>
+            {:else}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div
+                class="bookmark-row"
+                class:bookmark-seekable={!!audioPath}
+                role="button"
+                tabindex={audioPath ? 0 : -1}
+                aria-disabled={!audioPath}
+                onclick={audioPath ? () => { seekRequest = { ms: b.offset_ms }; } : undefined}
+                onkeydown={audioPath ? (e) => { if (e.key === 'Enter' || e.key === ' ') seekRequest = { ms: b.offset_ms }; } : undefined}
+              >
+                <span class="bookmark-time">[{fmtOffsetMs(b.offset_ms)}]</span>
+                <span class="bookmark-note">{b.note || "—"}</span>
+                <button class="btn-bookmark-edit" onclick={(e) => { e.stopPropagation(); startBookmarkNoteEdit(b); }} title="Edit note" aria-label="Edit note"><Icon name="pencil" size={11}/></button>
+                <button class="btn-bookmark-delete" onclick={(e) => { e.stopPropagation(); deleteBookmark(b.id); }} title="Delete bookmark" aria-label="Delete bookmark"><Icon name="trash" size={11}/></button>
+              </div>
+            {/if}
           {/each}
         </div>
       </div>
@@ -509,13 +580,20 @@
     {#if audioLoading}
       <div class="audio-status"><Icon name="spinner" size={14}/> Preparing audio (merging tracks)...</div>
     {:else if audioError}
-      <div class="audio-status audio-status-warn"><Icon name="speaker" size={14}/> {audioError}</div>
+      <div class="audio-status audio-status-warn">
+        <Icon name="speaker" size={14}/> <span class="audio-status-msg">{audioError}</span>
+        <button class="btn-rebuild" onclick={rebuildAudio} disabled={rebuildingAudio}>
+          {#if rebuildingAudio}<Icon name="spinner" size={12}/> Rebuilding...{:else}<Icon name="refresh" size={12}/> Rebuild audio{/if}
+        </button>
+      </div>
     {/if}
     <AudioPlayer
       {audioPath}
       {bookmarks}
+      sessionId={selectedId}
       onTimeUpdate={(ms) => currentTimeMs = ms}
       onSeekRequest={seekRequest}
+      onRebuilt={(path) => { audioPath = path; audioError = null; }}
     />
 
     <TranscriptView
@@ -525,6 +603,7 @@
       {bookmarks}
       {currentTimeMs}
       onUtteranceClick={(ms) => { seekRequest = { ms }; }}
+      onBookmarkClick={(ms) => { seekRequest = { ms }; }}
     />
   </div>
 </div>

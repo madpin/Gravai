@@ -1,17 +1,10 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { invoke, sourceIconName } from "../lib/tauri";
+  import { getUtteranceOffsetMs } from "../lib/transcript";
   import Icon from "./Icon.svelte";
 
-  let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null, bookmarks = [], sessionStartedAt = "", currentTimeMs = -1, onUtteranceClick }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null; bookmarks?: any[]; sessionStartedAt?: string; currentTimeMs?: number; onUtteranceClick?: (startMs: number) => void } = $props();
-
-  // Compute each utterance's offset from session start (ms).
-  // Uses start_ms if available, otherwise derives from timestamp vs session start.
-  function getUtteranceOffsetMs(u: any, baseTime: number): number {
-    if (u.start_ms != null) return u.start_ms;
-    const ts = new Date(u.timestamp).getTime();
-    return ts - baseTime;
-  }
+  let { utterances = [], autoScroll = true, showEmotions = true, sessionId = null, bookmarks = [], sessionStartedAt = "", currentTimeMs = -1, onUtteranceClick, onBookmarkClick }: { utterances: any[]; autoScroll?: boolean; showEmotions?: boolean; sessionId?: string | null; bookmarks?: any[]; sessionStartedAt?: string; currentTimeMs?: number; onUtteranceClick?: (startMs: number) => void; onBookmarkClick?: (offsetMs: number) => void } = $props();
 
   // Base time = session start (for aligning bookmark offsets with utterance timestamps)
   let baseTimeMs = $derived(
@@ -231,6 +224,21 @@
   }
 </script>
 
+{#snippet bookmarkMarker(bm: any)}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="transcript-bookmark-marker"
+    class:clickable={!!onBookmarkClick}
+    role="button"
+    tabindex={onBookmarkClick ? 0 : -1}
+    onclick={onBookmarkClick ? () => onBookmarkClick!(bm.offset_ms) : undefined}
+    onkeydown={onBookmarkClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onBookmarkClick!(bm.offset_ms); } } : undefined}
+  >
+    <Icon name="bookmark" size={11}/> <span class="bookmark-marker-time">[{fmtOffsetMs(bm.offset_ms)}]</span>
+    {#if bm.note}<span class="bookmark-marker-note">{bm.note}</span>{/if}
+  </div>
+{/snippet}
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="transcript-panel" bind:this={el} onscroll={currentTimeMs >= 0 ? handleScroll : undefined}>
   {#if utterances.length === 0}
@@ -241,10 +249,7 @@
     {/if}
     {#each visibleUtterances as u, i}
       {#each bookmarkSlots.before.get(i + hiddenCount) ?? [] as bm (bm.id)}
-        <div class="transcript-bookmark-marker">
-          <Icon name="bookmark" size={11}/> <span class="bookmark-marker-time">[{fmtOffsetMs(bm.offset_ms)}]</span>
-          {#if bm.note}<span class="bookmark-marker-note">{bm.note}</span>{/if}
-        </div>
+        {@render bookmarkMarker(bm)}
       {/each}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -252,14 +257,18 @@
         class:active-utterance={u.id === activeUtteranceId}
         class:clickable={!!onUtteranceClick}
         data-utterance-id={u.id}
-        ondblclick={onUtteranceClick ? () => onUtteranceClick!(getUtteranceOffsetMs(u, baseTimeMs)) : undefined}
+        role="button"
+        tabindex={onUtteranceClick ? 0 : -1}
+        onclick={onUtteranceClick ? () => onUtteranceClick!(getUtteranceOffsetMs(u, baseTimeMs)) : undefined}
+        onkeydown={onUtteranceClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onUtteranceClick!(getUtteranceOffsetMs(u, baseTimeMs)); } } : undefined}
       >
         <span class="transcript-meta">
           <Icon name={sourceIconName(u.source)} size={12}/> {fmtTime(u.timestamp)}
           {#if u.speaker}
             {@const display = getDisplaySpeaker(u.speaker)}
             {#if editingUtteranceId === u.id}
-              <span class="speaker-rename-wrapper">
+              <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+              <span class="speaker-rename-wrapper" onclick={(e) => e.stopPropagation()}>
                 <!-- svelte-ignore a11y_autofocus -->
                 <input
                   type="text"
@@ -305,7 +314,7 @@
             class="correction-mark"
             class:showing-original={showingOriginal.has(u.id)}
             data-tooltip={showingOriginal.has(u.id) ? "Showing original — click to restore correction" : `Original: ${u.text}`}
-            onclick={() => toggleOriginal(u.id)}
+            onclick={(e) => { e.stopPropagation(); toggleOriginal(u.id); }}
             title=""
           ><Icon name={showingOriginal.has(u.id) ? "corner-up-left" : "pencil"} size={13}/></button>{/if}</span>
         {#if showEmotions && u.sentiment_label}
@@ -318,15 +327,18 @@
       </div>
     {/each}
     {#each bookmarkSlots.trailing as bm (bm.id)}
-      <div class="transcript-bookmark-marker">
-        <Icon name="bookmark" size={11}/> <span class="bookmark-marker-time">[{fmtOffsetMs(bm.offset_ms)}]</span>
-        {#if bm.note}<span class="bookmark-marker-note">{bm.note}</span>{/if}
-      </div>
+      {@render bookmarkMarker(bm)}
     {/each}
   {/if}
 </div>
 
 <style>
+  .transcript-bookmark-marker.clickable {
+    cursor: pointer;
+  }
+  .transcript-bookmark-marker.clickable:hover {
+    background: rgba(124, 108, 255, 0.08);
+  }
   .hidden-count-notice {
     padding: 6px 14px;
     font-size: 11px;

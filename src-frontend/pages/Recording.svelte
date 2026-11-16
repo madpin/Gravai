@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke, listen, fmtTimer, fmtDuration } from "../lib/tauri";
   import { get } from "svelte/store";
-  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, bookmarkCount, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, navigate } from "../lib/store";
+  import { isRecording, isPaused, currentSessionId, sessionStartTime, autoScrollEnabled, liveUtterances, lastSessionId as lastSessionIdStore, activityLogs, liveSummary, bookmarkCount, dismissedMeetingApps, addAlert, dismissAlertsByLevel, clearAlerts, navigate, finishedSessionId, pendingArchiveSessionId } from "../lib/store";
   import { config, loadConfig, setValue } from "../lib/config";
   import RunBar from "../components/RunBar.svelte";
   import TranscriptView from "../components/TranscriptView.svelte";
@@ -18,6 +18,38 @@
   let summaryLoading = $state(false);
   let summaryError = $state<string | null>(null);
   let sentimentData = $state<any>(null);
+  // Becomes true once the one delayed post-stop transcript refetch has run
+  // and found nothing — distinct from "haven't checked yet" (null-ish via
+  // liveUtterances still being populated from the live poll).
+  let emptyTranscriptAfterStop = $state(false);
+  // True for the ~2s between stop() and finalizeAfterStop() resolving, so the
+  // finished view can show a neutral "checking" message instead of briefly
+  // flashing "Summary unavailable" before we know the transcript is there.
+  let finalizing = $state(false);
+  // Timestamps of the last non-zero VU level per source, used to show a
+  // "No sound from <source>" hint while recording (see gravai:volume below).
+  let lastMicSoundAt = $state<number | null>(null);
+  let lastSysSoundAt = $state<number | null>(null);
+
+  let starting = $state(false);
+  let sessionTitle = $state<string>("");
+  let editingTitle = $state(false);
+  let titleEditValue = $state("");
+
+  // Bookmarks for the just-finished session, shown as "mm:ss  note" in the
+  // finished view. The current recording's running count lives in the
+  // shared `bookmarkCount` store (see gravai:bookmark below).
+  let sessionBookmarks = $state<any[]>([]);
+  // Key-sequence label for the bookmark shortcut, read from the shared
+  // shortcut store so the tooltip reflects the user's actual binding
+  // (recording.bookmark — handled window-side in StatusBar.svelte since
+  // it's a non-global shortcut).
+  let bookmarkShortcutLabel = $state("");
+  // The "Add a note…" prompt shown right after a bookmark is created
+  // (button or shortcut) — see the gravai:bookmark listener below.
+  let pendingBookmarkNote = $state<{ id: number; offsetMs: number } | null>(null);
+  let bookmarkNoteValue = $state("");
+  let bookmarkNoteTimeout: number | null = null;
 
   // Device selection. Empty name means the system default input.
   let micDevices = $state<any[]>([]);
@@ -32,6 +64,21 @@
   let exportAutoTranscript = $derived(runConfig?.export?.auto_export_transcript ?? false);
   let exportRealtimeSave = $derived(runConfig?.export?.realtime_save ?? true);
   let showEmotions = $derived(runConfig?.features?.sentiment?.enabled ?? false);
+  let autoSummaryOnStop = $derived(runConfig?.features?.auto_summary_on_stop ?? true);
+  // The session just stopped is shown as a "finished object" instead of an
+  // empty idle page until the user explicitly leaves it (New recording) or
+  // starts a new one. Navigating to another page and back does not clear it.
+  let finishedView = $derived(!!$finishedSessionId && !$isRecording && !starting);
+  // "Is sound coming in?" hint: true once a source has been enabled and
+  // silent for more than 10s while recording.
+  let noSoundMic = $derived.by(() => {
+    void timer; // re-evaluate on the recording tick
+    return $isRecording && micEnabled && lastMicSoundAt != null && Date.now() - lastMicSoundAt > 10_000;
+  });
+  let noSoundSys = $derived.by(() => {
+    void timer;
+    return $isRecording && sysEnabled && lastSysSoundAt != null && Date.now() - lastSysSoundAt > 10_000;
+  });
   $effect(() => {
     if (!runConfig) return;
     micEnabled = runConfig.audio?.microphone?.enabled ?? true;
@@ -53,14 +100,19 @@
     activityLogs.update(l => [...l.slice(-99), `[${t}] ${msg}`]);
   }
 
-  let starting = $state(false);
-  let sessionTitle = $state<string>("");
-  let editingTitle = $state(false);
-  let titleEditValue = $state("");
-
   async function start() {
     if (starting) return;
     starting = true;
+    // Leave the just-finished session behind — this is a genuinely new
+    // recording, not a return visit to the old one.
+    finishedSessionId.set(null);
+    sessionTitle = "";
+    sentimentData = null;
+    summaryError = null;
+    emptyTranscriptAfterStop = false;
+    finalizing = false;
+    lastMicSoundAt = Date.now();
+    lastSysSoundAt = Date.now();
     try {
       log("Starting recording...");
       clearAlerts();
@@ -101,11 +153,39 @@
     try {
       const result: any = await invoke("add_bookmark", { note: null });
       // Don't increment here — the gravai:bookmark event listener handles the count
+      // (it also opens the "Add a note…" prompt below, for both this button
+      // and the recording.bookmark keyboard shortcut).
       const secs = Math.floor(result.offset_ms / 1000);
       const m = String(Math.floor(secs / 60)).padStart(2, "0");
       const s = String(secs % 60).padStart(2, "0");
       log(`Bookmark added at ${m}:${s}`);
     } catch (e) { log(`Bookmark error: ${e}`); }
+  }
+
+  function fmtOffsetMs(ms: number): string {
+    const secs = Math.floor(ms / 1000);
+    const m = String(Math.floor(secs / 60)).padStart(2, "0");
+    const s = String(secs % 60).padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
+  function prettyShortcut(seq: string): string {
+    if (!seq) return "";
+    const sym: Record<string, string> = { CmdOrCtrl: "⌘", Alt: "⌥", Shift: "⇧", Ctrl: "⌃", Space: "Space" };
+    return seq.split("+").map(p => sym[p] ?? p).join("");
+  }
+
+  async function saveBookmarkNote() {
+    const note = bookmarkNoteValue.trim();
+    const id = pendingBookmarkNote?.id;
+    dismissBookmarkNote();
+    if (id == null) return;
+    try { await invoke("update_bookmark_note", { bookmarkId: id, note: note || null }); } catch (_) {}
+  }
+
+  function dismissBookmarkNote() {
+    if (bookmarkNoteTimeout) { clearTimeout(bookmarkNoteTimeout); bookmarkNoteTimeout = null; }
+    pendingBookmarkNote = null;
   }
 
   async function togglePause() {
@@ -118,19 +198,93 @@
   async function stop() {
     try {
       const result: any = await invoke("stop_session");
-      lastSessionIdStore.set(result.id);
+      const sid = result.id;
+      lastSessionIdStore.set(sid);
+      // Show this session as a finished object instead of dropping back to
+      // an empty Record page. The title is NOT cleared — it stays as-is
+      // (and stays editable via the existing rename flow) until the user
+      // explicitly leaves via "New recording" or starts a new one.
+      finishedSessionId.set(sid);
+      emptyTranscriptAfterStop = false;
+      finalizing = true;
       isRecording.set(false); isPaused.set(false);
       currentSessionId.set(null); sessionStartTime.set(null);
-      sessionTitle = "";
       stopTimer(); stopTranscriptPoll();
       vuMic = 0; vuSys = 0;
       dismissedMeetingApps.set(new Set());
-      log(`Stopped: ${result.id} (${fmtDuration(result.duration_seconds)})`);
+      dismissBookmarkNote();
+      log(`Stopped: ${sid} (${fmtDuration(result.duration_seconds)})`);
+      // Bookmarks are committed immediately when added, so no delay needed
+      // (unlike sentiment/transcript, which can lag DB writes briefly).
+      try {
+        const bms: any[] = await invoke("list_bookmarks", { sessionId: sid });
+        if (get(finishedSessionId) === sid) sessionBookmarks = bms;
+      } catch (_) {}
       // Load sentiment summary after session ends (short delay for DB writes to complete)
       setTimeout(async () => {
-        try { sentimentData = await invoke("get_session_sentiment", { sessionId: result.id }); } catch (_) {}
+        try {
+          const s = await invoke("get_session_sentiment", { sessionId: sid });
+          if (get(finishedSessionId) === sid) sentimentData = s;
+        } catch (_) {}
       }, 3000);
+      // One delayed refetch (~2s) so late-finalised utterances (e.g. the
+      // tail end of a VAD segment still being transcribed) show up before
+      // we decide whether there's anything to summarize.
+      setTimeout(() => finalizeAfterStop(sid), 2000);
     } catch (e) { log(`Error: ${e}`); }
+  }
+
+  /** Runs once, ~2s after stop(): re-fetches the transcript from the DB,
+   * then starts the summary automatically if conditions are met. Never
+   * touches state for a session the user has since left (New recording /
+   * a newer recording started). */
+  async function finalizeAfterStop(sid: string) {
+    let utts: any[] = [];
+    try {
+      utts = await invoke("get_transcript", { sessionId: sid });
+    } catch (_) {
+      if (get(finishedSessionId) === sid) finalizing = false;
+      return;
+    }
+    // The user left this session (New recording, or started another one)
+    // before the refetch landed — don't resurrect it.
+    if (get(finishedSessionId) !== sid) return;
+    liveUtterances.set(utts);
+    if (utts.length > 0) lastUtteranceId = Math.max(0, ...utts.map((u: any) => u.id));
+    finalizing = false;
+    if (utts.length === 0) {
+      emptyTranscriptAfterStop = true;
+      log("No speech was captured");
+      return;
+    }
+    // Auto-summary: only if the config flag is on and nothing is already
+    // loading/loaded for this session (a manual click during recording
+    // already produced one, or a Retry is in flight).
+    if (autoSummaryOnStop && !summaryLoading && !get(liveSummary)) {
+      await generateSummary(sid);
+    }
+  }
+
+  /** Leaves the finished session behind, returning Record to idle. */
+  function newRecording() {
+    finishedSessionId.set(null);
+    sessionTitle = "";
+    liveUtterances.set([]);
+    liveSummary.set(null);
+    bookmarkCount.set(0);
+    sentimentData = null;
+    summaryError = null;
+    emptyTranscriptAfterStop = false;
+    finalizing = false;
+    sessionBookmarks = [];
+    dismissBookmarkNote();
+  }
+
+  function openInArchive() {
+    const sid = get(finishedSessionId);
+    if (!sid) return;
+    pendingArchiveSessionId.set(sid);
+    navigate("archive");
   }
 
   function startTimer() {
@@ -165,18 +319,27 @@
   }
   function stopTranscriptPoll() { if (transcriptPoll) { clearInterval(transcriptPoll); transcriptPoll = null; } }
 
-  async function generateSummary() {
-    const sid = $lastSessionIdStore || $currentSessionId;
-    if (!sid) { log("No session to summarize"); return; }
+  async function generateSummary(sid?: string) {
+    const targetId = sid ?? ($lastSessionIdStore || $currentSessionId);
+    if (!targetId) { log("No session to summarize"); return; }
+    if (summaryLoading) return; // guard against double runs (button + auto-trigger)
     summaryLoading = true;
     summaryError = null;
     log("Generating summary...");
+    // Still relevant if the user hasn't moved on to a different session
+    // (started a new recording, or left this one) by the time this resolves.
+    const stillRelevant = () => get(currentSessionId) === targetId || get(finishedSessionId) === targetId;
     try {
-      liveSummary.set(await invoke("summarize_session", { sessionId: sid }));
-      log("Summary generated");
+      const result = await invoke("summarize_session", { sessionId: targetId });
+      if (stillRelevant()) {
+        liveSummary.set(result);
+        log("Summary generated");
+      } else {
+        log(`Summary for ${targetId} arrived after switching sessions — discarded`);
+      }
     } catch (e: any) {
       const msg = typeof e === "string" ? e : (e?.message ?? "Summary failed");
-      summaryError = msg;
+      if (stillRelevant()) summaryError = msg;
       log(`Summary error: ${msg}`);
     }
     summaryLoading = false;
@@ -270,7 +433,10 @@
       const d = e.payload;
       if (!d?.source) return;
       const pct = Math.max(0, Math.min(100, ((d.db + 60) / 60) * 100));
-      if (d.source === "microphone") vuMic = pct; else vuSys = pct;
+      // A couple of percent of noise floor doesn't count as "sound coming in".
+      const hasSound = pct > 2;
+      if (d.source === "microphone") { vuMic = pct; if (hasSound) lastMicSoundAt = Date.now(); }
+      else { vuSys = pct; if (hasSound) lastSysSoundAt = Date.now(); }
     });
     unlisteners.push(uv);
 
@@ -327,8 +493,18 @@
     });
     unlisteners.push(uc);
 
-    const ub = await listen("gravai:bookmark", (_e: any) => {
+    const ub = await listen("gravai:bookmark", (e: any) => {
       bookmarkCount.update(n => n + 1);
+      // Fires for both the bookmark button and the recording.bookmark
+      // keyboard shortcut (handled window-side in StatusBar.svelte) —
+      // either way, offer the one-line note prompt while it's still fresh.
+      const d = e.payload;
+      if (get(isRecording) && d?.session_id === get(currentSessionId) && d?.bookmark_id != null) {
+        pendingBookmarkNote = { id: d.bookmark_id, offsetMs: d.offset_ms ?? 0 };
+        bookmarkNoteValue = "";
+        if (bookmarkNoteTimeout) clearTimeout(bookmarkNoteTimeout);
+        bookmarkNoteTimeout = window.setTimeout(dismissBookmarkNote, 8000);
+      }
     });
     unlisteners.push(ub);
 
@@ -380,7 +556,22 @@
       lastUtteranceId = Math.max(0, ...get(liveUtterances).map(u => u.id));
       startTimer();
       startTranscriptPoll();
+    } else if (!get(isRecording) && get(finishedSessionId) && !sessionTitle) {
+      // Returning to an already-finished session after navigating away and
+      // back (this is a fresh component instance — local state like the
+      // title and sentiment didn't survive the unmount, only the stores did).
+      const sid = get(finishedSessionId) as string;
+      try {
+        const sessions: any[] = await invoke("list_sessions");
+        sessionTitle = sessions.find(s => s.id === sid)?.title ?? "";
+      } catch (_) {}
+      try { sentimentData = await invoke("get_session_sentiment", { sessionId: sid }); } catch (_) {}
+      try { sessionBookmarks = await invoke("list_bookmarks", { sessionId: sid }); } catch (_) {}
     }
+    try {
+      const store: any = await invoke("get_shortcuts");
+      bookmarkShortcutLabel = store?.bindings?.["recording.bookmark"]?.key_sequence ?? "";
+    } catch (_) {}
     log("Gravai ready");
   });
 
@@ -400,7 +591,7 @@
     const trimmed = titleEditValue.trim();
     editingTitle = false;
     if (trimmed === sessionTitle) return;
-    const sid = $currentSessionId;
+    const sid = $currentSessionId ?? $finishedSessionId;
     if (!sid) return;
     try {
       await invoke("rename_session", { sessionId: sid, title: trimmed });
@@ -430,11 +621,84 @@
 </script>
 
 
+{#snippet exportIndicator()}
+  {#if exportAutoTranscript || exportRealtimeSave}
+    <div class="export-indicator">
+      {#if exportRealtimeSave}<span class="export-tag save"><Icon name="save" size={11}/> Saved while recording</span>{/if}
+      {#if exportAutoTranscript}<span class="export-tag transcript"><Icon name="file-text" size={11}/> Transcript saved on stop</span>{/if}
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet audioSources()}
+  <div class="source-grid">
+    <!-- Mic row -->
+    <div class="source-row">
+      <div class="source-row-top">
+        <label class="source-toggle"><input type="checkbox" class="toggle" checked={micEnabled} onchange={(e) => setValue("audio.microphone.enabled", e.currentTarget.checked)} /> <Icon name="microphone" size={13}/> Microphone</label>
+        <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div></div>
+      </div>
+      <div class="source-row-bottom">
+        <div class="source-device">
+          <select class="select select-sm" bind:value={selectedMicName} onchange={applyMicChoice}>
+            <option value="">Default mic</option>
+            {#if selectedMicName && !micDevices.some(d => d.name === selectedMicName)}
+              <option value={selectedMicName}>{selectedMicName} (disconnected)</option>
+            {/if}
+            {#each micDevices as d}
+              <option value={d.name}>{d.name}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+    </div>
+    <!-- System audio row -->
+    <div class="source-row">
+      <div class="source-row-top">
+        <label class="source-toggle"><input type="checkbox" class="toggle" checked={sysEnabled} onchange={(e) => setValue("audio.system_audio.enabled", e.currentTarget.checked)} /> <Icon name="monitor" size={13}/> System Audio</label>
+        <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div></div>
+      </div>
+      <div class="source-row-bottom">
+        <div class="source-device">
+          <AppPicker
+            apps={runningApps}
+            selected={selectedAppBundleId}
+            onselect={(v) => setValue("audio.system_audio.app_bundle_id", v)}
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet sentimentBlock()}
+  {#if sentimentData?.speakers?.length > 0}
+    <details class="card collapsible" open>
+      <summary class="card-header">Sentiment — Participants</summary>
+      <div class="sentiment-summary">
+        {#each sentimentData.speakers as sp}
+          <div class="sentiment-speaker">
+            <span class="sentiment-speaker-name">{sp.speaker}</span>
+            <span class="sentiment-dominant">{sp.dominant_emotion}</span>
+            <span class="sentiment-count">{sp.utterance_count} utterances</span>
+          </div>
+        {/each}
+      </div>
+    </details>
+  {/if}
+{/snippet}
+
+{#snippet activityLog()}
+  <div class="log-panel">
+    {#each $activityLogs as line}<div>{line}</div>{/each}
+  </div>
+{/snippet}
+
 <div class="recording-layout">
   <!-- Left panel: controls -->
   <div class="recording-left" style="flex: 0 0 {leftWidth}px">
     <div class="page-header">
-      {#if $isRecording}
+      {#if $isRecording || finishedView}
         <div class="session-title-row">
           {#if editingTitle}
             <!-- svelte-ignore a11y_autofocus -->
@@ -457,6 +721,9 @@
       {/if}
       <span class="timer">{timer}</span>
     </div>
+    {#if finishedView && $liveSummary?.tldr}
+      <p class="finished-tldr">{$liveSummary.tldr}</p>
+    {/if}
 
     <RunBar />
 
@@ -465,7 +732,7 @@
       <button class="transport-btn record" class:active={$isRecording && !$isPaused} disabled={$isRecording || starting} onclick={start} title="Record"><Icon name={starting ? "spinner" : "record"} size={22}/></button>
       <button class="transport-btn pause" disabled={!$isRecording} onclick={togglePause} title={$isPaused ? "Resume" : "Pause"}><Icon name={$isPaused ? "play" : "pause"} size={20}/></button>
       <button class="transport-btn stop" disabled={!$isRecording && !starting} onclick={stop} title="Stop"><Icon name="stop" size={20}/></button>
-      <button class="transport-btn bookmark" disabled={!$isRecording} onclick={addBookmark} title="Add bookmark">
+      <button class="transport-btn bookmark" disabled={!$isRecording} onclick={addBookmark} title={bookmarkShortcutLabel ? `Add bookmark (${prettyShortcut(bookmarkShortcutLabel)})` : "Add bookmark"}>
         <Icon name="bookmark" size={18}/>{#if $bookmarkCount > 0}<span class="bookmark-badge">{$bookmarkCount}</span>{/if}
       </button>
       <span class="status-badge" class:recording={$isRecording && !$isPaused} class:paused={$isRecording && $isPaused} class:idle={!$isRecording && !starting} class:starting={starting}>
@@ -473,136 +740,122 @@
       </span>
     </div>
 
-    <!-- Model load and errors. Summarizing is shown once, inside Summary. -->
-    <LlmStatusBanner scope="status" />
+    {#if pendingBookmarkNote}
+      {#key pendingBookmarkNote.id}
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          class="bookmark-note-prompt"
+          placeholder="Add a note… Enter to save, Esc to skip"
+          autofocus
+          bind:value={bookmarkNoteValue}
+          onkeydown={(e) => { if (e.key === "Enter") saveBookmarkNote(); if (e.key === "Escape") dismissBookmarkNote(); }}
+          onblur={dismissBookmarkNote}
+        />
+      {/key}
+    {/if}
 
-    <!-- Export status indicator -->
-    {#if exportAutoTranscript || exportRealtimeSave}
-      <div class="export-indicator">
-        {#if exportRealtimeSave}<span class="export-tag save"><Icon name="save" size={11}/> Saved while recording</span>{/if}
-        {#if exportAutoTranscript}<span class="export-tag transcript"><Icon name="file-text" size={11}/> Transcript saved on stop</span>{/if}
+    <!-- "Is sound coming in?" — one compact VU row per source, always visible while recording -->
+    {#if $isRecording}
+      <div class="vu-row">
+        <div class="vu-row-item">
+          <Icon name="microphone" size={13}/>
+          <div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div>
+          {#if noSoundMic}<span class="no-sound-hint">No sound from Mic</span>{/if}
+        </div>
+        <div class="vu-row-item">
+          <Icon name="monitor" size={13}/>
+          <div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div>
+          {#if noSoundSys}<span class="no-sound-hint">No sound from System</span>{/if}
+        </div>
       </div>
     {/if}
 
-    <!-- Audio Sources -->
-    <details class="card collapsible" open>
-      <summary class="card-header">Audio Sources</summary>
-      <div class="source-grid">
-        <!-- Mic row -->
-        <div class="source-row">
-          <div class="source-row-top">
-            <label class="source-toggle"><input type="checkbox" class="toggle" checked={micEnabled} onchange={(e) => setValue("audio.microphone.enabled", e.currentTarget.checked)} /> <Icon name="microphone" size={13}/> Microphone</label>
-            <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuMic}%"></div></div></div>
-          </div>
-          <div class="source-row-bottom">
-            <div class="source-device">
-              <select class="select select-sm" bind:value={selectedMicName} onchange={applyMicChoice}>
-                <option value="">Default mic</option>
-                {#if selectedMicName && !micDevices.some(d => d.name === selectedMicName)}
-                  <option value={selectedMicName}>{selectedMicName} (disconnected)</option>
-                {/if}
-                {#each micDevices as d}
-                  <option value={d.name}>{d.name}</option>
-                {/each}
-              </select>
-            </div>
-          </div>
-        </div>
-        <!-- System audio row -->
-        <div class="source-row">
-          <div class="source-row-top">
-            <label class="source-toggle"><input type="checkbox" class="toggle" checked={sysEnabled} onchange={(e) => setValue("audio.system_audio.enabled", e.currentTarget.checked)} /> <Icon name="monitor" size={13}/> System Audio</label>
-            <div class="source-meter"><div class="vu-meter"><div class="vu-fill" style="width: {vuSys}%"></div></div></div>
-          </div>
-          <div class="source-row-bottom">
-            <div class="source-device">
-              <AppPicker
-                apps={runningApps}
-                selected={selectedAppBundleId}
-                onselect={(v) => setValue("audio.system_audio.app_bundle_id", v)}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-    </details>
+    <!-- Model load and errors. In the finished view this also covers "Summarizing…". -->
+    <LlmStatusBanner scope={finishedView ? "all" : "status"} />
 
-    <!-- Summary (visible when we have transcript OR after stop) -->
-    {#if $liveUtterances.length > 0 || $lastSessionIdStore}
-      <details class="card collapsible" open>
-        <summary class="card-header">
-          Summary
-          <button class="btn btn-xs btn-accent" onclick={(e) => { e.stopPropagation(); generateSummary(); }} disabled={summaryLoading}>
-            {#if summaryLoading}<Icon name="spinner" size={12}/> Generating...{:else}Generate Summary{/if}
-          </button>
-        </summary>
-        <LlmStatusBanner scope="summary" />
-        {#if summaryError}
-          <div class="summary-error">
-            <div class="summary-error-line">
-              <Icon name="alert-triangle" size={13}/>
-              <span class="summary-error-msg">Summary failed: {summaryError}</span>
-              <button class="btn btn-xs btn-ghost" onclick={() => summaryError = null} aria-label="Dismiss">
-                <Icon name="x-circle" size={12}/>
-              </button>
-            </div>
-            <div class="summary-error-hint">
-              Check the LLM provider in Settings — for local models make sure the model is downloaded;
-              for API providers verify the base URL and API key.
-            </div>
-          </div>
-        {/if}
-        {#if $liveSummary}
+    {#if finishedView}
+      <!-- Finished session: outcome, then the session's permanent home -->
+      <div class="finished-actions">
+        <button class="btn btn-sm btn-accent" onclick={openInArchive}><Icon name="archive" size={13}/> Open in Archive</button>
+        <button class="btn btn-sm btn-ghost" onclick={newRecording}><Icon name="plus" size={13}/> New recording</button>
+      </div>
+
+      <div class="card outcome-card">
+        {#if finalizing}
+          <div class="empty-state">Checking transcript…</div>
+        {:else if emptyTranscriptAfterStop}
+          <div class="empty-state">No speech was captured.</div>
+        {:else if summaryLoading}
+          <div class="empty-state">Summarizing…</div>
+        {:else if $liveSummary?.key_decisions?.length || $liveSummary?.action_items?.length}
           <div class="summary-content">
-            {#if $liveSummary.tldr}
-              <h4>TL;DR</h4>
-              <p>{$liveSummary.tldr}</p>
-            {/if}
             {#if $liveSummary.key_decisions?.length}
               <h4>Key Decisions</h4>
-              <ul>{#each $liveSummary.key_decisions as d}<li>{d}</li>{/each}</ul>
+              <ul>{#each $liveSummary.key_decisions.slice(0, 5) as d}<li>{d}</li>{/each}</ul>
+              {#if $liveSummary.key_decisions.length > 5}
+                <button class="link-more" onclick={openInArchive}>{$liveSummary.key_decisions.length - 5} more in Archive</button>
+              {/if}
             {/if}
             {#if $liveSummary.action_items?.length}
               <h4>Action Items</h4>
-              <ul>{#each $liveSummary.action_items as a}<li>{a.description} {#if a.owner}<span class="action-owner">@{a.owner}</span>{/if}</li>{/each}</ul>
-            {/if}
-            {#if $liveSummary.open_questions?.length}
-              <h4>Open Questions</h4>
-              <ul>{#each $liveSummary.open_questions as q}<li>{q}</li>{/each}</ul>
-            {/if}
-            {#if !$liveSummary.tldr && !$liveSummary.key_decisions?.length && !$liveSummary.action_items?.length && !$liveSummary.open_questions?.length}
-              <div class="empty-state">The model returned an empty summary. Try regenerating or switch to a larger model.</div>
+              <ul>{#each $liveSummary.action_items.slice(0, 5) as a}<li>{a.description} {#if a.owner}<span class="action-owner">@{a.owner}</span>{/if}</li>{/each}</ul>
+              {#if $liveSummary.action_items.length > 5}
+                <button class="link-more" onclick={openInArchive}>{$liveSummary.action_items.length - 5} more in Archive</button>
+              {/if}
             {/if}
           </div>
-        {:else if !summaryError}
-          <div class="empty-state">Click "Generate Summary" to create a meeting brief.</div>
-        {/if}
-      </details>
-    {/if}
-
-    <!-- Sentiment Summary (shown after session stops, system audio only) -->
-    {#if sentimentData?.speakers?.length > 0}
-      <details class="card collapsible" open>
-        <summary class="card-header">Sentiment — Participants</summary>
-        <div class="sentiment-summary">
-          {#each sentimentData.speakers as sp}
-            <div class="sentiment-speaker">
-              <span class="sentiment-speaker-name">{sp.speaker}</span>
-              <span class="sentiment-dominant">{sp.dominant_emotion}</span>
-              <span class="sentiment-count">{sp.utterance_count} utterances</span>
+        {:else}
+          <div class="summary-error">
+            <div class="summary-error-line">
+              {#if summaryError}<Icon name="alert-triangle" size={13}/>{/if}
+              <span class="summary-error-msg">Summary unavailable{#if summaryError}: {summaryError}{/if}</span>
+              <button class="btn btn-xs btn-ghost" onclick={() => generateSummary()} disabled={summaryLoading}>
+                <Icon name="refresh" size={12}/> Retry
+              </button>
             </div>
-          {/each}
-        </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Sentiment, moved below the outcome block -->
+      {@render sentimentBlock()}
+
+      {#if sessionBookmarks.length > 0}
+        <details class="card collapsible" open>
+          <summary class="card-header">Bookmarks ({sessionBookmarks.length})</summary>
+          <div class="finished-bookmarks-list">
+            {#each sessionBookmarks as b}
+              <div class="finished-bookmark-row">
+                <span class="finished-bookmark-time">{fmtOffsetMs(b.offset_ms)}</span>
+                <span class="finished-bookmark-note">{b.note || "—"}</span>
+              </div>
+            {/each}
+          </div>
+        </details>
+      {/if}
+    {:else if $isRecording}
+      <!-- Everything else collapses into one closed-by-default card while recording,
+           so the three questions above stay in view. -->
+      <details class="card collapsible">
+        <summary class="card-header">Setup &amp; diagnostics</summary>
+        {@render exportIndicator()}
+        {@render audioSources()}
+        {@render sentimentBlock()}
+        <div class="card-header section">Activity Log</div>
+        {@render activityLog()}
+      </details>
+    {:else}
+      <!-- Idle: today's layout, ungrouped -->
+      {@render exportIndicator()}
+      <details class="card collapsible" open>
+        <summary class="card-header">Audio Sources</summary>
+        {@render audioSources()}
+      </details>
+      <details class="card collapsible" open>
+        <summary class="card-header">Activity Log</summary>
+        {@render activityLog()}
       </details>
     {/if}
-
-    <!-- Activity Log -->
-    <details class="card collapsible" open>
-      <summary class="card-header">Activity Log</summary>
-      <div class="log-panel">
-        {#each $activityLogs as line}<div>{line}</div>{/each}
-      </div>
-    </details>
   </div>
 
   <!-- Drag resizer -->
@@ -710,10 +963,6 @@
     font-size: 12px; font-weight: 500;
   }
   .summary-error-msg { flex: 1; }
-  .summary-error-hint {
-    font-size: 11px; color: var(--text-tertiary); line-height: 1.4;
-    margin-top: 4px; padding-left: 19px;
-  }
   .session-title-row {
     display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
   }
@@ -733,6 +982,45 @@
     display: flex; align-items: center;
   }
   .title-edit-btn:hover { color: var(--text-secondary); background: var(--bg-secondary); }
+  .vu-row {
+    display: flex; gap: 14px; padding: 2px 2px 0;
+  }
+  .vu-row-item {
+    display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+    color: var(--text-tertiary);
+  }
+  .vu-row-item .vu-meter { flex: 1; }
+  .no-sound-hint {
+    font-size: 10.5px; color: var(--warning); white-space: nowrap; flex-shrink: 0;
+  }
+  .finished-tldr {
+    font-size: 13px; color: var(--text-secondary); margin: 2px 0 0; line-height: 1.4;
+  }
+  .bookmark-note-prompt {
+    width: 100%; font-size: 12px; background: var(--bg-elevated);
+    border: 1px solid var(--accent-dim); border-radius: var(--radius-sm);
+    color: var(--text-primary); padding: 5px 10px; font-family: inherit;
+    margin: -2px 0 2px;
+  }
+  .finished-bookmarks-list { padding: 4px 0; display: flex; flex-direction: column; }
+  .finished-bookmark-row {
+    display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 14px;
+  }
+  .finished-bookmark-time {
+    font-family: "SF Mono", monospace; font-size: 11px; font-weight: 600;
+    color: var(--accent); white-space: nowrap; min-width: 36px;
+  }
+  .finished-bookmark-note { color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .finished-actions {
+    display: flex; gap: 8px;
+  }
+  .outcome-card { padding: 0; }
+  .outcome-card .empty-state { padding: 16px; }
+  .link-more {
+    background: none; border: none; cursor: pointer; color: var(--accent);
+    font-size: 11px; font-weight: 500; padding: 0 16px 10px; text-align: left;
+  }
+  .link-more:hover { text-decoration: underline; }
   .transport-btn.bookmark { position: relative; }
   .bookmark-badge {
     position: absolute; top: -4px; right: -4px;

@@ -403,12 +403,27 @@ pub struct SentimentConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-#[derive(Default)]
 pub struct FeaturesConfig {
     pub echo_suppression: EchoSuppressionConfig,
     pub diarization: DiarizationConfig,
     pub meeting_detection: MeetingDetectionConfig,
     pub sentiment: SentimentConfig,
+    /// Automatically run `summarize_session` right after a recording stops,
+    /// as long as it captured at least one utterance. Off just leaves the
+    /// summary to be generated on demand (Recording's Retry button, or Archive).
+    pub auto_summary_on_stop: bool,
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self {
+            echo_suppression: EchoSuppressionConfig::default(),
+            diarization: DiarizationConfig::default(),
+            meeting_detection: MeetingDetectionConfig::default(),
+            sentiment: SentimentConfig::default(),
+            auto_summary_on_stop: true,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -707,6 +722,7 @@ mod tests {
         assert!(parsed.features.meeting_detection.calendar_naming);
         assert!(!parsed.features.sentiment.enabled);
         assert!(parsed.embedding.auto_index);
+        assert!(parsed.features.auto_summary_on_stop);
     }
 
     #[test]
@@ -720,6 +736,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("sentiment");
+        json["features"]
+            .as_object_mut()
+            .unwrap()
+            .remove("auto_summary_on_stop");
         json["embedding"]
             .as_object_mut()
             .unwrap()
@@ -728,6 +748,7 @@ mod tests {
         assert!(parsed.features.meeting_detection.calendar_naming);
         assert!(!parsed.features.sentiment.enabled);
         assert!(parsed.embedding.auto_index);
+        assert!(parsed.features.auto_summary_on_stop);
     }
 
     #[test]
