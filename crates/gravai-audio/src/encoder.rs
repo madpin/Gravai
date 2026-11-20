@@ -959,48 +959,68 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[test]
-    fn streaming_mix_keeps_every_sample_instead_of_holding_for_one_millisecond() {
-        let dir = test_dir("sample_grid");
-        std::fs::create_dir_all(&dir).unwrap();
+    /// Scale one stored PCM sample the same way the mixer does when the sum
+    /// stays inside full scale. Peak normalization must not be part of this.
+    fn mix_scale(sample: i16) -> i16 {
+        ((sample as f32 / 32768.0) * i16::MAX as f32) as i16
+    }
+
+    fn write_pcm48(path: &Path, samples: &[i16]) {
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: 48_000,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let mut writer = hound::WavWriter::create(dir.join("mic.wav"), spec).unwrap();
-        // 20 ms ramp. A 1 ms hold repeats one value for 48 frames.
-        for i in 0..960 {
-            writer.write_sample((i as i16) * 20 - 9_600).unwrap();
+        let mut writer = hound::WavWriter::create(path, spec).unwrap();
+        for sample in samples {
+            writer.write_sample(*sample).unwrap();
         }
         writer.finalize().unwrap();
+    }
 
-        let groups = source_track_groups(&dir).unwrap();
+    fn read_pcm(path: &Path) -> Vec<i16> {
+        hound::WavReader::open(path)
+            .unwrap()
+            .into_samples::<i16>()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn streaming_mix_reproduces_a_1khz_tone_sample_for_sample() {
+        let dir = test_dir("tone_grid");
+        std::fs::create_dir_all(&dir).unwrap();
+        // One cycle is 48 samples at 48 kHz. Rounding the playback position
+        // to whole milliseconds keeps only the zero crossings, so this tone
+        // becomes silence. A flat fixture cannot see that.
+        let tone: Vec<i16> = (0..960)
+            .map(|i| {
+                let sine = (i as f32 * std::f32::consts::TAU / 48.0).sin();
+                (sine * 16_000.0) as i16
+            })
+            .collect();
+        assert!(tone.iter().any(|sample| sample.unsigned_abs() > 10_000));
+        let expected: Vec<i16> = tone.iter().copied().map(mix_scale).collect();
+
         let output = dir.join("mixed.wav");
+        write_pcm48(&dir.join("mic.wav"), &tone);
+        let groups = source_track_groups(&dir).unwrap();
         streaming_mix(&groups, &output).unwrap();
-        let reader = hound::WavReader::open(&output).unwrap();
-        assert_eq!(reader.spec().sample_rate, 48_000);
-        let samples: Vec<i16> = reader.into_samples::<i16>().map(Result::unwrap).collect();
-        assert_eq!(samples.len(), 960);
+        assert_eq!(read_pcm(&output), expected);
 
-        let mut longest_hold = 1usize;
-        let mut run = 1usize;
-        for pair in samples.windows(2) {
-            if pair[0] == pair[1] {
-                run += 1;
-                longest_hold = longest_hold.max(run);
-            } else {
-                run = 1;
-            }
-        }
-        assert!(
-            longest_hold < 4,
-            "mix held a sample for {longest_hold} frames; playback would buzz"
-        );
-        // The ramp must keep moving across the old 1 ms boundary.
-        assert!(samples[47] < samples[48]);
-        assert!((samples[48] as i32 - samples[0] as i32) > 800);
+        // The start lag is in milliseconds. Samples after that lag stay on
+        // the sample grid: 5 ms of silence, then the same tone.
+        std::fs::remove_file(&output).unwrap();
+        std::fs::remove_file(dir.join("mic.wav")).unwrap();
+        write_pcm48(&dir.join("system.wav"), &tone);
+        std::fs::write(dir.join("track_offsets.json"), r#"{"system":5}"#).unwrap();
+        let groups = source_track_groups(&dir).unwrap();
+        streaming_mix(&groups, &output).unwrap();
+        let delayed = read_pcm(&output);
+        let start = 5 * 48_000 / 1_000;
+        assert!(delayed[..start].iter().all(|sample| *sample == 0));
+        assert_eq!(&delayed[start..start + expected.len()], expected.as_slice());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
