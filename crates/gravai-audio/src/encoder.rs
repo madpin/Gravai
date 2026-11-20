@@ -457,15 +457,19 @@ impl TrackStream {
         output_rate: u32,
         output_channel: usize,
     ) -> Result<f32, String> {
-        // Before this track's own recorded start offset, it's silence —
-        // this is what keeps every track aligned to session time zero
-        // instead of all tracks assumed to start at the same instant.
-        let output_time_ms = (output_frame as u128 * 1000) / output_rate as u128;
-        if output_time_ms < self.group.start_offset_ms as u128 {
+        // Map this output frame onto the source sample grid. The track's
+        // start lag is only known to the millisecond, but the playback
+        // position must not be rounded to a millisecond first: that holds
+        // one sample for 1 ms and drops the other 47 at 48 kHz, which plays
+        // back as a harsh buzz. A zero offset is an exact sample copy.
+        let src_rate = u128::from(self.group.sample_rate);
+        let dst_rate = u128::from(output_rate);
+        let timeline_frame = (u128::from(output_frame) * src_rate) / dst_rate;
+        let start_frame = (u128::from(self.group.start_offset_ms) * src_rate) / 1000;
+        if timeline_frame < start_frame {
             return Ok(0.0);
         }
-        let local_time_ms = output_time_ms - self.group.start_offset_ms as u128;
-        let target = ((local_time_ms * self.group.sample_rate as u128) / 1000) as u64;
+        let target = (timeline_frame - start_frame) as u64;
         while self.current_index.is_none_or(|index| index < target) {
             if !self.read_frame()? {
                 return Ok(0.0);
@@ -952,6 +956,51 @@ mod tests {
         assert!(samples[19_200].unsigned_abs() > 2_200);
         // After system's audio ends (t=1.8s): mic only again.
         assert!((500..1_200).contains(&samples[28_800].unsigned_abs()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn streaming_mix_keeps_every_sample_instead_of_holding_for_one_millisecond() {
+        let dir = test_dir("sample_grid");
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(dir.join("mic.wav"), spec).unwrap();
+        // 20 ms ramp. A 1 ms hold repeats one value for 48 frames.
+        for i in 0..960 {
+            writer.write_sample((i as i16) * 20 - 9_600).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let groups = source_track_groups(&dir).unwrap();
+        let output = dir.join("mixed.wav");
+        streaming_mix(&groups, &output).unwrap();
+        let reader = hound::WavReader::open(&output).unwrap();
+        assert_eq!(reader.spec().sample_rate, 48_000);
+        let samples: Vec<i16> = reader.into_samples::<i16>().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), 960);
+
+        let mut longest_hold = 1usize;
+        let mut run = 1usize;
+        for pair in samples.windows(2) {
+            if pair[0] == pair[1] {
+                run += 1;
+                longest_hold = longest_hold.max(run);
+            } else {
+                run = 1;
+            }
+        }
+        assert!(
+            longest_hold < 4,
+            "mix held a sample for {longest_hold} frames; playback would buzz"
+        );
+        // The ramp must keep moving across the old 1 ms boundary.
+        assert!(samples[47] < samples[48]);
+        assert!((samples[48] as i32 - samples[0] as i32) > 800);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
