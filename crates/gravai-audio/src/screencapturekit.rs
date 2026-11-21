@@ -137,6 +137,7 @@ impl SystemAudioCapture {
             .with_width(2)
             .with_height(2)
             .with_captures_audio(true)
+            .with_captures_microphone(false)
             .with_excludes_current_process_audio(true)
             .with_sample_rate(self.sample_rate as i32)
             .with_channel_count(self.channels as i32);
@@ -230,7 +231,9 @@ impl SystemAudioCapture {
 
     pub fn stop(&mut self) {
         if let Some(stream) = self.stream.take() {
-            let _ = stream.stop_capture();
+            if let Err(err) = stream.stop_capture() {
+                tracing::warn!("ScreenCaptureKit stop failed: {err}");
+            }
         }
     }
 }

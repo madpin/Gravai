@@ -54,6 +54,37 @@ fn get_capture_stop() -> &'static std::sync::Mutex<Option<Arc<AtomicBool>>> {
     CAPTURE_STOP.get_or_init(|| std::sync::Mutex::new(None))
 }
 
+fn capture_released_slot() -> &'static std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>> =
+        std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Signals after the capture thread has dropped the microphone and system-audio streams.
+struct CaptureRelease(std::sync::mpsc::Sender<()>);
+
+impl Drop for CaptureRelease {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+async fn wait_for_capture_release() {
+    let joined = tokio::task::spawn_blocking(|| {
+        let rx = capture_released_slot().lock().unwrap().take();
+        let Some(rx) = rx else {
+            return;
+        };
+        if rx.recv_timeout(std::time::Duration::from_secs(5)).is_err() {
+            tracing::warn!("Timed out waiting for the microphone to be released");
+        }
+    })
+    .await;
+    if joined.is_err() {
+        tracing::warn!("Microphone release wait did not finish");
+    }
+}
+
 // Process-wide shared database handle. Opening SQLite is expensive
 // (file lock, PRAGMA setup, migration check), and previously every
 // utterance insert / sentiment update / correction update opened a
@@ -219,6 +250,7 @@ async fn start_session_inner(
         if let Some(flag) = get_capture_stop().lock().unwrap().take() {
             flag.store(true, Ordering::SeqCst);
         }
+        wait_for_capture_release().await;
         session.abort_tasks().await;
         if previous.is_some() {
             let _ = std::fs::remove_dir_all(&session.recording_dir);
@@ -386,8 +418,12 @@ async fn start_capture(
     let capture_stop_clone = capture_stop.clone();
     let (mic_cmd_tx, mic_cmd_rx) = std::sync::mpsc::channel::<MicSwitch>();
     *capture_cmd_slot().lock().unwrap() = Some(mic_cmd_tx);
+    let (released_tx, released_rx) = std::sync::mpsc::channel();
+    *capture_released_slot().lock().unwrap() = Some(released_rx);
 
     let _capture_thread = std::thread::spawn(move || {
+        // Declared first so it signals only after `capture` has dropped.
+        let _release = CaptureRelease(released_tx);
         let mut capture = AudioCaptureManager::new(capture_config);
         capture.set_timeline(capture_timeline);
         let loop_bus = bus.clone();
@@ -1029,6 +1065,7 @@ pub async fn stop_session(state: State<'_, Arc<AppState>>) -> Result<serde_json:
         stop_flag.store(true, Ordering::SeqCst);
         info!("Signaled capture thread to release audio resources");
     }
+    wait_for_capture_release().await;
 
     let rec_cfg = &session.config.audio.recording;
     if rec_cfg.enabled && rec_cfg.auto_compress {

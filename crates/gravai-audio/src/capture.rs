@@ -17,6 +17,11 @@ use gravai_config::AppConfig;
 /// Volume update interval in seconds (10 Hz updates).
 const VOLUME_INTERVAL: f64 = 0.1;
 
+/// Pause after `AudioOutputUnitStop` before the input unit is destroyed.
+/// Disposing it in the same instant leaves macOS showing the app as still
+/// using the microphone.
+const MIC_RELEASE_SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
+
 /// Audio chunk with metadata.
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
@@ -245,12 +250,22 @@ impl AudioCaptureManager {
         Ok(())
     }
 
-    /// Stop all audio capture.
+    /// Stop all audio capture and release the microphone.
     pub fn stop(&mut self) {
         self.recording.store(false, Ordering::SeqCst);
-        self._mic_stream = None;
+        self.release_mic_stream();
         self._sys_capture = None;
         info!("Audio capture stopped");
+    }
+
+    /// Stop the HAL input proc, let Core Audio drop the privacy client, then
+    /// destroy the stream. Dropping a playing stream — and cpal 0.15's leak of
+    /// any non-default device — leaves the menu-bar microphone indicator on.
+    fn release_mic_stream(&mut self) {
+        if let Some(stream) = self._mic_stream.take() {
+            stop_input_stream(stream);
+            self.active_mic_name = None;
+        }
     }
 
     pub fn pause(&mut self) {
@@ -305,7 +320,7 @@ impl AudioCaptureManager {
     /// Reopen the mic described by the current config.
     pub fn restart_mic(&mut self) -> Result<String, String> {
         self.mic_switching.store(true, Ordering::Relaxed);
-        self._mic_stream = None;
+        self.release_mic_stream();
         let result = self.open_mic_stream();
         self.mic_switching.store(false, Ordering::Relaxed);
         result
@@ -449,7 +464,10 @@ impl AudioCaptureManager {
             )
             .map_err(|e| format!("Build mic stream: {e}"))?;
 
-        stream.play().map_err(|e| format!("Play mic: {e}"))?;
+        if let Err(err) = stream.play() {
+            stop_input_stream(stream);
+            return Err(format!("Play mic: {err}"));
+        }
         self._mic_stream = Some(stream);
         self.active_mic_name = Some(dev_name.clone());
         info!("Microphone capture started");
@@ -589,6 +607,22 @@ impl AudioCaptureManager {
     }
 }
 
+impl Drop for AudioCaptureManager {
+    fn drop(&mut self) {
+        self.release_mic_stream();
+        self._sys_capture = None;
+    }
+}
+
+/// Stop a Core Audio input stream, then destroy it once the privacy client is gone.
+fn stop_input_stream(stream: cpal::Stream) {
+    if let Err(err) = stream.pause() {
+        warn!("Could not stop the microphone: {err}");
+    }
+    std::thread::sleep(MIC_RELEASE_SETTLE);
+    drop(stream);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,6 +645,15 @@ mod tests {
     fn remix_mono_to_stereo_duplicates_the_channel() {
         let stereo = remix(&[0.25, -0.5], 1, 2);
         assert_eq!(stereo, vec![0.25, 0.25, -0.5, -0.5]);
+    }
+
+    #[test]
+    fn stop_without_an_open_microphone_returns_immediately() {
+        let mut capture = AudioCaptureManager::new(gravai_config::AppConfig::default());
+        let started = std::time::Instant::now();
+        capture.stop();
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+        assert!(capture.active_mic_name().is_none());
     }
 }
 

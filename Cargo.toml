@@ -62,7 +62,9 @@ rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
 minijinja = "2"
 
 # Audio
-cpal = "0.15"
+# 0.16 actually destroys a Core Audio input stream. 0.15 kept it alive for
+# every device except the system default, so the microphone indicator stayed on.
+cpal = "0.16"
 screencapturekit = "1.5"
 hound = "3.5"
 rubato = "0.16"
