@@ -76,6 +76,12 @@ pub enum GravaiEvent {
         utterance_ids: Vec<i64>,
     },
 
+    /// Remote speaker labels were rewritten after the recording stopped.
+    SpeakersRefined {
+        session_id: String,
+        utterance_ids: Vec<i64>,
+    },
+
     /// Local LLM engine lifecycle status — emitted around model load/swap
     /// so the UI can show a "Preparing local model…" indicator instead of
     /// looking hung during the (possibly multi-minute) ISQ first-run.

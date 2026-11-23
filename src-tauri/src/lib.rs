@@ -848,6 +848,10 @@ pub fn run() {
                                     "gravai:transcript-corrected",
                                     serde_json::json!({ "session_id": session_id, "utterance_ids": utterance_ids }),
                                 ),
+                                GravaiEvent::SpeakersRefined { session_id, utterance_ids } => (
+                                    "gravai:speakers-refined",
+                                    serde_json::json!({ "session_id": session_id, "utterance_ids": utterance_ids }),
+                                ),
                                 GravaiEvent::LlmStatus { state, model_id, message, progress, phase, eta_seconds } => (
                                     "gravai:llm-status",
                                     serde_json::json!({

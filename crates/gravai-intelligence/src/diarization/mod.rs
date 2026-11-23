@@ -1,13 +1,40 @@
 //! Speaker diarization and identification.
 //!
-//! Uses ONNX models (pyannote-based) for speaker segmentation.
-//! Stores speaker embeddings for cross-session identification.
+//! Segmentation finds turns inside one buffer. A speaker embedding plus
+//! [`SpeakerBank`] keeps those turns as the same Remote for the whole recording.
 
+pub mod bank;
+pub mod embedder;
+mod fbank;
 pub mod pyannote;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tracing::{debug, info};
+
+pub use bank::{cluster_speaker_embeddings, EmbeddingSample, SpeakerAssignment, SpeakerBank};
+pub use embedder::{SpeakerEmbedder, WeSpeakerEmbedder};
+
+/// `~/.gravai/models/diarization/embedding.onnx`
+pub fn embedding_model_path() -> PathBuf {
+    gravai_config::models_dir()
+        .join("diarization")
+        .join("embedding.onnx")
+}
+
+/// `~/.gravai/models/diarization/segmentation.onnx`
+pub fn segmentation_model_path() -> PathBuf {
+    gravai_config::models_dir()
+        .join("diarization")
+        .join("segmentation.onnx")
+}
+
+/// Load the voice model used to tell remotes apart. `None` when the file is missing.
+pub fn try_load_embedder() -> Option<std::sync::Arc<dyn SpeakerEmbedder>> {
+    WeSpeakerEmbedder::try_load()
+        .map(|embedder| std::sync::Arc::new(embedder) as std::sync::Arc<dyn SpeakerEmbedder>)
+}
 
 /// A segment attributed to a specific speaker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,10 +62,12 @@ pub trait DiarizationProvider: Send + Sync {
     fn name(&self) -> &str;
 }
 
-/// Energy-based diarization (simple but functional).
-/// Uses audio energy changes to detect speaker turns.
-/// Will be replaced by ONNX pyannote in a future update.
+/// Labels a whole system-audio chunk as one remote.
+///
+/// Loudness is not identity, so this does not invent Speaker 1, Speaker 2, …
+/// Separate remotes come from the embedding model.
 pub struct EnergyDiarizer {
+    #[allow(dead_code)]
     max_speakers: u8,
 }
 
@@ -55,61 +84,17 @@ impl DiarizationProvider for EnergyDiarizer {
         &self,
         audio_16khz_mono: &[f32],
     ) -> Result<Vec<SpeakerSegment>, gravai_core::GravaiError> {
-        let sample_rate = 16000;
-        let window_ms = 500;
-        let window_samples = sample_rate * window_ms / 1000;
-        let mut segments = Vec::new();
-        let mut current_speaker = 0u8;
-        let mut segment_start = 0u64;
-
-        // Simple energy-based segmentation: detect significant energy changes
-        let mut prev_energy = 0.0f32;
-        for (i, chunk) in audio_16khz_mono.chunks(window_samples).enumerate() {
-            let energy: f32 = chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32;
-            let time_ms = (i * window_ms) as u64;
-
-            // Detect speaker change on significant energy shift
-            if i > 0 && prev_energy > 0.0001 {
-                let ratio = energy / prev_energy.max(0.0001);
-                if !(0.33..=3.0).contains(&ratio) {
-                    // End current segment
-                    if time_ms > segment_start {
-                        segments.push(SpeakerSegment {
-                            start_ms: segment_start,
-                            end_ms: time_ms,
-                            speaker_id: format!("Speaker {}", current_speaker + 1),
-                            confidence: 0.6,
-                        });
-                    }
-                    current_speaker = (current_speaker + 1) % self.max_speakers;
-                    segment_start = time_ms;
-                }
-            }
-            prev_energy = energy;
+        if audio_16khz_mono.is_empty() {
+            return Ok(Vec::new());
         }
-
-        // Final segment
-        let total_ms = (audio_16khz_mono.len() as u64 * 1000) / sample_rate as u64;
-        if total_ms > segment_start {
-            segments.push(SpeakerSegment {
-                start_ms: segment_start,
-                end_ms: total_ms,
-                speaker_id: format!("Speaker {}", current_speaker + 1),
-                confidence: 0.6,
-            });
-        }
-
-        debug!(
-            "Diarization: {} segments, {} speakers",
-            segments.len(),
-            segments
-                .iter()
-                .map(|s| &s.speaker_id)
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-        );
-
-        Ok(segments)
+        let total_ms = (audio_16khz_mono.len() as u64 * 1000) / 16_000;
+        debug!("Energy diarization: one remote over {total_ms} ms");
+        Ok(vec![SpeakerSegment {
+            start_ms: 0,
+            end_ms: total_ms.max(1),
+            speaker_id: "Remote".to_string(),
+            confidence: 0.3,
+        }])
     }
 
     fn name(&self) -> &str {
@@ -162,4 +147,26 @@ pub fn create_diarizer(config: &gravai_config::DiarizationConfig) -> Box<dyn Dia
         tracing::warn!("Pyannote model not found, falling back to energy diarizer");
     }
     Box::new(EnergyDiarizer::new(config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn energy_diarizer_returns_a_single_remote() {
+        let config = gravai_config::DiarizationConfig {
+            enabled: true,
+            max_speakers: 10,
+            model: "energy".into(),
+        };
+        let diarizer = EnergyDiarizer::new(&config);
+        let mut audio = vec![0.01f32; 16_000];
+        audio.extend(std::iter::repeat_n(0.2, 16_000));
+        let segments = diarizer.diarize(&audio).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].speaker_id, "Remote");
+        assert_eq!(segments[0].start_ms, 0);
+        assert_eq!(segments[0].end_ms, 2_000);
+    }
 }

@@ -371,7 +371,9 @@ impl CorrectionConfig {
 pub struct DiarizationConfig {
     pub enabled: bool,
     pub max_speakers: u8,
-    /// Diarization engine: "energy" (default, no model needed) or "pyannote" (ONNX, needs model files).
+    /// "energy" keeps each system sentence as one person. "pyannote" can split a
+    /// sentence when two people talk. Both need the speaker embedding model to
+    /// keep Remote 1 and Remote 2 stable across the recording.
     pub model: String,
 }
 

@@ -495,7 +495,7 @@
     // We match against the last session id (which lives past `stop()`), since
     // corrections frequently complete after a session has stopped — especially
     // on the first run when the model is still loading.
-    const uc = await listen("gravai:transcript-corrected", (e: any) => {
+    const patchUtterances = (e: any) => {
       const d = e.payload;
       if (!d?.utterance_ids?.length || !d.session_id) return;
       const visibleSid = get(currentSessionId) ?? get(lastSessionIdStore);
@@ -510,8 +510,11 @@
           );
         })
         .catch(() => {});
-    });
+    };
+    const uc = await listen("gravai:transcript-corrected", patchUtterances);
     unlisteners.push(uc);
+    const ur = await listen("gravai:speakers-refined", patchUtterances);
+    unlisteners.push(ur);
 
     const ub = await listen("gravai:bookmark", (e: any) => {
       bookmarkCount.update(n => n + 1);

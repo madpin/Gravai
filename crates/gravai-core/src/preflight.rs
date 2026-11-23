@@ -230,43 +230,45 @@ fn check_diarization_model(config: &gravai_config::AppConfig) -> HealthCheck {
         return HealthCheck {
             name: "diarization_model".into(),
             status: "ok".into(),
-            message: "Diarization disabled (enable in config to get multi-speaker labels)".into(),
+            message: "Speaker labels are off".into(),
         };
     }
-    if config.features.diarization.model != "pyannote" {
-        return HealthCheck {
-            name: "diarization_model".into(),
-            status: "ok".into(),
-            message: format!(
-                "Diarization: {} (no model file required)",
-                config.features.diarization.model
-            ),
-        };
-    }
-    let model_path = gravai_config::models_dir()
+    let embedding_path = gravai_config::models_dir()
+        .join("diarization")
+        .join("embedding.onnx");
+    let segmentation_path = gravai_config::models_dir()
         .join("diarization")
         .join("segmentation.onnx");
-    if model_path.exists() {
-        let size = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
-        HealthCheck {
-            name: "diarization_model".into(),
-            status: "ok".into(),
-            message: format!(
-                "Pyannote segmentation model present ({:.0} MB)",
-                size as f64 / 1_048_576.0
-            ),
-        }
-    } else {
-        HealthCheck {
+    if !embedding_path.exists() {
+        return HealthCheck {
             name: "diarization_model".into(),
             status: "warn".into(),
             message: format!(
-                "Diarization is set to 'pyannote' but segmentation.onnx was not found at {}. \
-                 Download 'pyannote-segmentation' from the Models page, or set model to 'energy' \
-                 for a no-download fallback.",
-                model_path.display()
+                "Speaker labels need the voice model at {}. Download Speaker voices from Speech settings. Until then every other person is labeled Remote.",
+                embedding_path.display()
             ),
-        }
+        };
+    }
+    if config.features.diarization.model == "pyannote" && !segmentation_path.exists() {
+        return HealthCheck {
+            name: "diarization_model".into(),
+            status: "warn".into(),
+            message: format!(
+                "Voice model is present, but Pyannote segmentation was not found at {}. A sentence with two people stays one line until you download it.",
+                segmentation_path.display()
+            ),
+        };
+    }
+    let size = std::fs::metadata(&embedding_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    HealthCheck {
+        name: "diarization_model".into(),
+        status: "ok".into(),
+        message: format!(
+            "Speaker voice model present ({:.0} MB)",
+            size as f64 / 1_048_576.0
+        ),
     }
 }
 

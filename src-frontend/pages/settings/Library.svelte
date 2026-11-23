@@ -90,6 +90,7 @@
     add(m.llm_models, "llm", "assistant", c.llm.provider === "local" ? c.llm.local_model : null, "Assistant");
     add(m.embedding_models, "other", "search", c.embedding.model, "Search");
     add(m.ai_models.filter(e => e.id === "go-emotions"), "other", "speech", c.features.sentiment.enabled ? "go-emotions" : null, "Emotion");
+    add(m.ai_models.filter(e => e.id === "wespeaker-embedding"), "other", "speech", c.features.diarization.enabled ? "wespeaker-embedding" : null, "Speaker labels");
     add(m.ai_models.filter(e => e.id === "pyannote-segmentation"), "other", "speech", c.features.diarization.model === "pyannote" ? "pyannote-segmentation" : null, "Speaker labels");
     if (m.silero_vad) add([m.silero_vad], "other", "speech", c.vad.engine === "silero" ? "silero_vad" : null, "Voice detection");
     return rows;

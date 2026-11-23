@@ -66,7 +66,7 @@ export function modelName(id: string): string {
     "qwen3-0.6b": "Qwen3 0.6B", "qwen3-1.7b": "Qwen3 1.7B", "qwen3-4b": "Qwen3 4B", "qwen3-8b": "Qwen3 8B",
     "llama-3.2-3b": "Llama 3.2 3B", "phi3-mini-q4": "Phi-3 Mini", "mistral-7b-q4": "Mistral 7B",
     "all-minilm": "MiniLM", "gemma-embed": "Nomic Embed", "bge-m3": "BGE-M3", "bag-of-words": "Built-in keywords",
-    "go-emotions": "Emotion model", "pyannote-segmentation": "Pyannote speakers", "silero_vad": "Silero voice detection",
+    "go-emotions": "Emotion model", "pyannote-segmentation": "Pyannote speakers", "wespeaker-embedding": "Speaker voices", "silero_vad": "Silero voice detection",
   };
   return names[id] ?? id;
 }

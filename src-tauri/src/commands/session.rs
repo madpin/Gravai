@@ -590,23 +590,35 @@ async fn start_capture(
     let trans_config = config.transcription.clone();
     let diar_config = config.features.diarization.clone();
 
-    // Warn about missing pyannote model before we start loading
-    if diar_enabled && diar_config.model == "pyannote" {
-        let model_path = gravai_config::models_dir()
+    if diar_enabled {
+        let embedding_path = gravai_config::models_dir()
             .join("diarization")
-            .join("segmentation.onnx");
-        if !model_path.exists() {
+            .join("embedding.onnx");
+        if !embedding_path.exists() {
             state.event_bus.publish(GravaiEvent::Error {
-                message: "Diarization is set to 'pyannote' but the model is not \
-                          downloaded — using energy-based fallback instead. \
-                          Download 'pyannote-segmentation' from the Models page \
-                          to enable accurate multi-speaker labels."
+                message: "Speaker labels are on, but the voice model is not downloaded. \
+                          Other people will be labeled Remote. Download Speaker voices \
+                          from Speech settings."
                     .into(),
             });
             warn!(
-                "Pyannote model missing at {}; falling back to energy diarizer",
-                model_path.display()
+                "Speaker embedding model missing at {}",
+                embedding_path.display()
             );
+        }
+        if diar_config.model == "pyannote" {
+            let model_path = gravai_config::models_dir()
+                .join("diarization")
+                .join("segmentation.onnx");
+            if !model_path.exists() {
+                state.event_bus.publish(GravaiEvent::Error {
+                    message: "Pyannote is selected, but its segmentation model is not \
+                              downloaded. A sentence with two people stays one line. \
+                              Download Pyannote from Speech settings."
+                        .into(),
+                });
+                warn!("Pyannote segmentation missing at {}", model_path.display());
+            }
         }
     }
 
@@ -614,14 +626,15 @@ async fn start_capture(
         tokio::task::spawn_blocking(move || gravai_transcription::create_provider(&trans_config));
 
     let diar_future = tokio::task::spawn_blocking(move || {
-        if diar_enabled {
-            Some(Arc::from(gravai_intelligence::diarization::create_diarizer(
-                &diar_config,
-            ))
-                as Arc<dyn gravai_intelligence::DiarizationProvider>)
-        } else {
-            None
+        if !diar_enabled {
+            return (None, None);
         }
+        let diarizer = Some(Arc::from(gravai_intelligence::diarization::create_diarizer(
+            &diar_config,
+        ))
+            as Arc<dyn gravai_intelligence::DiarizationProvider>);
+        let embedder = gravai_intelligence::try_load_embedder();
+        (diarizer, embedder)
     });
 
     let sentiment_future = tokio::task::spawn_blocking(move || {
@@ -667,8 +680,16 @@ async fn start_capture(
     )));
     let pipeline_active = Arc::new(AtomicBool::new(true));
 
-    let diarizer: Option<Arc<dyn gravai_intelligence::DiarizationProvider>> =
-        diar_result.ok().flatten();
+    let (diarizer, embedder) = match diar_result {
+        Ok((diarizer, embedder)) => (diarizer, embedder),
+        Err(error) => {
+            warn!("Diarization load panicked: {error}");
+            (None, None)
+        }
+    };
+    if diar_enabled && embedder.is_none() {
+        warn!("Recording without a speaker embedding model; system audio is labeled Remote");
+    }
 
     let sentiment_engine: Option<Arc<dyn gravai_intelligence::SentimentEngine>> =
         sentiment_result.ok().flatten();
@@ -737,6 +758,7 @@ async fn start_capture(
     let writer_handle = tokio::spawn(async move {
         while let Some(utterance) = utt_rx.recv().await {
             let timestamp = utterance.timestamp.to_rfc3339();
+            let embedding = utterance.embedding.clone();
             let record = gravai_storage::UtteranceRecord {
                 id: 0,
                 session_id: writer_sid.clone(),
@@ -758,10 +780,17 @@ async fn start_capture(
 
             // SQLite calls are blocking syscalls — run on the blocking pool
             // so this async worker doesn't hold a worker thread.
-            let insert_result = tokio::task::spawn_blocking(move || {
+            let insert_result = tokio::task::spawn_blocking(move || -> Result<i64, String> {
                 let db = shared_db().map_err(|e| format!("shared_db: {e}"))?;
-                db.insert_utterance(&record)
-                    .map_err(|e| format!("insert_utterance: {e}"))
+                let id = db
+                    .insert_utterance(&record)
+                    .map_err(|e| format!("insert_utterance: {e}"))?;
+                if let Some(embedding) = embedding.as_ref() {
+                    if let Err(error) = db.insert_speaker_embedding(id, embedding) {
+                        tracing::warn!("Could not store speaker embedding: {error}");
+                    }
+                }
+                Ok(id)
             })
             .await;
 
@@ -851,6 +880,7 @@ async fn start_capture(
             echo_suppressor: echo_suppressor.clone(),
             echo_enabled,
             diarizer: None, // mic is always "You"
+            embedder: None,
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),
             active: pipeline_active.clone(),
@@ -869,6 +899,7 @@ async fn start_capture(
             echo_suppressor: echo_suppressor.clone(),
             echo_enabled,
             diarizer: diarizer.clone(),
+            embedder: embedder.clone(),
             config: pipeline::PipelineConfig::from_app_config(&config),
             on_utterance: on_utterance.clone(),
             active: pipeline_active.clone(),
@@ -1060,6 +1091,14 @@ pub async fn stop_session(state: State<'_, Arc<AppState>>) -> Result<serde_json:
     session.set_state(SessionState::Stopped);
     session.abort_tasks().await;
 
+    if session.config.features.diarization.enabled {
+        refine_remote_speakers(
+            &session.id,
+            session.config.features.diarization.max_speakers,
+            &state.event_bus,
+        );
+    }
+
     // Signal the capture thread to stop and release mic + SCK resources
     if let Some(stop_flag) = get_capture_stop().lock().unwrap().take() {
         stop_flag.store(true, Ordering::SeqCst);
@@ -1161,7 +1200,73 @@ pub async fn rename_speaker_in_session(
     let count = db
         .rename_speaker_in_session(&session_id, &old_speaker, &new_speaker)
         .map_err(|e| e.to_string())?;
+    if let Err(error) = db.lock_speaker_embeddings(&session_id, &new_speaker) {
+        warn!("Could not lock renamed speaker '{new_speaker}': {error}");
+    }
     Ok(serde_json::json!({ "updated": count }))
+}
+
+/// Reassign automatic Remote labels from the voice vectors stored during the recording.
+fn refine_remote_speakers(session_id: &str, max_speakers: u8, event_bus: &gravai_core::EventBus) {
+    let db = match shared_db() {
+        Ok(db) => db,
+        Err(error) => {
+            warn!("Speaker relabel skipped: {error}");
+            return;
+        }
+    };
+    let rows = match db.speaker_embeddings_for_session(session_id) {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!("Speaker relabel skipped: {error}");
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let samples: Vec<gravai_intelligence::EmbeddingSample> = rows
+        .iter()
+        .map(|row| gravai_intelligence::EmbeddingSample {
+            utterance_id: row.utterance_id,
+            embedding: row.embedding.clone(),
+            locked_name: row.locked.then(|| row.speaker.clone()).flatten(),
+            start_ms: row.start_ms,
+        })
+        .collect();
+    let assignments =
+        gravai_intelligence::cluster_speaker_embeddings(&samples, max_speakers as usize);
+    let mut changed = Vec::new();
+    for assignment in assignments {
+        let current = rows
+            .iter()
+            .find(|row| row.utterance_id == assignment.utterance_id)
+            .and_then(|row| row.speaker.as_deref());
+        if current == Some(assignment.speaker.as_str()) {
+            continue;
+        }
+        if let Err(error) =
+            db.update_utterance_speaker(assignment.utterance_id, &assignment.speaker)
+        {
+            warn!(
+                "Could not relabel utterance {}: {error}",
+                assignment.utterance_id
+            );
+            continue;
+        }
+        changed.push(assignment.utterance_id);
+    }
+    if changed.is_empty() {
+        return;
+    }
+    info!(
+        "Relabeled {} remote lines in session {session_id}",
+        changed.len()
+    );
+    event_bus.publish(GravaiEvent::SpeakersRefined {
+        session_id: session_id.to_string(),
+        utterance_ids: changed,
+    });
 }
 
 /// Return distinct speaker names from all sessions for autocomplete suggestions.

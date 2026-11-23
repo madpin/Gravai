@@ -191,6 +191,17 @@ fn ai_model_info(model_id: &str) -> Option<AiModelInfo> {
             approx_size: 90_000_000,
             note: Some("Requires accepting the pyannote license at huggingface.co/pyannote/segmentation-3.0"),
         }),
+        "wespeaker-embedding" => Some(AiModelInfo {
+            subdir: "diarization",
+            files: &[(
+                "embedding.onnx",
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx",
+                None,
+            )],
+            description: "WeSpeaker ResNet34 — tells remote voices apart (25 MB)",
+            approx_size: 26_500_000,
+            note: Some("Downloaded when speaker labels are on. English VoxCeleb model; it still separates other languages."),
+        }),
         // ── LLM models (local GGUF inference via mistral.rs) ──────────────────
         // Note: Gemma 4 GGUF architecture is NOT supported by mistral.rs 0.8.x.
         // Gemma 4 GGUF files will appear as "Custom" with a warning if downloaded.
@@ -439,7 +450,14 @@ fn embedding_models_status(models_dir: &std::path::Path) -> Vec<serde_json::Valu
 }
 
 fn ai_models_status(models_dir: &std::path::Path) -> Vec<serde_json::Value> {
-    catalog_models_status(models_dir, &["go-emotions", "pyannote-segmentation"])
+    catalog_models_status(
+        models_dir,
+        &[
+            "go-emotions",
+            "pyannote-segmentation",
+            "wespeaker-embedding",
+        ],
+    )
 }
 
 fn llm_models_status(models_dir: &std::path::Path) -> Vec<serde_json::Value> {
@@ -529,8 +547,11 @@ pub(crate) fn missing_models(snapshot: &gravai_config::setups::Snapshot) -> Vec<
     if snapshot.features.sentiment.enabled {
         needed.push("go-emotions".into());
     }
-    if snapshot.features.diarization.enabled && snapshot.features.diarization.model == "pyannote" {
-        needed.push("pyannote-segmentation".into());
+    if snapshot.features.diarization.enabled {
+        needed.push("wespeaker-embedding".into());
+        if snapshot.features.diarization.model == "pyannote" {
+            needed.push("pyannote-segmentation".into());
+        }
     }
     if snapshot.vad.engine == "silero" {
         needed.push("silero_vad".into());
@@ -773,6 +794,20 @@ pub async fn delete_model(model_id: String) -> Result<String, String> {
             std::fs::remove_file(&path).map_err(|e| format!("Delete: {e}"))?;
         }
         return Ok("Deleted Silero VAD".into());
+    }
+
+    // These two files share `diarization/`. Deleting one must leave the other.
+    if model_id == "pyannote-segmentation" || model_id == "wespeaker-embedding" {
+        let filename = if model_id == "wespeaker-embedding" {
+            "embedding.onnx"
+        } else {
+            "segmentation.onnx"
+        };
+        let path = models_dir.join("diarization").join(filename);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("Delete: {e}"))?;
+        }
+        return Ok(format!("Deleted {model_id} model"));
     }
 
     // Handle AI model deletion (sentiment/diarization subdirs)

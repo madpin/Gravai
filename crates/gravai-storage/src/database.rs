@@ -71,6 +71,31 @@ pub struct KnowledgeEntry {
     pub updated_at: String,
 }
 
+/// A stored voice vector for one transcript line.
+#[derive(Debug, Clone)]
+pub struct SpeakerEmbeddingRow {
+    pub utterance_id: i64,
+    pub embedding: Vec<f32>,
+    pub locked: bool,
+    pub speaker: Option<String>,
+    pub start_ms: i64,
+}
+
+fn embedding_blob(values: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len() * 4);
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn embedding_from_blob(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
 /// A bookmark record anchored to a session timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookmarkRecord {
@@ -760,6 +785,76 @@ impl Database {
         Ok(count)
     }
 
+    /// Replace the speaker on one utterance.
+    pub fn update_utterance_speaker(&self, id: i64, speaker: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE utterances SET speaker = ?1 WHERE id = ?2",
+            params![speaker, id],
+        )?;
+        Ok(())
+    }
+
+    /// Store the voice vector for a system-audio line. A later rename can lock it.
+    pub fn insert_speaker_embedding(
+        &self,
+        utterance_id: i64,
+        embedding: &[f32],
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO utterance_speaker_embeddings (utterance_id, embedding, locked)
+             VALUES (?1, ?2, 0)
+             ON CONFLICT(utterance_id) DO UPDATE SET embedding = excluded.embedding",
+            params![utterance_id, embedding_blob(embedding)],
+        )?;
+        Ok(())
+    }
+
+    /// Keep the user's name when speakers are clustered again at the end of a recording.
+    pub fn lock_speaker_embeddings(
+        &self,
+        session_id: &str,
+        speaker: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute(
+            "UPDATE utterance_speaker_embeddings SET locked = 1
+             WHERE utterance_id IN (
+                SELECT id FROM utterances WHERE session_id = ?1 AND speaker = ?2
+             )",
+            params![session_id, speaker],
+        )?;
+        Ok(count)
+    }
+
+    /// Voice vectors for one session, in utterance order.
+    pub fn speaker_embeddings_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SpeakerEmbeddingRow>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT e.utterance_id, e.embedding, e.locked, u.speaker, u.start_ms
+             FROM utterance_speaker_embeddings e
+             JOIN utterances u ON u.id = e.utterance_id
+             WHERE u.session_id = ?1
+             ORDER BY u.id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            let locked: i64 = row.get(2)?;
+            Ok(SpeakerEmbeddingRow {
+                utterance_id: row.get(0)?,
+                embedding: embedding_from_blob(&blob),
+                locked: locked != 0,
+                speaker: row.get(3)?,
+                start_ms: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Return all distinct non-null, non-empty speaker names across all sessions.
     pub fn get_distinct_speakers(&self) -> Result<Vec<String>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
@@ -1426,6 +1521,57 @@ mod tests {
         assert_eq!(ids, vec!["c", "a"]);
         assert_eq!(db.get_session_snapshot("missing").unwrap(), None);
     }
+
+    #[test]
+    fn speaker_embedding_roundtrip_and_lock() {
+        let db = Database::open_in_memory().unwrap();
+        db.create_session(&SessionRecord {
+            id: "voices".into(),
+            started_at: "2026-04-06T12:00:00Z".into(),
+            ended_at: None,
+            duration_seconds: None,
+            title: None,
+            meeting_app: None,
+            state: "recording".into(),
+        })
+        .unwrap();
+        let id = db
+            .insert_utterance(&UtteranceRecord {
+                id: 0,
+                session_id: "voices".into(),
+                timestamp: "2026-04-06T12:00:01Z".into(),
+                source: "system_audio".into(),
+                speaker: Some("Remote 1".into()),
+                text: "hello".into(),
+                confidence: None,
+                start_ms: Some(100),
+                end_ms: Some(800),
+                sentiment_label: None,
+                sentiment_score: None,
+                emotions_json: None,
+                corrected_text: None,
+                correction_status: None,
+                correction_provider: None,
+                corrected_at: None,
+            })
+            .unwrap();
+        db.insert_speaker_embedding(id, &[1.0, 0.5, -0.25]).unwrap();
+        let rows = db.speaker_embeddings_for_session("voices").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].locked);
+        assert_eq!(rows[0].embedding, vec![1.0, 0.5, -0.25]);
+        db.rename_speaker_in_session("voices", "Remote 1", "Alex")
+            .unwrap();
+        assert_eq!(db.lock_speaker_embeddings("voices", "Alex").unwrap(), 1);
+        let locked = db.speaker_embeddings_for_session("voices").unwrap();
+        assert!(locked[0].locked);
+        assert_eq!(locked[0].speaker.as_deref(), Some("Alex"));
+        db.update_utterance_speaker(id, "Remote 2").unwrap();
+        assert_eq!(
+            db.get_utterances("voices").unwrap()[0].speaker.as_deref(),
+            Some("Remote 2")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1489,6 +1635,7 @@ mod live_accessibility_tests {
         db.delete_session("audio").unwrap();
         assert!(db.audio_archival("audio").unwrap().is_none());
     }
+
     #[test]
     fn file_database_migration_and_bookmarks_survive_reopen() {
         let path = std::env::temp_dir().join(format!(

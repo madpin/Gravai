@@ -11,7 +11,10 @@ pub mod sentiment;
 pub mod summarization;
 
 pub use correction::TranscriptCorrectionProvider;
-pub use diarization::{DiarizationProvider, SpeakerSegment};
+pub use diarization::{
+    cluster_speaker_embeddings, try_load_embedder, DiarizationProvider, EmbeddingSample,
+    SpeakerAssignment, SpeakerBank, SpeakerEmbedder, SpeakerSegment,
+};
 pub use embeddings::EmbeddingProvider;
 pub use llm_client::LlmClient;
 pub use sentiment::{EmotionScore, OnnxSentimentEngine, SentimentData, SentimentEngine};

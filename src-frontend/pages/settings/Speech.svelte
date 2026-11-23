@@ -69,7 +69,8 @@
   </Group>
 
   <Group title="Analysis" note="Each of these adds work while you record. Turn off what you don't use.">
-    <Row label="Speaker labels" hint="Tells voices apart: Speaker 1, Speaker 2." cost="Light extra CPU with the built-in method." next>
+    <Row label="Speaker labels" hint="Gives each other person a stable name: Remote 1, Remote 2." cost="Loads a 25 MB voice model when recording starts." next>
+      {#if c.features.diarization.enabled}{@render needsModel("wespeaker-embedding", "Speaker voices")}{/if}
       <Toggle label="Speaker labels" checked={c.features.diarization.enabled} onchange={(v) => setValue("features.diarization.enabled", v)} />
     </Row>
     <Row label="Echo suppression" hint="Drops your voice when the mic picks it up from the speakers." cost="Very light." next>
@@ -124,11 +125,11 @@
       <Row label="Longest sentence" hint="Longer chunks keep the CPU busy and delay the transcript." next>
         <NumberInput value={c.vad.silero.max_utterance_seconds} min={5} max={60} unit="s" onsave={(v) => setValue("vad.silero.max_utterance_seconds", v)} />
       </Row>
-      <Row label="Speaker method" hint="Built-in needs nothing extra. Pyannote is more accurate and needs a 90 MB model." next>
+      <Row label="Speaker method" hint="Built-in keeps a sentence as one person. Pyannote can split a sentence when two people talk." next>
         {#if c.features.diarization.model === "pyannote"}{@render needsModel("pyannote-segmentation", "Pyannote")}{/if}
         <Segmented options={[["energy", "Built-in"], ["pyannote", "Pyannote"]]} value={c.features.diarization.model} onchange={(v) => setValue("features.diarization.model", v)} />
       </Row>
-      <Row label="Most speakers" next>
+      <Row label="Most speakers" hint="How many other people this recording can name." next>
         <NumberInput value={c.features.diarization.max_speakers} min={2} max={20} onsave={(v) => setValue("features.diarization.max_speakers", v)} />
       </Row>
       <Row label="Echo sensitivity" hint="How alike mic and system text must be to count as echo. Higher drops less." next>

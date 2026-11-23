@@ -45,6 +45,11 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[
         "Audio archival state",
         include_str!("../sql/009_audio_archival.sql"),
     ),
+    (
+        10,
+        "Speaker embeddings",
+        include_str!("../sql/010_speaker_embeddings.sql"),
+    ),
 ];
 
 /// Run all pending migrations. Creates the schema_version table if needed.
